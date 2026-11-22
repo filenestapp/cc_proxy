@@ -1,178 +1,295 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CC Proxy</title>
+<script>
+  const appearance = (() => {
+    const key = "ccproxy.appearance";
+    const system = matchMedia("(prefers-color-scheme: dark)");
+    let preference = "system";
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved === "dark" || saved === "light") preference = saved;
+    } catch { /* Storage may be unavailable. */ }
+
+    const apply = () => {
+      document.documentElement.dataset.theme = preference === "system" ? (system.matches ? "dark" : "light") : preference;
+    };
+    system.addEventListener("change", apply);
+    apply();
+
+    return {
+      bind() {
+        const controls = Array.from(document.querySelectorAll(".appearance"));
+        controls.forEach((control) => {
+          control.value = preference;
+          control.addEventListener("change", () => {
+            preference = control.value;
+            try { localStorage.setItem(key, preference); } catch { /* Keep the in-memory selection. */ }
+            controls.forEach((item) => { item.value = preference; });
+            apply();
+          });
+        });
+      },
+    };
+  })();
+</script>
 <style>
   :root {
-    --bg: #f5f6f8; --panel: #ffffff; --ink: #1b2230; --muted: #6b7486; --line: #dde1e8;
-    --accent: #2f5bea; --accent-ink: #ffffff; --ok: #17803d; --ok-soft: #e4f4e9; --bad: #c8322b; --bad-soft: #fbe9e7;
-    --warn: #a86400; --warn-soft: #fdf1dc;
+    color-scheme: light;
+    --bg: #f3f6fa; --panel: #fff; --ink: #172638; --muted: #52647a; --line: #cbd6e2;
+    --accent: #146650; --accent-ink: #fff; --accent-soft: #e0f2eb; --accent-hover: #0c503e;
+    --warn: #805412; --warn-soft: #faf0d9; --bad: #a52c46; --bad-soft: #fbe9ee;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #13161c; --panel: #1c2129; --ink: #e7eaf0; --muted: #98a1b2; --line: #2e3542;
-      --accent: #5b82ff; --ok: #4cc27a; --ok-soft: #173323; --bad: #ff6b62; --bad-soft: #3a1d1c;
-      --warn: #f0b24a; --warn-soft: #3a2c13;
-    }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0d1522; --panel: #172333; --ink: #edf3f8; --muted: #a7b8cb; --line: #334559;
+    --accent: #76dfb6; --accent-ink: #10291f; --accent-soft: #193a34; --accent-hover: #a5f0d3;
+    --warn: #f5ca80; --warn-soft: #392f24; --bad: #ffa4ae; --bad-soft: #402630;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
-  body { background: var(--bg); color: var(--ink);
-         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
-         -webkit-user-select: none; user-select: none; }
-  main { padding: 20px 18px; max-width: 460px; margin: 0 auto; }
-  h1 { font-size: 17px; margin: 0 0 16px; }
-  label { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 4px; }
-  input { width: 100%; font: inherit; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
-          background: var(--panel); color: var(--ink); -webkit-user-select: text; user-select: text; }
-  input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
-           padding: 8px 12px; cursor: pointer; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); width: 100%;
-                   padding: 10px; margin-top: 18px; font-weight: 600; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  main { padding: 0 22px 22px; max-width: 520px; margin-inline: auto; }
+  .app-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 60px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+  .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 680; }
+  .brand svg { color: var(--accent); flex: none; }
+  h1, h2, p, dl, ol { margin: 0; }
+  h1 { font-size: 25px; line-height: 1.15; letter-spacing: -.025em; }
+  h2 { font-size: 15px; letter-spacing: -.01em; }
+  input, button, select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  input, select { padding: 7px 9px; }
+  input { width: 100%; min-height: 40px; }
+  input::placeholder { color: var(--muted); opacity: 1; }
+  button { cursor: pointer; }
   button:disabled { opacity: .55; cursor: default; }
-  .err { color: var(--bad); font-size: 13px; min-height: 1.4em; margin-top: 10px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-  .state { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
-  .dot.on { background: var(--ok); box-shadow: 0 0 0 4px var(--ok-soft); }
-  .dot.busy { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-soft); }
-  .dot.bad { background: var(--bad); box-shadow: 0 0 0 4px var(--bad-soft); }
-  .state b { font-size: 16px; }
-  .state span { color: var(--muted); font-size: 12px; }
-  .toggle { width: 100%; padding: 14px; font-size: 15px; font-weight: 600; border-radius: 10px; }
-  .toggle.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-  dl { margin: 16px 0 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; }
-  dt { color: var(--muted); font-size: 12px; padding-top: 1px; }
-  dd { margin: 0; font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
-  .note { color: var(--muted); font-size: 12px; margin-top: 14px; }
-  .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; color: var(--muted); font-size: 12px; }
-  .msg { margin-top: 12px; font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); }
-  .msg.bad { background: var(--bad-soft); color: var(--bad); }
+  button.primary { min-height: 43px; width: 100%; background: var(--accent); border-color: var(--accent); font-weight: 680; color: var(--accent-ink); }
+  button.primary:not(:disabled):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.primary.on { background: var(--accent-soft); color: var(--accent); }
+  button.primary.on:not(:disabled):hover { background: var(--panel); border-color: var(--accent); }
+  .appearance { font-size: 12px; }
+  .fields { display: grid; gap: 12px; margin: 17px 0; }
+  .field label { font-weight: 600; font-size: 13px; display: block; margin-bottom: 4px; }
+  .field small { color: var(--muted); font-weight: 400; }
+  .password-field { position: relative; }
+  .password-field input { padding-right: 45px; }
+  .password-field button { position: absolute; inset: 3px 3px 3px auto; display: grid; place-items: center; width: 36px; border: 0; background: transparent; color: var(--muted); }
+  .password-field button:hover { color: var(--accent); }
+  .password-field button[aria-pressed=true] { color: var(--accent); }
+  .detail, .note { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .note { margin-top: 12px; }
+  .status { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 16px; }
+  .status-icon { display: grid; place-items: center; width: 42px; height: 42px; flex: none; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); color: var(--muted); }
+  .status[data-state=running] .status-icon { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+  .status[data-state=connecting] .status-icon { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .status[data-state=failed] .status-icon { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
+  .status .detail { margin-top: 4px; }
+  .connection-path { margin-top: 21px; padding: 14px 0 15px; border-block: 1px solid var(--line); }
+  .route { --route-color: var(--muted); list-style: none; position: relative; display: grid; gap: 13px; margin-top: 11px; padding: 0; }
+  .route[data-connected=true] { --route-color: var(--accent); }
+  .route::before { content: ""; position: absolute; top: 10px; bottom: 13px; left: 4px; width: 1px; background: var(--route-color); }
+  .route li { display: grid; position: relative; gap: 0 8px; grid-template-columns: minmax(5.2em, auto) minmax(0, 1fr); padding-left: 21px; align-items: start; }
+  .route li::before { content: ""; position: absolute; top: 6px; left: 0; width: 9px; height: 9px; border: 2px solid var(--route-color); border-radius: 50%; background: var(--bg); box-sizing: border-box; }
+  .route code { font: 12px/1.6 var(--mono); overflow-wrap: anywhere; justify-self: end; text-align: right; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
+  .route small { grid-column: 1 / -1; }
+  .account { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 5px 8px; margin: 13px 0; }
+  .account dt, .footer { color: var(--muted); font-size: 12px; }
+  .account dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
+  .footer { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding-top: 11px; }
+  .footer span { overflow-wrap: anywhere; }
+  .footer button { border: 0; background: transparent; color: var(--accent); white-space: nowrap; padding: 4px 0; text-decoration: underline; text-underline-offset: 3px; }
+  .notice { margin-top: 12px; border-radius: 8px; padding: 8px 10px; font-size: 13px; background: var(--warn-soft); color: var(--warn); overflow-wrap: anywhere; }
+  .notice.bad { background: var(--bad-soft); color: var(--bad); }
+  .notice:empty { display: none; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <form id="login" hidden autocomplete="on">
-    <h1>登录 CC Proxy</h1>
-    <label for="server">控制端地址</label>
-    <input id="server" name="server" type="url" placeholder="https://cp.example.com" required>
-    <label for="username">用户名</label>
-    <input id="username" name="username" autocomplete="username" required>
-    <label for="password">密码</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
-    <label for="device">设备名称</label>
-    <input id="device" name="device" placeholder="默认为本机名称">
-    <button class="primary" id="login-btn" type="submit">登录</button>
-    <div class="err" id="login-err" role="alert"></div>
-    <p class="note">登录后客户端只保存一个可随时吊销的设备凭证，不保存密码。</p>
+  <header class="app-header">
+    <div class="brand">
+      <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a4 4 0 0 0 6 .4l3-3a4 4 0 0 0-5.7-5.7l-1.6 1.6M14 11a4 4 0 0 0-6-.4l-3 3a4 4 0 0 0 5.7 5.7l1.6-1.6"/></svg>
+      CC Proxy
+    </div>
+    <select class="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+  </header>
+
+  <p id="loading" class="detail" role="status">Loading session…</p>
+  <form id="login" hidden>
+    <h1>Sign in</h1>
+    <div class="fields">
+      <div class="field">
+        <label for="server">Control plane URL</label>
+        <input id="server" name="server" type="url" placeholder="https://cp.example.com" required>
+      </div>
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <div class="password-field">
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+          <button id="show-password" type="button" aria-label="Show password" aria-pressed="false">
+            <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="device">Device name <small>(optional)</small></label>
+        <input id="device" name="device" placeholder="This computer">
+      </div>
+    </div>
+    <button class="primary" id="login-btn" type="submit">Sign in</button>
+    <div class="notice bad" id="login-err" role="alert"></div>
+    <p class="note">This app saves a revocable device credential after sign-in.</p>
   </form>
 
   <section id="home" hidden>
-    <div class="card">
-      <div class="state"><div class="dot" id="dot"></div><div><b id="state-title">未连接</b><br><span id="state-sub"></span></div></div>
-      <button class="toggle" id="toggle" type="button">连接</button>
-      <div class="msg" id="msg" role="status" hidden></div>
-      <dl>
-        <dt>用户</dt><dd id="v-user">—</dd>
-        <dt>设备</dt><dd id="v-device">—</dd>
-        <dt>出口 IP</dt><dd id="v-egress">—</dd>
-        <dt>入口</dt><dd id="v-entry">—</dd>
-        <dt>出口机</dt><dd id="v-host">—</dd>
-      </dl>
-      <p class="note">只有控制端配置的域名经由出口 IP 访问，其他流量保持本机网络。连接时系统会请求一次管理员授权。</p>
+    <div class="status" id="connection-status">
+      <span class="status-icon">
+        <svg aria-hidden="true" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a4 4 0 0 0 6 .4l3-3a4 4 0 0 0-5.7-5.7l-1.6 1.6M14 11a4 4 0 0 0-6-.4l-3 3a4 4 0 0 0 5.7 5.7l1.6-1.6"/></svg>
+      </span>
+      <div role="status"><h1 id="state-title">Disconnected</h1><p class="detail" id="state-sub"></p></div>
     </div>
-    <div class="foot"><span id="v-server"></span><button id="logout" type="button">退出登录</button></div>
+    <button class="primary" id="toggle" type="button">Connect</button>
+    <div class="notice" id="msg" role="status"></div>
+    <section class="connection-path" aria-labelledby="path-heading">
+      <h2 id="path-heading">Connection path</h2>
+      <ol class="route" id="route">
+        <li><strong>Entry</strong><code id="v-entry">—</code><small id="v-host" class="detail"></small></li>
+        <li><strong>Egress IP</strong><code id="v-egress">Unassigned</code></li>
+      </ol>
+    </section>
+    <dl class="account">
+      <dt>Account</dt><dd id="v-user">—</dd>
+      <dt>Device</dt><dd id="v-device">—</dd>
+    </dl>
+    <div class="footer"><span id="v-server"></span><button id="logout" type="button">Sign out</button></div>
   </section>
 </main>
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
   const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args || {});
-  let busy = false;
+  let view, pending = "", operationError = "", stopping = false, revision = 0;
 
-  const TITLES = {
-    idle: ["未连接", ""], stopped: ["未连接", ""], connecting: ["正在连接…", "等待授权与隧道启动"],
-    running: ["已连接", "命中规则的域名经由出口 IP 访问"], failed: ["连接失败", ""],
+  const STATES = {
+    idle: ["Disconnected", "Connect to route selected domains through your assigned egress IP."],
+    stopped: ["Disconnected", "Connect to route selected domains through your assigned egress IP."],
+    connecting: ["Connecting…", "Waiting for authorization and tunnel startup."],
+    running: ["Connected", "Selected domains use the proxy."],
+    failed: ["Connection failed", "Check the connection and try again."],
   };
 
-  function render(v) {
+  const text = (id, value) => {
+    const el = $(id);
+    if (el.textContent !== value) el.textContent = value;
+  };
+
+  function render() {
+    if (!view) return;
+    const v = view;
+    const state = v.tunnel;
+    const on = v.want_connected || state === "running";
+    if (!on) stopping = false;
+    $("loading").hidden = true;
     $("login").hidden = v.signed_in;
     $("home").hidden = !v.signed_in;
+    $("login-btn").disabled = Boolean(pending);
+    text("login-btn", pending === "login" ? "Signing in…" : "Sign in");
     if (!v.signed_in) {
-      if (v.server) $("server").value = v.server;
-      $("device").placeholder = "默认为 " + v.device;
-      if (v.message) $("login-err").textContent = v.message;
+      $("device").placeholder = v.device || "This computer";
+      text("login-err", operationError || v.message || "");
       return;
     }
-    const state = v.tunnel;
-    const [title, sub] = TITLES[state] || [state, ""];
-    $("state-title").textContent = title;
-    $("state-sub").textContent = state === "failed" || (state === "stopped" && v.tunnel_message)
-      ? v.tunnel_message : sub;
-    $("dot").className = "dot " + ({ running: "on", connecting: "busy", failed: "bad" }[state] || "");
-    const on = v.want_connected || state === "running";
-    $("toggle").textContent = on ? "断开" : "连接";
-    $("toggle").classList.toggle("on", on);
-    $("toggle").disabled = busy || (!v.entry && !on);
-    $("v-user").textContent = v.user || "—";
-    $("v-device").textContent = v.device || "—";
-    $("v-egress").textContent = v.egress_ip || "未分配";
-    $("v-entry").textContent = v.entry ? v.entry.host + ":" + v.entry.port : "—";
-    $("v-host").textContent = v.host || "—";
-    $("v-server").textContent = v.server || "";
-    const msg = v.message || (!v.entry ? "管理员还没有给这个账号分配出口 IP，暂时无法连接。" : "");
-    $("msg").hidden = !msg;
-    $("msg").textContent = msg;
-    $("msg").classList.toggle("bad", /失效|失败|停用|收回/.test(msg));
+
+    const [title, sub] = STATES[state] || ["Disconnected", ""];
+    const connecting = pending === "connect";
+    const disconnecting = pending === "disconnect" || stopping;
+    $("connection-status").dataset.state = connecting ? "connecting" : state;
+    text("state-title", connecting ? "Connecting…" : disconnecting ? "Disconnecting…" : title);
+    text("state-sub", connecting ? STATES.connecting[1] : disconnecting ? "Waiting for the tunnel to stop." : v.tunnel_message || sub);
+    $("route").dataset.connected = String(state === "running" && !disconnecting);
+    $("toggle").classList.toggle("on", on || disconnecting);
+    text("toggle", connecting ? "Connecting…" : disconnecting ? "Disconnecting…" : on ? "Disconnect" : "Connect");
+    $("toggle").disabled = Boolean(pending || stopping || (!v.entry && !on));
+    $("logout").disabled = Boolean(pending);
+    text("logout", pending === "logout" ? "Signing out…" : "Sign out");
+
+    text("v-user", v.user || "—");
+    text("v-device", v.device || "—");
+    text("v-egress", v.egress_ip || "Unassigned");
+    const host = v.entry?.host;
+    text("v-entry", host ? (host.includes(":") ? "[" + host + "]" : host) + ":" + v.entry.port : "—");
+    text("v-host", v.host || "");
+    text("v-server", v.server || "");
+    if (v.server) $("server").value = v.server;
+    text("msg", operationError || v.message || (!v.entry ? "Ask your administrator to assign an egress IP." : ""));
+    $("msg").classList.toggle("bad", Boolean(operationError));
   }
 
   async function refresh(online) {
-    try { render(await invoke("get_state", { refresh: !!online })); } catch (e) { console.error(e); }
+    if (pending) return;
+    const startedAt = revision;
+    try {
+      const result = await invoke("get_state", { refresh: online });
+      if (revision !== startedAt || pending) return;
+      view = result;
+      render();
+    } catch (error) {
+      if (!view) text("loading", "Could not load the session. Retrying…");
+      console.error(error);
+    }
   }
 
-  function fail(where, e) {
-    const text = String(e && e.message || e);
-    if (where === "login") $("login-err").textContent = text;
-    else { $("msg").hidden = false; $("msg").textContent = text; $("msg").classList.add("bad"); }
+  async function run(command, args) {
+    if (pending) return;
+    revision++;
+    pending = command;
+    operationError = "";
+    render();
+    try {
+      view = await invoke(command, args);
+      if (command === "login") {
+        $("password").value = "";
+        showPassword(false);
+      }
+      if (command === "disconnect") stopping = true;
+    } catch (error) {
+      operationError = String(error?.message || error);
+    } finally {
+      pending = "";
+      render();
+    }
   }
 
-  $("login").addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    $("login-err").textContent = "";
-    $("login-btn").disabled = true;
-    $("login-btn").textContent = "正在登录…";
-    try {
-      render(await invoke("login", { server: $("server").value, username: $("username").value,
-                                     password: $("password").value, device: $("device").value }));
-      $("password").value = "";
-    } catch (e) { fail("login", e); }
-    $("login-btn").disabled = false;
-    $("login-btn").textContent = "登录";
-  });
+  function showPassword(show) {
+    $("password").type = show ? "text" : "password";
+    $("show-password").setAttribute("aria-pressed", String(show));
+  }
 
-  $("toggle").addEventListener("click", async () => {
-    busy = true;
-    $("toggle").disabled = true;
-    try {
-      const on = $("toggle").classList.contains("on");
-      render(await invoke(on ? "disconnect" : "connect"));
-    } catch (e) { fail("home", e); }
-    busy = false;
-    refresh(false);
+  appearance.bind();
+  $("show-password").addEventListener("click", () => showPassword($("password").type === "password"));
+  $("login").addEventListener("submit", (event) => {
+    event.preventDefault();
+    run("login", {
+      server: $("server").value,
+      username: $("username").value,
+      password: $("password").value,
+      device: $("device").value,
+    });
   });
-
-  $("logout").addEventListener("click", async () => {
-    try { render(await invoke("logout")); } catch (e) { fail("home", e); }
-  });
+  $("toggle").addEventListener("click", () => run(view.want_connected || view.tunnel === "running" ? "disconnect" : "connect"));
+  $("logout").addEventListener("click", () => run("logout"));
 
   refresh(true);
-  setInterval(() => refresh(false), 1500);   // tunnel status from local files
-  setInterval(() => refresh(true), 60000);    // exit IP and entry from the control plane
+  setInterval(() => refresh(false), 1500);
+  setInterval(() => refresh(true), 60000);
 })();
 </script>
 </body>

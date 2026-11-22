@@ -1,65 +1,107 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CC Proxy 管理后台</title>
+<title>CC Proxy Console</title>
+<script>
+  const appearance = (() => {
+    const key = "ccproxy.appearance";
+    const system = matchMedia("(prefers-color-scheme: dark)");
+    let preference = "system";
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved === "dark" || saved === "light") preference = saved;
+    } catch { /* Storage may be unavailable. */ }
+
+    const apply = () => {
+      document.documentElement.dataset.theme = preference === "system" ? (system.matches ? "dark" : "light") : preference;
+    };
+    system.addEventListener("change", apply);
+    apply();
+
+    return {
+      bind() {
+        const controls = Array.from(document.querySelectorAll(".appearance"));
+        controls.forEach((control) => {
+          control.value = preference;
+          control.addEventListener("change", () => {
+            preference = control.value;
+            try { localStorage.setItem(key, preference); } catch { /* Keep the in-memory selection. */ }
+            controls.forEach((item) => { item.value = preference; });
+            apply();
+          });
+        });
+      },
+    };
+  })();
+</script>
 <style>
   :root {
-    --bg: #f5f6f8; --panel: #ffffff; --ink: #1c2330; --muted: #677285; --line: #dde1e8; --hover: #f0f2f6;
-    --accent: #2f5bea; --accent-ink: #fff; --accent-soft: #e8eefe;
-    --ok: #17803d; --ok-soft: #e5f4ea; --bad: #c8322b; --bad-soft: #fbe9e7;
-    --warn: #a86400; --warn-soft: #fdf1dc; --idle: #8a93a3; --idle-soft: #eef0f3;
+    color-scheme: light;
+    --bg: #f3f6fa; --panel: #fff; --sidebar: #eaf0f6; --canvas: #f4f8fb;
+    --ink: #172638; --muted: #52647a; --line: #cbd6e2; --hover: #e9f0f6;
+    --accent: #146650; --accent-ink: #fff; --accent-soft: #e0f2eb; --accent-hover: #0c503e;
+    --ok: #146650; --ok-soft: #e0f2eb; --bad: #a52c46; --bad-soft: #fbe9ee;
+    --warn: #805412; --warn-soft: #faf0d9; --idle: #52647a; --idle-soft: #e8eef4;
+    --node-ok: #84b5a6; --node-warn: #c7a266; --node-bad: #c9909d;
+    --wire: #567f75; --canvas-dot: #ccd8e4;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    --side: 208px;
+    --side: 190px;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #12151b; --panel: #1b2029; --ink: #e6e9ef; --muted: #98a2b3; --line: #2f3643; --hover: #232a35;
-      --accent: #5b82ff; --accent-soft: #1e2a4a;
-      --ok: #4cc27a; --ok-soft: #173323; --bad: #ff6b62; --bad-soft: #3a1d1c;
-      --warn: #f0b24a; --warn-soft: #3a2c13; --idle: #7d8696; --idle-soft: #232934;
-    }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0d1522; --panel: #172333; --sidebar: #101b29; --canvas: #101c2a;
+    --ink: #edf3f8; --muted: #a7b8cb; --line: #334559; --hover: #223448;
+    --accent: #76dfb6; --accent-ink: #10291f; --accent-soft: #193a34; --accent-hover: #a5f0d3;
+    --ok: #76dfb6; --ok-soft: #193a34; --bad: #ffa4ae; --bad-soft: #402630;
+    --warn: #f5ca80; --warn-soft: #392f24; --idle: #a7b8cb; --idle-soft: #263447;
+    --node-ok: #46786b; --node-warn: #8b734a; --node-bad: #94586a;
+    --wire: #5e9083; --canvas-dot: #2a3e52;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; }
-  body { background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
-  a { color: var(--accent); text-decoration: none; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+  a { color: var(--accent); text-decoration: none; text-underline-offset: 3px; }
   a:hover { text-decoration: underline; }
-  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 7px 12px; cursor: pointer; white-space: nowrap; }
   button:hover { background: var(--hover); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 650; }
+  button.primary:hover { background: var(--accent-hover); }
   button.danger { color: var(--bad); border-color: var(--bad); }
-  button.link { border: 0; background: none; color: var(--accent); padding: 2px 6px; }
+  button.link { border: 0; background: none; color: var(--accent); padding: 4px 6px; }
+  button.link:hover { text-decoration: underline; }
   button.link.danger { color: var(--bad); }
-  button:disabled { opacity: .5; cursor: default; }
-  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  input, select, textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; width: 100%; }
+  button:disabled { opacity: .55; cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input, select, textarea { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
+  input::placeholder, textarea::placeholder { color: var(--muted); }
   textarea { min-height: 96px; font-family: var(--mono); font-size: 13px; }
-  input[type=checkbox] { width: auto; }
+  input[type=checkbox] { width: auto; accent-color: var(--accent); }
   .mono { font-family: var(--mono); }
   .muted { color: var(--muted); }
   .small { font-size: 12px; }
+  .icon { width: 16px; height: 16px; flex: none; vertical-align: middle; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
+  .brand:hover { text-decoration: none; }
+  .brand-mark { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid var(--node-ok); border-radius: 9px; color: var(--accent); background: var(--accent-soft); flex: none; }
+  .brand-mark .icon { width: 18px; height: 18px; }
 
-  /* layout */
-  .shell { display: grid; grid-template-columns: var(--side) 1fr; min-height: 100vh; }
-  nav.side { background: var(--panel); border-right: 1px solid var(--line); padding: 16px 10px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
-  nav.side .brand { font-weight: 700; font-size: 15px; padding: 4px 10px 16px; }
-  nav.side a { display: block; color: var(--ink); padding: 8px 10px; border-radius: 7px; margin-bottom: 2px; }
-  nav.side a:hover { background: var(--hover); text-decoration: none; }
-  nav.side a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-  nav.side .count { float: right; font-size: 11px; background: var(--bad); color: #fff; border-radius: 999px; padding: 0 6px; }
-  .main { min-width: 0; }
-  header.top { display: flex; align-items: center; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
-  header.top h1 { font-size: 17px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .content { padding: 20px 24px 48px; max-width: 1400px; }
-  @media (max-width: 760px) {
-    .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
-    nav.side { position: static; height: auto; display: flex; gap: 4px; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
-    nav.side .brand { display: none; }
-    nav.side a { margin: 0; white-space: nowrap; }
-    header.top, .content { padding-left: 16px; padding-right: 16px; }
-  }
+  /* Application shell */
+  .shell { display: grid; grid-template-columns: var(--side) minmax(0, 1fr); min-height: 100vh; }
+  nav.side { background: var(--sidebar); border-right: 1px solid var(--line); padding: 21px 12px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  nav.side .brand { margin: 0 8px 24px; width: fit-content; }
+  .nav-links { display: flex; flex-direction: column; gap: 3px; }
+  .nav-links a { display: flex; align-items: center; gap: 10px; color: var(--muted); padding: 9px 10px; border: 1px solid transparent; border-radius: 8px; white-space: nowrap; }
+  .nav-links a:hover { background: var(--hover); color: var(--ink); text-decoration: none; }
+  .nav-links a.active { background: var(--accent-soft); border-color: var(--node-ok); color: var(--accent); font-weight: 650; }
+  .nav-links .count { margin-left: auto; font-size: 11px; background: var(--bad-soft); color: var(--bad); border-radius: 20px; padding: 0 6px; }
+  .nav-divider { height: 1px; border: 0; margin: 10px 8px; background: var(--line); }
+  header.top { display: flex; align-items: center; gap: 14px; padding: 17px 28px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  header.top h1 { font-size: 24px; letter-spacing: -.025em; margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.2; }
+  #who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 20vw; }
+  .content { padding: 23px 28px 44px; max-width: 1950px; margin-inline: auto; }
 
   /* blocks */
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
@@ -83,35 +125,132 @@
   .badge.ok { background: var(--ok-soft); color: var(--ok); }
   .badge.bad { background: var(--bad-soft); color: var(--bad); }
   .badge.warn { background: var(--warn-soft); color: var(--warn); }
-  .badge.info { background: var(--accent-soft); color: var(--accent); }
-  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; }
   .form-row { margin-bottom: 12px; }
   .form-row label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   .form-row .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
   .form-row.check label { display: flex; gap: 8px; align-items: center; color: var(--ink); font-size: 14px; }
 
-  /* topology (overview) */
-  .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; min-width: 92px; }
-  .stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
-  .stat span { color: var(--muted); font-size: 12px; }
-  .tcard { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--idle); border-radius: 8px; padding: 10px 12px; min-width: 0; }
-  .tcard.ok { border-left-color: var(--ok); } .tcard.bad { border-left-color: var(--bad); } .tcard.warn { border-left-color: var(--warn); }
-  .tgrid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
-  .thead { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
-  .thead .tcard { flex: 1 1 240px; }
+  /* Network topology */
+  .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 12px; background: var(--panel); margin-bottom: 20px; }
+  .stat { padding: 12px 16px; min-width: 0; }
+  .stat + .stat { border-left: 1px solid var(--line); }
+  .stat b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; letter-spacing: -.025em; margin-block: 1px; }
+  .stat span { display: block; color: var(--muted); font-size: 12px; }
+  .stat .metric-bad { color: var(--bad); }
+  .topology { border: 1px solid var(--line); border-radius: 14px; background: var(--canvas); }
+  .map-header { display: flex; gap: 10px 18px; align-items: center; flex-wrap: wrap; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+  .map-header h2 { font-size: 16px; margin: 0 auto 0 0; }
+  .map-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+  .map-controls input, .map-controls select { width: auto; min-width: 0; }
+  .map-controls input { width: 178px; }
+  .map-controls button { display: inline-flex; gap: 7px; align-items: center; }
+  .map-canvas {
+    position: relative; display: grid; justify-items: center; gap: 28px; padding: 22px 16px 17px;
+    background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px); background-size: 18px 18px;
+  }
+  .map-wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .map-wires path { fill: none; stroke: var(--wire); stroke-width: 1.3; stroke-dasharray: 4 4; }
+  .map-wires path.ok { stroke: var(--ok); }
+  .map-wires path.warn { stroke: var(--warn); }
+  .map-wires path.bad { stroke: var(--bad); }
+  .map-root { position: relative; z-index: 1; min-width: 210px; padding: 11px 15px; display: flex; gap: 10px; align-items: center; border-radius: 12px; border: 1px solid var(--node-ok); background: var(--accent-soft); }
+  .map-root b, .map-root small { display: block; }
+  .map-root small { color: var(--muted); }
+  .map-grid { position: relative; display: grid; width: 100%; gap: 25px 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .map-grid.single { width: min(270px, 100%); grid-template-columns: minmax(0, 1fr); padding: 0; }
+  .map-node { position: relative; text-align: left; padding: 11px 12px 9px; min-width: 0; border-radius: 11px; border-color: var(--line); white-space: normal; }
+  .map-node.ok { border-color: var(--node-ok); }
+  .map-node.warn { border-color: var(--node-warn); }
+  .map-node.bad { border-color: var(--node-bad); }
+  .map-node[aria-expanded=true] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+  .map-node:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .node-top { display: flex; gap: 6px; justify-content: space-between; align-items: flex-start; }
+  .node-top b { overflow-wrap: anywhere; }
+  .node-address { display: block; color: var(--muted); font-size: 11px; margin: 2px 0 7px; overflow-wrap: anywhere; }
+  .node-metric { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-height: 23px; }
+  .node-metric strong { color: var(--ok); font-family: var(--mono); font-size: 15px; }
+  .node-metric span { color: var(--muted); font-size: 11px; }
+  .node-footer { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--muted); font-size: 11px; }
+  .node-top .badge, .map-legend span { display: inline-flex; gap: 5px; align-items: center; }
+  .node-top .badge::before, .map-legend span::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .node-footer b { color: var(--ink); font-weight: 600; }
+  .map-footer { display: flex; justify-content: space-between; gap: 6px 18px; flex-wrap: wrap; padding: 9px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  .map-legend { display: flex; flex-wrap: wrap; gap: 4px 13px; }
+  .map-legend .ok { color: var(--ok); }
+  .map-legend .warn { color: var(--warn); }
+  .map-legend .bad, .map-update.bad { color: var(--bad); }
+  .map-update { font-variant-numeric: tabular-nums; }
+  .probe-details summary { cursor: pointer; white-space: nowrap; }
+  .probe-details ul { margin: 6px 0 0; padding-left: 17px; min-width: 180px; }
+  .probe-table td:first-child { min-width: 115px; }
+  .probe-table td:last-child { min-width: 130px; }
+  .table-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .table-toolbar input, .table-toolbar select { width: auto; max-width: 100%; }
+  .pool-stats { display: flex; flex-wrap: wrap; }
+  .pool-stats .stat { flex: 1 0 115px; }
+  .pool-stats .stat + .stat { border-left: 0; }
+  .pool-stats .stat:not(:last-child) { border-right: 1px solid var(--line); }
+  .pool-stats .stat:nth-child(n+3) { border-top: 0; }
+  .map-empty { position: relative; width: 100%; background: var(--panel); border-radius: 8px; }
+  .inspector { margin: 20px 0; padding: 14px 16px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--canvas); }
+  .inspector-head { display: flex; flex-wrap: wrap; gap: 7px 12px; align-items: center; margin-bottom: 12px; }
+  .inspector-head h2 { margin: 0 auto 0 0; font-size: 17px; overflow-wrap: anywhere; }
+  .inspector-head .badge { vertical-align: middle; margin-left: 5px; }
+  .inspector .tcard h3 { margin-top: 0; }
+  .inspector .ip-heading { margin: 14px 0 8px; justify-content: space-between; }
+  .inspector .ip-heading h3 { margin: 0; }
+  .map-controls button[aria-busy=true] { color: var(--muted); cursor: progress; }
+  .inspector h3 { margin: 15px 0 8px; font-size: 14px; }
+  .tcard { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+  .tcard.ok { border-color: var(--node-ok); }
+  .tcard.bad { border-color: var(--node-bad); }
+  .tcard.warn { border-color: var(--node-warn); }
+  .tgrid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); }
+  .thead { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
   .ttitle { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
   .ttitle b { font-family: var(--mono); overflow-wrap: anywhere; }
   .line { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
-  .big { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ok); }
   .probe { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); }
   .target { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; margin-top: 0; }
   .hist { display: flex; gap: 2px; margin-top: 4px; flex-wrap: wrap; }
-  .hist i { width: 6px; height: 10px; border-radius: 1px; background: var(--ok); }
+  .hist i { width: 6px; height: 9px; border-radius: 1px; background: var(--ok); }
   .hist i.f { background: var(--bad); }
-  .alerts { display: grid; gap: 6px; margin-bottom: 16px; }
+  .alerts { display: grid; gap: 6px; padding-top: 10px; }
+  .alert-box { margin-top: 20px; }
+  .alert-box summary { cursor: pointer; font-weight: 650; }
+  .alert a { display: inline-block; margin-left: 6px; }
+  .stat a { color: inherit; text-decoration: underline; }
+  #inspector-title:focus { outline-offset: 4px; }
   .alert { border-radius: 8px; padding: 8px 12px; border: 1px solid var(--line); background: var(--warn-soft); }
   .alert.critical { background: var(--bad-soft); }
+  .extra { margin-top: 21px; }
+
+  @media (min-width: 1600px) {
+    .map-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  }
+  @media (max-width: 1100px) {
+    .map-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 820px) {
+    .shell { grid-template-columns: minmax(0, 1fr); }
+    nav.side { position: static; height: auto; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); padding: 10px 12px; }
+    nav.side .brand { margin: 0 4px 8px; }
+    .nav-links { flex-direction: row; overflow-x: auto; padding: 2px; }
+    .nav-divider { display: none; }
+    header.top, .content { padding-inline: 14px; }
+  }
+  @media (max-width: 540px) {
+    .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stat:nth-child(3) { border-left: 0; }
+    .stat:nth-child(n+3) { border-top: 1px solid var(--line); }
+    .map-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; }
+    .map-controls input { width: 100%; grid-column: 1 / -1; }
+    .map-grid { grid-template-columns: minmax(0, 1fr); padding-left: 18px; gap: 12px; }
+    .node-top .badge { white-space: normal; }
+    .map-canvas { padding-inline: 12px; }
+    header.top h1 { font-size: 20px; }
+  }
 
   /* overlays */
   .overlay { position: fixed; inset: 0; background: rgba(15, 20, 30, .45); display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px 16px; z-index: 20; overflow-y: auto; }
@@ -123,47 +262,63 @@
   pre.snippet { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; margin: 8px 0 0; }
   .toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px; z-index: 30; max-width: calc(100vw - 32px); }
   .toast { background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-width: 420px; }
-  .toast.bad { background: var(--bad); color: #fff; }
+  .toast.bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--node-bad); }
 
   /* login */
   .login { max-width: 360px; margin: 14vh auto; padding: 0 16px; }
   .login .card { padding: 22px; }
-  .login h1 { font-size: 18px; margin: 0 0 4px; }
+  .login h1 { font-size: 22px; margin: 0 0 4px; }
+  .login .brand-mark { margin-bottom: 14px; }
+  .appearance { flex: none; width: auto; font-size: 12px; }
+  .login .appearance { float: right; }
+  .badge.info { background: var(--idle-soft); color: var(--ink); }
+  .badge { font-weight: 550; }
+  .actions button:focus-visible { outline-offset: 0; }
+  @media (max-width: 540px) {
+    header.top { flex-wrap: wrap; gap: 8px; }
+    header.top h1 { flex-basis: 100%; }
+    #who { max-width: none; flex: 1; }
+  }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <div id="login" class="login" hidden>
   <form class="card" id="login-form">
-    <h1>CC Proxy 管理后台</h1>
-    <p class="muted small" style="margin:0 0 16px">使用管理员账号登录</p>
-    <div class="form-row"><label for="l-user">用户名</label><input id="l-user" autocomplete="username" required></div>
-    <div class="form-row"><label for="l-pass">密码</label><input id="l-pass" type="password" autocomplete="current-password" required></div>
+    <select class="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+    <span class="brand-mark" data-icon="topology"></span><h1>CC Proxy Console</h1>
+    <p class="muted small" style="margin:0 0 16px">Sign in with an administrator account.</p>
+    <div class="form-row"><label for="l-user">Username</label><input id="l-user" autocomplete="username" required></div>
+    <div class="form-row"><label for="l-pass">Password</label><input id="l-pass" type="password" autocomplete="current-password" required></div>
     <div class="err small" id="l-err" role="alert" style="color:var(--bad);min-height:1.4em"></div>
-    <button class="primary" style="width:100%;margin-top:6px" type="submit">登录</button>
+    <button class="primary" style="width:100%;margin-top:6px" type="submit">Sign in</button>
   </form>
 </div>
 
 <div id="app" class="shell" hidden>
-  <nav class="side" aria-label="主导航">
-    <div class="brand">CC Proxy</div>
-    <a href="#/" data-nav="overview">概览</a>
-    <a href="#/hosts" data-nav="hosts">出口主机</a>
-    <a href="#/ips" data-nav="ips">出口 IP</a>
-    <a href="#/users" data-nav="users">用户</a>
-    <a href="#/alerts" data-nav="alerts">告警 <span class="count" id="alert-count" hidden></span></a>
-    <a href="#/settings" data-nav="settings">设置</a>
-    <a href="#/audit" data-nav="audit">审计日志</a>
-    <a href="#/admins" data-nav="admins">管理员</a>
+  <nav class="side" aria-label="Main navigation">
+    <a class="brand" href="#/"><span class="brand-mark" data-icon="topology"></span>CC Proxy</a>
+    <div class="nav-links">
+      <a href="#/" data-nav="overview"><span data-icon="topology"></span>Topology</a>
+      <a href="#/hosts" data-nav="hosts"><span data-icon="server"></span>Hosts</a>
+      <a href="#/ips" data-nav="ips"><span data-icon="ips"></span>Egress IPs</a>
+      <a href="#/users" data-nav="users"><span data-icon="users"></span>Users</a>
+      <a href="#/alerts" data-nav="alerts"><span data-icon="bell"></span>Alerts <span class="count" id="alert-count" hidden></span></a>
+      <hr class="nav-divider">
+      <a href="#/settings" data-nav="settings"><span data-icon="settings"></span>Settings</a>
+      <a href="#/audit" data-nav="audit"><span data-icon="log"></span>Audit log</a>
+      <a href="#/admins" data-nav="admins"><span data-icon="shield"></span>Administrators</a>
+    </div>
   </nav>
-  <div class="main">
+  <main class="main">
     <header class="top">
-      <h1 id="title">概览</h1>
+      <h1 id="title">Network topology</h1>
       <span class="muted small" id="who"></span>
-      <button id="logout" type="button">退出</button>
+      <select class="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+      <button id="logout" type="button">Sign out</button>
     </header>
     <div class="content" id="view"></div>
-  </div>
+  </main>
 </div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
@@ -173,25 +328,45 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const STALE = 180;
-  let csrf = null, me = null, timer = null, routeToken = 0;
+  let csrf = null, me = null, timer = null, routeToken = 0, stopObserving = null;
+  const ICONS = {
+    topology: '<rect x="9" y="2" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-5h14v5"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/>',
+    server: '<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/>',
+    ips: '<rect x="3" y="7" width="14" height="14" rx="2"/><path d="M7 3h12a2 2 0 0 1 2 2v12"/>',
+    users: '<circle cx="9" cy="7" r="3"/><path d="M2 21v-2a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v2M17 4a3 3 0 0 1 0 6m2 4a5 5 0 0 1 3 5v2"/>',
+    bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12a2 2 0 0 0 4 0"/>',
+    settings: '<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2.5" fill="var(--sidebar)"/><circle cx="15" cy="17" r="2.5" fill="var(--sidebar)"/>',
+    log: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6m-6 4h6m-6 4h4"/>',
+    shield: '<path d="m12 2 8 3v6c0 6-4 9-8 11-4-2-8-5-8-11V5z"/><path d="m9 12 2 2 4-4"/>',
+    refresh: '<path d="M20 10a8 8 0 1 0-1 7M20 4v6h-6"/>',
+  };
+  const icon = (name) => '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round">' + ICONS[name] + "</svg>";
+  $$("[data-icon]").forEach((item) => { item.innerHTML = icon(item.dataset.icon); });
+  appearance.bind();
+
+  function stopUpdates() {
+    clearInterval(timer);
+    stopObserving?.();
+    stopObserving = null;
+  }
 
   // ---- helpers --------------------------------------------------------------------------------------------
   function esc(s) {
     return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
   const enc = encodeURIComponent;
-  const fmtTime = (t) => (t ? new Date(t * 1000).toLocaleString("zh-CN", { hour12: false }) : "—");
+  const fmtTime = (t) => (t ? new Date(t * 1000).toLocaleString(undefined, { hour12: false }) : "—");
   function ago(sec) {
     if (sec == null) return "—";
     sec = Math.max(0, Math.round(sec));
-    if (sec < 60) return sec + " 秒前";
-    if (sec < 3600) return Math.round(sec / 60) + " 分钟前";
-    if (sec < 86400) return Math.round(sec / 3600) + " 小时前";
-    return Math.round(sec / 86400) + " 天前";
+    if (sec < 60) return sec + " s ago";
+    if (sec < 3600) return Math.round(sec / 60) + " min ago";
+    if (sec < 86400) return Math.round(sec / 3600) + " h ago";
+    return Math.round(sec / 86400) + " d ago";
   }
   const ms = (v) => (v == null ? "—" : v < 1 ? "<1 ms" : Math.round(v) + " ms");
-  const hist = (h) => '<div class="hist" title="最近 ' + h.length + ' 次">' + h.map((ok) => '<i class="' + (ok ? "" : "f") + '"></i>').join("") + "</div>";
-  const IP_STATUS = { assigned: ["已分配", "info"], available: ["空闲", ""], cooldown: ["冷却中", "warn"], banned: ["已封禁", "bad"] };
+  const hist = (h) => '<div class="hist" title="Last ' + h.length + ' samples">' + h.map((ok) => '<i class="' + (ok ? "" : "f") + '"></i>').join("") + "</div>";
+  const IP_STATUS = { assigned: ["Assigned", "info"], available: ["Available", ""], cooldown: ["Cooling down", "warn"], banned: ["Banned", "bad"] };
   const ipBadge = (s) => '<span class="badge ' + (IP_STATUS[s] || ["", ""])[1] + '">' + esc((IP_STATUS[s] || [s])[0]) + "</span>";
   const now = () => Date.now() / 1000;
 
@@ -210,10 +385,10 @@
     if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
     if (method !== "GET" && csrf) opts.headers["X-CSRF-Token"] = csrf;
     let resp;
-    try { resp = await fetch(path, opts); } catch (e) { throw new ApiError("无法连接控制端：" + e.message); }
+    try { resp = await fetch(path, opts); } catch (e) { throw new ApiError("Could not reach the control plane: " + e.message); }
     let data = null;
     try { data = await resp.json(); } catch (e) { /* empty body */ }
-    if (resp.status === 401 && path !== "/admin/session") { showLogin("登录已过期，请重新登录"); throw new ApiError("未登录"); }
+    if (resp.status === 401 && path !== "/admin/session") { showLogin("Your session expired. Sign in again."); throw new ApiError("Signed out"); }
     if (!resp.ok) throw new ApiError((data && data.error) || "HTTP " + resp.status);
     return data;
   }
@@ -221,7 +396,7 @@
   // Wrap an action: report errors as toasts, success optionally.
   async function act(fn, okText) {
     try { const r = await fn(); if (okText) toast(okText); return r; }
-    catch (e) { if (e.message !== "未登录") toast(e.message, true); return undefined; }
+    catch (e) { if (e.message !== "Signed out") toast(e.message, true); return undefined; }
   }
 
   // ---- modals ---------------------------------------------------------------------------------------------
@@ -237,7 +412,7 @@
 
   /* fields: [{name, label, type: text|password|number|select|textarea|checkbox, value, options:[[v,label]], hint, placeholder, required}]
      onSubmit(values) may throw; its return value resolves the promise. */
-  function form(title, fields, onSubmit, submitText = "保存") {
+  function form(title, fields, onSubmit, submitText = "Save") {
     return new Promise((resolve) => {
       const rows = fields.map((f, i) => {
         const id = "f" + i, req = f.required ? " required" : "";
@@ -254,7 +429,7 @@
         }
         return '<div class="form-row"><label for="' + id + '">' + esc(f.label) + "</label>" + input + (f.hint ? '<div class="hint">' + esc(f.hint) + "</div>" : "") + "</div>";
       }).join("");
-      const { ov, close } = overlay('<h3>' + esc(title) + '</h3><form novalidate>' + rows + '<div class="err" role="alert"></div><div class="buttons"><button type="button" data-cancel>取消</button><button class="primary" type="submit">' + esc(submitText) + "</button></div></form>");
+      const { ov, close } = overlay('<h3>' + esc(title) + '</h3><form novalidate>' + rows + '<div class="err" role="alert"></div><div class="buttons"><button type="button" data-cancel>Cancel</button><button class="primary" type="submit">' + esc(submitText) + "</button></div></form>");
       const formEl = $("form", ov);
       $("[data-cancel]", ov).onclick = () => { close(); resolve(undefined); };
       formEl.onsubmit = async (e) => {
@@ -274,9 +449,9 @@
     });
   }
 
-  function confirmBox(title, text, okText = "确认", danger = true) {
+  function confirmBox(title, text, okText = "Confirm", danger = true) {
     return new Promise((resolve) => {
-      const { ov, close } = overlay("<h3>" + esc(title) + "</h3><p>" + text + '</p><div class="buttons"><button type="button" data-no>取消</button><button type="button" class="' + (danger ? "danger" : "primary") + '" data-yes>' + esc(okText) + "</button></div>");
+      const { ov, close } = overlay("<h3>" + esc(title) + "</h3><p>" + text + '</p><div class="buttons"><button type="button" data-no>Cancel</button><button type="button" class="' + (danger ? "danger" : "primary") + '" data-yes>' + esc(okText) + "</button></div>");
       $("[data-no]", ov).onclick = () => { close(); resolve(false); };
       $("[data-yes]", ov).onclick = () => { close(); resolve(true); };
       $("[data-yes]", ov).focus();
@@ -285,17 +460,18 @@
 
   // Show a credential exactly once (it cannot be retrieved later).
   function reveal(title, label, secret, extraHtml = "") {
-    const { ov, close } = overlay("<h3>" + esc(title) + '</h3><p class="small muted">' + esc(label) + '（只显示这一次，请现在保存）</p><div class="secret" id="secret">' + esc(secret) + "</div>" + extraHtml +
-      '<div class="buttons"><button type="button" data-copy>复制</button><button type="button" class="primary" data-ok>我已保存</button></div>');
+    const { ov, close } = overlay("<h3>" + esc(title) + '</h3><p class="small muted">' + esc(label) + ' (shown once. Save it now.)</p><div class="secret" id="secret">' + esc(secret) + "</div>" + extraHtml +
+      '<div class="buttons"><button type="button" data-copy>Copy</button><button type="button" class="primary" data-ok>Done</button></div>');
     $("[data-copy]", ov).onclick = async () => {
-      try { await navigator.clipboard.writeText(secret); toast("已复制"); } catch (e) { toast("复制失败，请手动选中复制", true); }
+      try { await navigator.clipboard.writeText(secret); toast("Copied"); } catch (e) { toast("Could not copy. Select the value and copy it manually.", true); }
     };
     $("[data-ok]", ov).onclick = close;
   }
 
   // ---- auth -----------------------------------------------------------------------------------------------
   function showLogin(msg) {
-    clearInterval(timer);
+    stopUpdates();
+    routeToken++;
     csrf = null; me = null;
     $("#app").hidden = true;
     $("#login").hidden = false;
@@ -326,21 +502,26 @@
       csrf = s.csrf; me = s.admin;
       $("#l-pass").value = "";
       start();
-    } catch (err) { $("#l-err").textContent = err.message === "wrong username or password" ? "用户名或密码错误" : err.message; }
+    } catch (err) { $("#l-err").textContent = err.message === "wrong username or password" ? "Incorrect username or password." : err.message; }
   });
-  $("#logout").onclick = async () => { await act(() => api("DELETE", "/admin/session")); showLogin("已退出"); };
+  $("#logout").onclick = async () => { await act(() => api("DELETE", "/admin/session")); showLogin("Signed out."); };
 
   // ---- router ---------------------------------------------------------------------------------------------
   const PAGES = {};
   function route() {
-    clearInterval(timer);
-    const parts = (location.hash.replace(/^#\/?/, "") || "").split("/").map(decodeURIComponent);
+    stopUpdates();
+    const parts = (location.hash.split("?")[0].replace(/^#\/?/, "")).split("/").map(decodeURIComponent);
     const page = parts[0] || "overview";
     const fn = PAGES[page] || PAGES.overview;
-    $$("nav.side a").forEach((a) => a.classList.toggle("active", a.dataset.nav === (PAGES[page] ? page : "overview")));
+    $$("[data-nav]").forEach((link) => {
+      const active = link.dataset.nav === (PAGES[page] ? page : "overview");
+      link.classList.toggle("active", active);
+      if (active) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    });
     const token = ++routeToken;
-    $("#view").innerHTML = '<div class="empty">加载中…</div>';
-    fn(parts.slice(1), token).catch((e) => { if (token === routeToken && e.message !== "未登录") $("#view").innerHTML = '<div class="empty">加载失败：' + esc(e.message) + "</div>"; });
+    $("#view").innerHTML = '<div class="empty">Loading…</div>';
+    fn(parts.slice(1), token).catch((e) => { if (token === routeToken && e.message !== "Signed out") $("#view").innerHTML = '<div class="empty">Could not load: ' + esc(e.message) + "</div>"; });
   }
   window.addEventListener("hashchange", () => { if (me) route(); });
   const setTitle = (t) => { $("#title").textContent = t; document.title = t + " · CC Proxy"; };
@@ -353,96 +534,345 @@
     $("#alert-count").textContent = n;
   }
 
-  // ---- overview (topology) --------------------------------------------------------------------------------
-  function entryCard(e, t, title) {
-    const best = e.best;
-    const stale = !e.probes.length || e.probes.every((p) => t - p.at > STALE);
-    const allBad = e.probes.length && e.probes.every((p) => !p.ok);
-    const cls = !e.probes.length ? "" : allBad ? "bad" : stale ? "warn" : "ok";
-    const rows = e.probes.map((p) => '<div class="line"><span class="mono">' + esc(p.source) + "</span> " +
-      (p.ok ? ms(p.latency_ms) : '<span style="color:var(--bad)">不可达</span>') + " · " + ago(t - p.at) + hist(p.history) + "</div>").join("");
-    return '<div class="tcard ' + cls + '"><div class="ttitle"><b>' + esc(title || e.name) + '</b><span class="badge ' + cls + '">' +
-      (cls === "ok" ? "正常" : cls === "bad" ? "不可达" : cls === "warn" ? "数据过期" : "无数据") + "</span></div>" +
-      '<div class="line mono">' + esc(e.host) + ":" + esc(e.port) + "</div>" +
-      (best ? '<div class="big">' + ms(best.latency_ms) + ' <span class="line">最快 · ' + esc(best.source) + "</span></div>" : "") +
-      (rows || '<div class="line">尚无探测点上报</div>') + "</div>";
+  // Entry and exit probe status use the same freshness window as the console.
+  function probeHealth(probes, time) {
+    const recent = probes.filter((probe) => time - probe.at <= STALE);
+    const reachable = recent.filter((probe) => probe.ok);
+    const best = reachable.reduce((fastest, probe) => {
+      if (probe.latency_ms == null) return fastest;
+      return !fastest || probe.latency_ms < fastest.latency_ms ? probe : fastest;
+    }, null);
+    if (!probes.length) return { tone: "", label: "No data", best };
+    if (!recent.length) return { tone: "warn", label: "Stale probes", best };
+    if (!reachable.length) return { tone: "bad", label: "Unreachable", best };
+    if (reachable.length !== probes.length) return { tone: "warn", label: "Partial coverage", best };
+    return { tone: "ok", label: "Reachable", best };
   }
-  function agentCard(a) {
-    if (!a) return '<div class="tcard bad"><div class="ttitle"><b>agent</b><span class="badge bad">未上报</span></div><div class="line">还没有收到这台出口机的心跳</div></div>';
-    const alive = a.age < STALE, down = a.singbox_running === false, failed = !!a.apply_error && !a.in_sync;
-    const cls = !alive || down || failed ? "bad" : a.in_sync ? "ok" : "warn";
-    return '<div class="tcard ' + cls + '"><div class="ttitle"><b>agent</b><span class="badge ' + cls + '">' +
-      (!alive ? "失联" : down ? "sing-box 未运行" : failed ? "新配置未生效" : a.in_sync ? "配置已同步" : "等待同步") + "</span></div>" +
-      (failed ? '<div class="line" style="color:var(--bad)">' + esc(a.apply_error) + "</div>" : "") +
-      '<div class="line">心跳 ' + ago(a.age) + '</div><div class="line">已装配置 <span class="mono">' + esc((a.config_etag || "—").replace(/"/g, "")) + "</span></div></div>";
+
+  function agentHealth(agent) {
+    if (!agent) return { tone: "", label: "No heartbeat" };
+    if (agent.age >= STALE) return { tone: "bad", label: "Agent offline" };
+    if (agent.singbox_running === false) return { tone: "bad", label: "sing-box stopped" };
+    if (agent.apply_error && !agent.in_sync) return { tone: "bad", label: "Apply failed" };
+    return agent.in_sync ? { tone: "ok", label: "Synced" } : { tone: "warn", label: "Sync pending" };
   }
-  function ipCard(ip, t) {
-    const probes = ip.probes, fresh = probes.filter((p) => t - p.at <= STALE);
-    let cls = "";
-    if (ip.status === "banned") cls = "bad";
-    else if (probes.some((p) => !p.ok && t - p.at <= STALE)) cls = "bad";
-    else if (probes.length && !fresh.length) cls = "warn";
-    else if (fresh.length) cls = "ok";
-    const users = ip.users.length ? ip.users.map((u) => '<a href="#/users/' + enc(u) + '">' + esc(u) + '</a> <span class="mono">:' + esc(ip.ports[u]) + "</span>").join(", ") + (ip.users.length > 1 ? "（共享）" : "（独享）") : "无用户";
-    const rows = probes.map((p) => '<div class="probe"><div class="ttitle"><span class="line mono target" title="' + esc(p.target) + '">' + esc(p.target.replace(/^https?:\/\//, "")) + "</span>" +
-      '<span class="badge ' + (p.ok ? "ok" : "bad") + '">' + (p.ok ? ms(p.latency_ms) : "失败") + "</span></div>" +
-      (p.ok ? "" : '<div class="line" style="color:var(--bad)">' + esc(p.detail) + "</div>") + '<div class="line">' + ago(t - p.at) + hist(p.history) + "</div></div>").join("");
-    return '<div class="tcard ' + cls + '"><div class="ttitle"><b>' + esc(ip.ip) + "</b>" + ipBadge(ip.status) + "</div>" +
-      '<div class="line">' + users + " · 设备 " + ip.devices + "</div>" + (ip.note ? '<div class="line">' + esc(ip.note) + "</div>" : "") +
-      (rows || '<div class="line">尚无探测结果</div>') + "</div>";
+
+  function hostHealth(agent, entry, failedIps) {
+    if (agent.tone === "bad") return agent;
+    if (entry.tone === "bad") return entry;
+    if (failedIps) return { tone: "bad", label: "Egress failure" };
+    if (agent.tone === "warn") return agent;
+    if (entry.tone === "warn") return entry;
+    if (!agent.tone) return agent;
+    return entry.tone === "ok" ? { tone: "ok", label: "Healthy" } : { tone: "", label: "No probes" };
+  }
+
+  const statusBadge = ({ tone, label }) => `<span class="badge ${tone}">${label}</span>`;
+  const endpoint = (host, port) => port ? `${host.includes(":") ? "[" + host + "]" : host}:${port}` : host;
+  const metric = (label, value, detail = "", color = "") => `<div class="stat"><span>${label}</span><b class="${color}">${value}</b>${detail ? "<span>" + detail + "</span>" : ""}</div>`;
+
+  function entryProbes(entry, time) {
+    if (!entry) return '<p class="line">This host has no active entry port. Assign a user to start probing the entry.</p>';
+    const health = probeHealth(entry.probes, time);
+    const rows = entry.probes.map((probe) => {
+      const status = time - probe.at > STALE ? { tone: "warn", label: "Stale" } :
+        probe.ok ? { tone: "ok", label: "Reachable" } : { tone: "bad", label: "Unreachable" };
+      return `<tr><td>${esc(probe.source)}</td><td>${probe.ok ? ms(probe.latency_ms) : "—"}</td>
+        <td>${statusBadge(status)}${probe.ok || !probe.detail ? "" : '<div class="line">' + esc(probe.detail) + "</div>"}</td>
+        <td>${ago(time - probe.at)}</td><td>${hist(probe.history)}</td></tr>`;
+    });
+    return `<p class="line mono">${esc(endpoint(entry.host, entry.port))} ${statusBadge(health)}</p>` + (rows.length ?
+      '<div class="table-wrap"><table class="probe-table"><thead><tr><th>Location</th><th>Latency</th><th>Status</th><th>Last probe</th><th>History</th></tr></thead><tbody>' +
+      rows.join("") + '</tbody></table></div>' : '<p class="line">No probes have reported yet.</p>');
+  }
+
+  function ipCard(ip, time) {
+    const health = ipProbeHealth(ip.probes, time);
+    const users = ip.users.map((user) => `<a href="#/users/${enc(user)}">${esc(user)}</a> <span class="mono">:${esc(ip.ports[user])}</span>`).join(", ");
+    const rows = ip.probes.map((probe) => {
+      const tone = time - probe.at > STALE ? "warn" : probe.ok ? "ok" : "bad";
+      const delay = probe.ok ? ms(probe.latency_ms) : "Failed";
+      const label = tone === "warn" ? delay + " · stale" : delay;
+      return `<div class="probe"><div class="ttitle"><span class="line mono target" title="${esc(probe.target)}">${esc(probe.target.replace(/^https?:\/\//, ""))}</span>
+        ${statusBadge({ tone, label })}</div>
+        ${probe.ok || !probe.detail ? "" : '<div class="line">' + esc(probe.detail) + "</div>"}
+        <div class="line">${ago(time - probe.at)}${hist(probe.history)}</div></div>`;
+    });
+    return `<article class="tcard ${health.tone}"><div class="ttitle"><b>${esc(ip.ip)}</b>${ipBadge(ip.status)}</div>
+      <div class="line">${users || "No users"}${ip.users.length > 1 ? " (shared)" : ""} · ${ip.devices} ${ip.devices === 1 ? "device" : "devices"}</div>
+      ${ip.note ? '<div class="line">' + esc(ip.note) + "</div>" : ""}
+      ${rows.join("") || '<div class="line">No probe results yet.</div>'}</article>`;
+  }
+
+  function ipProbeHealth(probes, time) {
+    if (probes.some((probe) => !probe.ok && time - probe.at <= STALE)) return { tone: "bad", label: "Failed" };
+    const health = probeHealth(probes, time);
+    return health.tone === "ok" ? { tone: "ok", label: "Healthy" } : health;
+  }
+
+  function topologyHosts(topology) {
+    const agents = new Map(topology.agents.map((agent) => [agent.name, agent]));
+    const entries = new Map(topology.entries.filter((entry) => entry.kind === "host").map((entry) => [entry.name, entry]));
+    const ipsByHost = new Map();
+    for (const ip of topology.ips) {
+      if (!ipsByHost.has(ip.host)) ipsByHost.set(ip.host, []);
+      ipsByHost.get(ip.host).push(ip);
+    }
+    return topology.hosts.map((host) => {
+      const ips = ipsByHost.get(host.name) || [];
+      const entry = entries.get(host.name);
+      const agent = agents.get(host.name);
+      const entryState = probeHealth(entry?.probes || [], topology.now);
+      const failedIps = ips.filter((ip) => ipProbeHealth(ip.probes, topology.now).tone === "bad").length;
+      return {
+        host, ips, entry, entryState, agent, failedIps,
+        devices: ips.reduce((total, ip) => total + ip.devices, 0),
+        health: hostHealth(agentHealth(agent), entryState, failedIps),
+      };
+    });
+  }
+
+  function nodeCard(node, selected) {
+    const { host, entry, entryState, health } = node;
+    const best = entryState.best;
+    return `<button class="map-node ${health.tone}" data-node="${esc(host.name)}" data-tone="${health.tone}"
+      type="button" aria-controls="host-inspector" aria-expanded="${host.name === selected}">
+      <span class="node-top"><b>${esc(host.name)}</b>${statusBadge(health)}</span>
+      <span class="node-address mono">${esc(endpoint(host.public_host, entry?.port))}</span>
+      <span class="node-metric">${best ? '<strong>' + ms(best.latency_ms) + '</strong><span>' + esc(best.source) + '</span>' :
+        '<span>No current latency</span>'}</span>
+      <span class="node-footer"><span><b>${node.ips.length}</b> ${node.ips.length === 1 ? "IP" : "IPs"}</span>
+        <span><b>${host.users}</b> ${host.users === 1 ? "user" : "users"}</span>
+        <span><b>${node.devices}</b> ${node.devices === 1 ? "device" : "devices"}</span></span>
+    </button>`;
+  }
+
+  // Draw a bus across each rendered row. Recompute it when the grid reflows.
+  function drawWires(canvas, root, grid, wires) {
+    const rect = canvas.getBoundingClientRect();
+    const rootRect = root.getBoundingClientRect();
+    const center = (bounds) => Math.round(bounds.left - rect.left + bounds.width / 2);
+    const rootX = center(rootRect);
+    const rows = new Map();
+    for (const node of grid.querySelectorAll(".map-node")) {
+      const bounds = node.getBoundingClientRect();
+      const y = Math.round(bounds.top - rect.top);
+      if (!rows.has(y)) rows.set(y, []);
+      rows.get(y).push({ x: center(bounds), tone: node.dataset.tone });
+    }
+    if (!rows.size) { wires.replaceChildren(); return; }
+    const tracks = Array.from(rows.keys());
+    const rootY = Math.round(rootRect.bottom - rect.top);
+    const oneColumn = rows.size > 1 && rows.size === grid.children.length;
+    const trunkX = oneColumn ? 15 : rootX;
+    const rise = oneColumn ? 8 : 14;
+    const firstBus = tracks[0] - rise;
+    const lastBus = tracks.at(-1) - rise;
+    const stem = `M ${rootX} ${rootY} V ${firstBus} H ${trunkX} V ${lastBus}`;
+    const paths = [`<path d="${stem}"></path>`];
+    for (const [y, row] of rows) {
+      const busY = y - rise;
+      const positions = [trunkX, ...row.map((node) => node.x)];
+      paths.push(`<path d="M ${Math.min(...positions)} ${busY} H ${Math.max(...positions)}"></path>`);
+      for (const node of row) paths.push(`<path class="${node.tone}" d="M ${node.x} ${busY} V ${y}"></path>`);
+    }
+    wires.innerHTML = paths.join("");
+  }
+
+  function inspector(node, time) {
+    const { host, agent, health } = node;
+    return `<div class="inspector-head">
+      <h2 id="inspector-title" tabindex="-1">${esc(host.name)} ${statusBadge(health)}</h2>
+      <a href="#/hosts/${enc(host.name)}">Manage host</a><button type="button" id="close-inspector">Close</button>
+      </div><div class="thead">
+        <section class="tcard"><h3>Agent status</h3>
+          <dl class="kv"><dt>Status</dt><dd>${statusBadge(agentHealth(agent))}</dd>
+            <dt>Last heartbeat</dt><dd>${agent ? ago(agent.age) : "—"}</dd>
+            <dt>Installed config</dt><dd class="mono small">${esc(agent?.config_etag || "—")}</dd></dl>
+          ${agent?.apply_error && !agent.in_sync ? '<p class="line">' + esc(agent.apply_error) + "</p>" : ""}
+        </section>
+        <section class="tcard"><h3>Entry probes</h3>${entryProbes(node.entry, time)}</section>
+      </div>
+      <div class="inspector-head ip-heading"><h3>Egress IPs (${node.ips.length})</h3><a href="#/ips?host=${enc(host.name)}">Open IP inventory</a></div>
+      ${node.ips.length ? '<div class="tgrid">' + node.ips.map((ip) => ipCard(ip, time)).join("") + "</div>" :
+        '<p class="line">This host has no egress IPs.</p>'}`;
   }
 
   PAGES.overview = async (_, token) => {
-    setTitle("概览");
-    const draw = async () => {
-      const t = await api("GET", "/admin/topology");
-      if (!current(token)) return;
-      updateAlertCount(t.alerts || []);
-      const tn = t.now;
-      const failing = t.ips.filter((ip) => ip.probes.some((p) => !p.ok && tn - p.at <= STALE)).length;
-      const agents = Object.fromEntries(t.agents.map((a) => [a.name, a]));
-      const entries = Object.fromEntries(t.entries.filter((e) => e.kind === "host").map((e) => [e.name, e]));
-      const stats = [[(t.alerts || []).length, "告警"], [t.hosts.length, "出口主机"], [t.ips.length, "出口 IP"],
-        [t.ips.filter((i) => i.status === "assigned").length, "已分配"], [t.ips.filter((i) => i.status === "available").length, "空闲"],
-        [failing, "探测失败"], [t.agents.filter((a) => a.age < STALE && a.in_sync && a.singbox_running !== false).length + " / " + t.hosts.length, "出口机正常"]];
-      const extras = t.entries.filter((e) => e.kind === "extra");
-      $("#view").innerHTML =
-        '<div class="alerts">' + (t.alerts || []).map((a) => '<div class="alert ' + (a.severity === "critical" ? "critical" : "") + '"><b>' + (a.severity === "critical" ? "严重" : "警告") + "</b> " + esc(a.summary) + ' <span class="line">· 自 ' + ago(tn - a.fired_at) + "</span></div>").join("") + "</div>" +
-        '<div class="summary">' + stats.map(([v, k]) => '<div class="stat"><b>' + esc(v) + "</b><span>" + k + "</span></div>").join("") + "</div>" +
-        (extras.length ? '<div class="section"><h2>其他入口</h2><div class="tgrid">' + extras.map((e) => entryCard(e, tn)).join("") + "</div></div>" : "") +
-        (t.hosts.map((h) => {
-          const ips = t.ips.filter((ip) => ip.host === h.name);
-          const entry = entries[h.name];
-          return '<div class="section"><h2><a href="#/hosts/' + enc(h.name) + '">' + esc(h.name) + '</a> <span class="muted small mono">' + esc(h.public_host) + " · 端口 " + h.port_range[0] + "–" + h.port_range[1] + " · " + h.users + " 个用户</span></h2>" +
-            '<div class="thead">' + agentCard(agents[h.name]) + (entry ? entryCard(entry, tn, "入口延迟") : '<div class="tcard"><div class="ttitle"><b>入口延迟</b><span class="badge">无数据</span></div><div class="line">没有用户时不监听端口，也就不测入口</div></div>') + "</div>" +
-            '<div class="tgrid">' + (ips.map((ip) => ipCard(ip, tn)).join("") || '<div class="empty">这台主机还没有出口 IP</div>') + "</div></div>";
-        }).join("") || '<div class="card empty">还没有出口主机。<a href="#/hosts">去添加</a></div>');
+    setTitle("Network topology");
+    $("#view").innerHTML = `
+      <div id="topology-stats" class="summary" aria-label="Network summary" hidden></div>
+      <section class="topology" aria-labelledby="map-title">
+        <div class="map-header">
+          <h2 id="map-title">Egress hosts</h2>
+          <div class="map-controls">
+            <input id="host-search" type="search" aria-label="Find a host" placeholder="Find a host">
+            <select id="health-filter" aria-label="Host health">
+              <option value="all">All states</option><option value="attention">Needs attention</option>
+              <option value="bad">Failed</option><option value="warn">Warning</option>
+              <option value="ok">Healthy</option><option value="unknown">No data</option>
+            </select>
+            <button id="refresh-map" type="button">${icon("refresh")} Refresh</button>
+          </div>
+        </div>
+        <div class="map-canvas">
+          <svg class="map-wires" aria-hidden="true"></svg>
+          <div class="map-root" hidden><span class="brand-mark">${icon("topology")}</span><div><b>Control plane</b><small id="host-count"></small></div></div>
+          <div id="node-grid" class="map-grid" role="group" aria-label="Egress hosts"></div>
+          <div id="map-empty" class="map-empty empty" role="status">Loading topology…</div>
+        </div>
+        <div class="map-footer">
+          <div class="map-legend"><span class="ok">Healthy</span><span class="warn">Warning</span><span class="bad">Failed</span><span>No data</span></div>
+          <span id="map-update" class="map-update"></span>
+        </div>
+      </section>
+      <section id="host-inspector" class="inspector" aria-labelledby="inspector-title" hidden></section>
+      <details id="alert-box" class="card alert-box" hidden>
+        <summary id="alert-summary">Active alerts</summary><div id="topology-alerts" class="alerts"></div>
+      </details>
+      <section id="other-entries" class="section extra" aria-labelledby="extra-title" hidden><h2 id="extra-title">Other entries</h2><div class="tgrid"></div></section>`;
+    const canvas = $(".map-canvas"), root = $(".map-root"), grid = $("#node-grid"), wires = $(".map-wires");
+    const search = $("#host-search"), filter = $("#health-filter"), refresh = $("#refresh-map");
+    const panel = $("#host-inspector"), empty = $("#map-empty"), updated = $("#map-update");
+    let topology, hosts = [], selected = "", renderedNodes = "", renderedInspector = "", lastUpdate = "", loading = false;
+    const observer = new ResizeObserver(() => drawWires(canvas, root, grid, wires));
+    observer.observe(canvas);
+    observer.observe(grid);
+    stopObserving = () => observer.disconnect();
+
+    const nodeButton = (name) => Array.from(grid.children).find((button) => button.dataset.node === name);
+    const syncSelection = () => {
+      const node = hosts.find(({ host }) => host.name === selected);
+      const focused = panel.contains(document.activeElement) ? document.activeElement : null;
+      panel.hidden = !node;
+      if (!node) {
+        if (focused) search.focus({ preventScroll: true });
+        return;
+      }
+      const markup = inspector(node, topology.now);
+      if (renderedInspector === markup) return;
+      panel.innerHTML = markup;
+      renderedInspector = markup;
+      if (focused) {
+        const match = Array.from(panel.querySelectorAll("[id], a")).find((item) =>
+          (focused.id && focused.id === item.id) || (focused.href && focused.href === item.href));
+        (match || $("#inspector-title", panel)).focus({ preventScroll: true });
+      }
     };
-    await draw();
-    refreshEvery(10, () => draw().catch(() => {}), token);
+
+    const select = (name) => {
+      const previous = selected;
+      selected = selected === name ? "" : name;
+      draw();
+      if (selected) $("#inspector-title", panel).focus();
+      else nodeButton(previous)?.focus();
+    };
+
+    const draw = () => {
+      if (!topology) return;
+      const query = search.value.trim().toLowerCase();
+      const state = filter.value;
+      const visible = hosts.filter(({ host, ips, health }) => {
+        const matchesState = state === "all" || state === (health.tone || "unknown") ||
+          (state === "attention" && (health.tone === "bad" || health.tone === "warn"));
+        return matchesState && (!query || host.name.toLowerCase().includes(query) ||
+          host.public_host.toLowerCase().includes(query) || ips.some((ip) => ip.ip.includes(query)));
+      });
+      if (!visible.some(({ host }) => host.name === selected)) selected = "";
+      const focused = grid.contains(document.activeElement) ? document.activeElement.dataset.node : null;
+      const html = visible.map((node) => nodeCard(node, selected)).join("");
+      grid.hidden = !visible.length;
+      grid.classList.toggle("single", visible.length === 1);
+      if (renderedNodes !== html) {
+        grid.innerHTML = html;
+        renderedNodes = html;
+        if (focused) (nodeButton(focused) || search).focus({ preventScroll: true });
+      }
+      root.hidden = false;
+      $("#host-count").textContent = `${visible.length} of ${hosts.length} hosts`;
+      empty.hidden = !!visible.length;
+      empty.innerHTML = hosts.length ? "No hosts match these filters." : 'No egress hosts yet. <a href="#/hosts">Add a host</a>';
+      syncSelection();
+      drawWires(canvas, root, grid, wires);
+    };
+
+    const load = async () => {
+      if (loading || !current(token)) return;
+      loading = true;
+      refresh.setAttribute("aria-busy", "true");
+      try {
+        const data = await api("GET", "/admin/topology");
+        if (!current(token)) return;
+        topology = data;
+        hosts = topologyHosts(data);
+        const alerts = (data.alerts || []).filter((alert) => alert.state === "firing");
+        const reachable = data.entries.filter(({ probes }) => probes.some((probe) => probe.ok && data.now - probe.at <= STALE)).length;
+        const alertsPanel = $("#topology-alerts");
+        updateAlertCount(alerts);
+        $("#alert-box").hidden = !alerts.length;
+        $("#alert-summary").textContent = `Active alerts (${alerts.length})`;
+        alertsPanel.innerHTML = alerts.map((alert) => `<div class="alert ${alert.severity === "critical" ? "critical" : ""}">
+          <b>${alert.severity === "critical" ? "Critical" : "Warning"}</b> ${esc(alert.summary)}
+          <a href="#/alerts">View alerts</a></div>`).join("");
+        $("#topology-stats").hidden = false;
+        $("#topology-stats").innerHTML = [
+          metric("Egress hosts", hosts.length, hosts.filter((node) => node.health.tone === "ok").length + " healthy"),
+          metric("Egress IPs", data.ips.length, data.ips.filter((ip) => ip.status === "assigned").length + " assigned"),
+          metric("Reachable entries", data.entries.length ? reachable + " / " + data.entries.length : "—", "Recent successful probes"),
+          metric("Active alerts", alerts.length ? '<a href="#/alerts" aria-label="View ' + alerts.length + ' active alerts">' + alerts.length + '</a>' : 0,
+            "", alerts.length ? "metric-bad" : ""),
+        ].join("");
+        const others = data.entries.filter((entry) => entry.kind === "extra");
+        const otherEntries = $("#other-entries");
+        const open = new Set($$("details[open]", otherEntries).map((detail) => detail.dataset.entry));
+        const focusedEntry = document.activeElement.closest("details[data-entry]")?.dataset.entry;
+        otherEntries.hidden = !others.length;
+        $(".tgrid", otherEntries).innerHTML = others.map((entry) => `<details class="tcard" data-entry="${esc(entry.name)}" ${open.has(entry.name) ? "open" : ""}>
+          <summary>${esc(entry.name)} ${statusBadge(probeHealth(entry.probes, data.now))}</summary>
+          ${entryProbes(entry, data.now)}</details>`).join("");
+        if (focusedEntry) $$("details", otherEntries).find((detail) => detail.dataset.entry === focusedEntry)?.querySelector("summary")?.focus({ preventScroll: true });
+        draw();
+        lastUpdate = new Date().toLocaleTimeString();
+        updated.classList.remove("bad");
+        updated.textContent = "Updated " + lastUpdate;
+      } catch (error) {
+        if (!current(token)) return;
+        updated.classList.add("bad");
+        updated.textContent = lastUpdate ? "Refresh failed · showing data from " + lastUpdate : "Refresh failed";
+        if (!topology) empty.textContent = error.message + " Try Refresh.";
+      } finally {
+        loading = false;
+        refresh.removeAttribute("aria-busy");
+      }
+    };
+
+    search.addEventListener("input", draw);
+    filter.addEventListener("change", draw);
+    refresh.addEventListener("click", load);
+    grid.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-node]");
+      if (button) select(button.dataset.node);
+    });
+    panel.addEventListener("click", (event) => {
+      if (event.target.closest("#close-inspector")) select("");
+    });
+    await load();
+    if (current(token)) refreshEvery(10, load, token);
   };
 
-  // ---- hosts ----------------------------------------------------------------------------------------------
-  function agentStatus(a) {
-    if (!a) return '<span class="badge bad">未上报</span>';
-    if (a.age >= STALE) return '<span class="badge bad">失联</span>';
-    if (a.singbox_running === false) return '<span class="badge bad">sing-box 未运行</span>';
-    if (a.apply_error && !a.in_sync) return '<span class="badge bad" title="' + esc(a.apply_error) + '">新配置未生效</span>';
-    return a.in_sync ? '<span class="badge ok">正常</span>' : '<span class="badge warn">等待同步</span>';
-  }
   function agentCommand(token) {
     return "CP_AGENT_TOKEN=" + token + " python3 controlplane/agent.py \\\n  --cp " + location.origin + " --iface eth0 \\\n  --reload-cmd \"systemctl reload sing-box\" --status-cmd \"systemctl is-active --quiet sing-box\"";
   }
   function showAgentToken(host, token) {
-    reveal("主机 " + host + " 的 agent 令牌", "在出口机上用它启动 agent", token,
-      '<p class="small muted" style="margin:12px 0 0">在出口机上运行（网卡名按实际修改）：</p><pre class="snippet">' + esc(agentCommand(token)) + "</pre>");
+    reveal("Host " + host + " agent token", "Use this token to start the agent on the egress host.", token,
+      '<p class="small muted" style="margin:12px 0 0">Run on the egress host with its network interface name:</p><pre class="snippet">' + esc(agentCommand(token)) + "</pre>");
   }
   const hostFields = (h = {}) => [
-    { name: "public_host", label: "公网入口地址", value: h.public_host, required: true, placeholder: "192.0.2.2 或域名", hint: "客户端连接这个地址" },
-    { name: "server_name", label: "Reality 伪装域名（SNI）", value: h.server_name, required: true, placeholder: "www.example.com", hint: "一个支持 TLS 1.3 的真实站点" },
-    { name: "handshake_server", label: "握手目标（可选）", value: h.handshake_server || "", placeholder: "默认同伪装域名" },
-    { name: "port_min", label: "用户入口端口起", type: "number", value: h.port_range ? h.port_range[0] : 20000, required: true },
-    { name: "port_max", label: "用户入口端口止", type: "number", value: h.port_range ? h.port_range[1] : 29999, required: true, hint: "这一段端口需要在出口机防火墙上放行" },
+    { name: "public_host", label: "Public entry address", value: h.public_host, required: true, placeholder: "192.0.2.2 or hostname", hint: "Clients connect to this address." },
+    { name: "server_name", label: "Reality TLS server name (SNI)", value: h.server_name, required: true, placeholder: "www.example.com", hint: "A public site that supports TLS 1.3." },
+    { name: "handshake_server", label: "Handshake target (optional)", value: h.handshake_server || "", placeholder: "Defaults to the TLS server name." },
+    { name: "port_min", label: "First user entry port", type: "number", value: h.port_range ? h.port_range[0] : 20000, required: true },
+    { name: "port_max", label: "Last user entry port", type: "number", value: h.port_range ? h.port_range[1] : 29999, required: true, hint: "Allow this port range through the host firewall." },
   ];
   function hostBody(v) {
     const b = { public_host: v.public_host, server_name: v.server_name, port_min: Number(v.port_min), port_max: Number(v.port_max) };
@@ -452,56 +882,76 @@
 
   PAGES.hosts = async (args, token) => {
     if (args[0]) return hostDetail(args[0], token);
-    setTitle("出口主机");
+    setTitle("Egress hosts");
     const [hosts, topo] = await Promise.all([api("GET", "/admin/hosts"), api("GET", "/admin/topology")]);
     if (!current(token)) return;
     updateAlertCount(topo.alerts || []);
     const agents = Object.fromEntries(topo.agents.map((a) => [a.name, a]));
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + hosts.length + ' 台主机</span><span class="spacer"></span><button class="primary" id="add-host">添加主机</button></div>' +
-      '<div class="table-wrap"><table><thead><tr><th>名称</th><th>公网入口</th><th>端口范围</th><th>出口 IP</th><th>用户</th><th>agent</th><th>伪装域名</th></tr></thead><tbody>' +
-      (hosts.map((h) => "<tr><td><a href=\"#/hosts/" + enc(h.name) + '"><b>' + esc(h.name) + "</b></a></td><td class=\"mono\">" + esc(h.public_host) + '</td><td class="mono">' + h.port_range[0] + "–" + h.port_range[1] + "</td><td>" + h.ips + "</td><td>" + h.users + "</td><td>" + agentStatus(agents[h.name]) + '</td><td class="mono small">' + esc(h.server_name) + "</td></tr>").join("") ||
-        '<tr><td colspan="7" class="empty">还没有出口主机</td></tr>') + "</tbody></table></div>";
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + hosts.length + ' hosts</span><span class="spacer"></span><button class="primary" id="add-host">Add host</button></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Public entry</th><th>Port range</th><th>Egress IPs</th><th>Users</th><th>Agent</th><th>TLS server name</th></tr></thead><tbody>' +
+      (hosts.map((h) => "<tr><td><a href=\"#/hosts/" + enc(h.name) + '"><b>' + esc(h.name) + "</b></a></td><td class=\"mono\">" + esc(h.public_host) + '</td><td class="mono">' + h.port_range[0] + "–" + h.port_range[1] + "</td><td>" + h.ips + "</td><td>" + h.users + "</td><td>" + statusBadge(agentHealth(agents[h.name])) + '</td><td class="mono small">' + esc(h.server_name) + "</td></tr>").join("") ||
+        '<tr><td colspan="7" class="empty">No egress hosts yet.</td></tr>') + "</tbody></table></div>";
     $("#add-host").onclick = async () => {
-      const r = await form("添加出口主机", [{ name: "name", label: "主机名称", required: true, placeholder: "hk-1" }, ...hostFields()],
-        (v) => api("POST", "/admin/hosts", Object.assign({ name: v.name }, hostBody(v))), "添加");
+      const r = await form("Add egress host", [{ name: "name", label: "Host name", required: true, placeholder: "hk-1" }, ...hostFields()],
+        (v) => api("POST", "/admin/hosts", Object.assign({ name: v.name }, hostBody(v))), "Add");
       if (r) { showAgentToken(r.host, r.agent_token); route(); }
     };
   };
 
   async function hostDetail(name, token) {
-    setTitle("出口主机 · " + name);
+    setTitle(name);
     const [hosts, ips, topo, users] = await Promise.all([api("GET", "/admin/hosts"), api("GET", "/admin/ips?host=" + enc(name)), api("GET", "/admin/topology"), api("GET", "/admin/users")]);
     if (!current(token)) return;
     const h = hosts.find((x) => x.name === name);
-    if (!h) { $("#view").innerHTML = '<div class="empty">没有这台主机。<a href="#/hosts">返回列表</a></div>'; return; }
-    const agent = topo.agents.find((a) => a.name === name);
-    const probes = Object.fromEntries(topo.ips.map((i) => [i.ip, i.probes]));
+    if (!h) { $("#view").innerHTML = '<div class="empty">Host not found. <a href="#/hosts">Back to list</a></div>'; return; }
+    const node = topologyHosts(topo).find(({ host }) => host.name === name);
+    const agent = node?.agent;
+    const probes = new Map(topo.ips.map((ip) => [ip.ip, ip.probes]));
     const onHost = users.filter((u) => u.host === name);
-    $("#view").innerHTML =
-      '<div class="toolbar"><a href="#/hosts">← 全部主机</a><span class="spacer"></span><button id="edit">编辑</button><button id="rotate">轮换 agent 令牌</button><button class="danger" id="del">删除主机</button></div>' +
-      '<div class="grid2 section"><div class="card"><h2>主机信息</h2><dl class="kv">' +
-      "<dt>公网入口</dt><dd class=\"mono\">" + esc(h.public_host) + "</dd><dt>端口范围</dt><dd class=\"mono\">" + h.port_range[0] + "–" + h.port_range[1] + "</dd>" +
-      "<dt>伪装域名</dt><dd class=\"mono\">" + esc(h.server_name) + "</dd><dt>Reality 公钥</dt><dd class=\"mono small\">" + esc(h.reality_public_key) + "</dd>" +
-      "<dt>出口 IP</dt><dd>" + h.ips + "</dd><dt>用户</dt><dd>" + h.users + "</dd></dl></div>" +
-      '<div class="card"><h2>agent</h2><dl class="kv"><dt>状态</dt><dd>' + agentStatus(agent) + "</dd><dt>最近心跳</dt><dd>" + (agent ? ago(agent.age) : "—") + "</dd>" +
-      "<dt>sing-box</dt><dd>" + (agent ? (agent.singbox_running === null ? "未知" : agent.singbox_running ? "运行中" : "未运行") : "—") + "</dd>" +
-      "<dt>已装配置</dt><dd class=\"mono small\">" + esc(agent ? (agent.config_etag || "—") : "—") + "</dd>" +
-      "<dt>当前配置</dt><dd class=\"mono small\">" + esc(topo.server_config_etags[name] || "—") + "</dd></dl></div></div>" +
-      '<div class="section"><h2>出口 IP <span class="spacer"></span><button class="primary" id="add-ips">添加 IP</button></h2>' + ipTable(ips, probes, false) + "</div>" +
-      '<div class="section"><h2>这台主机上的用户</h2><div class="table-wrap"><table><thead><tr><th>用户</th><th>出口 IP</th><th>入口端口</th><th>设备</th></tr></thead><tbody>' +
-      (onHost.map((u) => '<tr><td><a href="#/users/' + enc(u.name) + '">' + esc(u.name) + '</a></td><td class="mono">' + esc(u.egress_ip) + '</td><td class="mono">' + u.port + "</td><td>" + u.devices.filter((d) => !d.revoked).length + " / " + u.max_devices + "</td></tr>").join("") ||
-        '<tr><td colspan="4" class="empty">还没有用户绑定到这台主机</td></tr>') + "</tbody></table></div></div>";
+    updateAlertCount(topo.alerts || []);
+    $("#view").innerHTML = `
+      <div class="toolbar"><a href="#/hosts">All hosts</a>
+        ${node ? statusBadge(node.health) : ""}<span class="spacer"></span>
+        <button class="primary" id="edit" type="button">Edit host</button>
+        <button id="rotate" type="button">Rotate agent token</button>
+        <button class="danger" id="del" type="button">Delete host</button>
+      </div>
+      <div class="grid2 section">
+        <section class="card"><h2>Public entry</h2><dl class="kv">
+          <dt>Address</dt><dd class="mono">${esc(h.public_host)}</dd>
+          <dt>Port range</dt><dd class="mono">${h.port_range[0]}–${h.port_range[1]}</dd>
+          <dt>TLS server name</dt><dd class="mono">${esc(h.server_name)}</dd>
+          <dt>Reality public key</dt><dd class="mono small">${esc(h.reality_public_key)}</dd>
+        </dl></section>
+        <section class="card"><h2>Agent status</h2><dl class="kv">
+          <dt>Status</dt><dd>${statusBadge(agentHealth(agent))}</dd>
+          <dt>Last heartbeat</dt><dd>${agent ? ago(agent.age) : "—"}</dd>
+          <dt>sing-box</dt><dd>${agent?.singbox_running == null ? "Unknown" : agent.singbox_running ? "Running" : "Stopped"}</dd>
+          <dt>Installed config</dt><dd class="mono small">${esc(agent?.config_etag || "—")}</dd>
+          <dt>Current config</dt><dd class="mono small">${esc(topo.server_config_etags[name] || "—")}</dd>
+        </dl>${agent?.apply_error && !agent.in_sync ? '<p class="line">' + esc(agent.apply_error) + "</p>" : ""}</section>
+      </div>
+      <section class="section"><h2>Entry probes</h2><div class="card">${entryProbes(node?.entry, topo.now)}</div></section>
+      <section class="section"><h2>Egress IPs (${ips.length})<span class="spacer"></span><button class="primary" id="add-ips" type="button">Add IPs</button></h2>
+        ${ipTable(ips, probes, topo.now, false)}</section>
+      <section class="section"><h2>Assigned users (${onHost.length})</h2><div class="table-wrap">
+        <table><thead><tr><th>User</th><th>Egress IP</th><th>Entry port</th><th>Devices</th></tr></thead><tbody>
+        ${onHost.map((u) => `<tr><td><a href="#/users/${enc(u.name)}">${esc(u.name)}</a></td>
+          <td class="mono">${esc(u.egress_ip)}</td><td class="mono">${u.port}</td>
+          <td>${u.devices.filter((device) => !device.revoked).length} / ${u.max_devices}</td></tr>`).join("") ||
+          '<tr><td colspan="4" class="empty">No users are assigned to this host.</td></tr>'}
+        </tbody></table></div></section>`;
     $("#edit").onclick = async () => {
-      if (await form("编辑主机 " + name, hostFields(h), (v) => api("PUT", "/admin/hosts/" + enc(name), hostBody(v)))) { toast("已保存，agent 会在下一次同步时生效"); route(); }
+      if (await form("Edit host " + name, hostFields(h), (v) => api("PUT", "/admin/hosts/" + enc(name), hostBody(v)))) { toast("Saved. The agent will apply the change on its next sync."); route(); }
     };
     $("#rotate").onclick = async () => {
-      if (!(await confirmBox("轮换 agent 令牌", "旧令牌立即失效，出口机上的 agent 需要换成新令牌后重启，否则会失联。", "轮换"))) return;
+      if (!(await confirmBox("Rotate agent token", "The previous token expires immediately. Update the agent with the new token and restart it to restore reporting.", "Rotate"))) return;
       const r = await act(() => api("POST", "/admin/hosts/" + enc(name) + "/rotate-token"));
       if (r) showAgentToken(name, r.agent_token);
     };
     $("#del").onclick = async () => {
-      if (!(await confirmBox("删除主机 " + name, "主机和它的出口 IP 会一起删除。还有用户绑定在这台主机上时无法删除。", "删除"))) return;
-      if (await act(() => api("DELETE", "/admin/hosts/" + enc(name)), "已删除")) location.hash = "#/hosts";
+      if (!(await confirmBox("Delete host " + name, "This removes the host and its egress IPs. Release all user assignments first.", "Delete"))) return;
+      if (await act(() => api("DELETE", "/admin/hosts/" + enc(name)), "Deleted.")) location.hash = "#/hosts";
     };
     $("#add-ips").onclick = () => addIps(name);
     bindIpActions();
@@ -509,112 +959,160 @@
 
   // Expand "a.b.c.d", "a.b.c.d-e", "a.b.c.d-a.b.c.e" and "a.b.c.d/n" (n >= 22) into addresses.
   function expandIps(text) {
-    const toInt = (s) => { const p = s.split(".").map(Number); if (p.length !== 4 || p.some((x) => !(x >= 0 && x <= 255) || isNaN(x))) throw new Error("不是 IPv4 地址：" + s); return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]; };
+    const toInt = (s) => { const p = s.split(".").map(Number); if (p.length !== 4 || p.some((x) => !(x >= 0 && x <= 255) || isNaN(x))) throw new Error("Invalid IPv4 address: " + s); return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]; };
     const toStr = (n) => [n >>> 24, (n >> 16) & 255, (n >> 8) & 255, n & 255].join(".");
     const out = [];
     for (const raw of text.split(/[\s,]+/).filter(Boolean)) {
       let lo, hi;
       if (raw.includes("/")) {
         const [ip, bits] = raw.split("/"); const b = Number(bits);
-        if (!(b >= 22 && b <= 32)) throw new Error("CIDR 前缀需在 /22 到 /32 之间：" + raw);
+        if (!(b >= 22 && b <= 32)) throw new Error("CIDR prefix must be between /22 and /32: " + raw);
         const size = 2 ** (32 - b); lo = Math.floor(toInt(ip) / size) * size; hi = lo + size - 1;
       } else if (raw.includes("-")) {
         const [a, b] = raw.split("-"); lo = toInt(a); hi = b.includes(".") ? toInt(b) : (lo - (lo & 255)) + Number(b);
-        if (!(hi >= lo)) throw new Error("范围不对：" + raw);
+        if (!(hi >= lo)) throw new Error("Invalid range: " + raw);
       } else { lo = hi = toInt(raw); }
-      for (let n = lo; n <= hi; n++) { out.push(toStr(n)); if (out.length > 1024) throw new Error("一次最多添加 1024 个"); }
+      for (let n = lo; n <= hi; n++) { out.push(toStr(n)); if (out.length > 1024) throw new Error("Add up to 1024 addresses at a time."); }
     }
     return out;
   }
   async function addIps(host) {
-    const r = await form("给 " + host + " 添加出口 IP", [{ name: "ips", label: "IP 列表", type: "textarea", required: true, placeholder: "192.0.2.3\n192.0.2.10-20\n192.0.2.64/28",
-      hint: "每行一个，支持单个地址、末段范围（.10-20）、完整范围和 /22–/32 网段。这些地址必须已经由机房路由到这台主机；agent 会自动把它们加到网卡上。" }],
-    (v) => api("POST", "/admin/hosts/" + enc(host) + "/ips", { ips: expandIps(v.ips) }), "添加");
-    if (r) { toast("新增 " + r.added.length + " 个 IP"); route(); }
+    const r = await form("Add egress IPs to " + host, [{ name: "ips", label: "IP addresses", type: "textarea", required: true, placeholder: "192.0.2.3\n192.0.2.10-20\n192.0.2.64/28",
+      hint: "Enter one address, last-octet range (.10-20), full range, or /22–/32 subnet per line. These addresses must already route to the host. The agent adds them to its interface." }],
+    (v) => api("POST", "/admin/hosts/" + enc(host) + "/ips", { ips: expandIps(v.ips) }), "Add");
+    if (r) { toast("Added " + r.added.length + " IP addresses"); route(); }
   }
 
-  function ipTable(ips, probes, withHost) {
-    return '<div class="table-wrap"><table><thead><tr><th>IP</th>' + (withHost ? "<th>主机</th>" : "") + "<th>状态</th><th>用户 : 端口</th><th>探测</th><th>备注</th><th></th></tr></thead><tbody>" +
-      (ips.map((e) => {
-        const ps = (probes && probes[e.ip]) || [];
-        const pr = ps.length ? ps.map((p) => '<span class="badge ' + (p.ok ? "ok" : "bad") + '" title="' + esc(p.target + " · " + p.detail) + '">' + (p.ok ? ms(p.latency_ms) : esc(p.detail || "失败")) + "</span>").join(" ") : '<span class="muted small">—</span>';
-        const holders = e.users.map((u) => '<a href="#/users/' + enc(u) + '">' + esc(u) + '</a><span class="mono">:' + e.ports[u] + "</span>").join(", ") || '<span class="muted">—</span>';
-        const acts = (e.status === "banned" || e.status === "cooldown" ? '<button class="link" data-ip-available="' + esc(e.ip) + '">' + (e.status === "banned" ? "解除封禁" : "结束冷却") + "</button>" : "") +
-          (e.status !== "banned" ? '<button class="link danger" data-ip-ban="' + esc(e.ip) + '">封禁</button>' : "") +
-          (!e.users.length ? '<button class="link danger" data-ip-del="' + esc(e.ip) + '">删除</button>' : "");
-        return '<tr><td class="mono">' + esc(e.ip) + "</td>" + (withHost ? '<td><a href="#/hosts/' + enc(e.host) + '">' + esc(e.host) + "</a></td>" : "") + "<td>" + ipBadge(e.status) +
-          (e.status === "cooldown" && e.cooldown_until ? '<div class="line">至 ' + fmtTime(e.cooldown_until) + "</div>" : "") + "</td><td>" + holders + "</td><td>" + pr + '</td><td class="small">' + esc(e.note) + '</td><td class="actions">' + acts + "</td></tr>";
-      }).join("") || '<tr><td colspan="7" class="empty">没有出口 IP</td></tr>') + "</tbody></table></div>";
+  function ipTable(ips, probes, time, withHost) {
+    const rows = ips.map((ip) => {
+      const results = probes.get(ip.ip) || [];
+      const status = ipProbeHealth(results, time);
+      const probeDetails = results.map((probe) => {
+        const outcome = probe.ok ? ms(probe.latency_ms) : probe.detail || "Failed";
+        return `<li class="line">${esc(probe.target)} · ${esc(outcome)} · ${ago(time - probe.at)}</li>`;
+      }).join("");
+      const health = probeDetails ? `<details class="probe-details"><summary>${statusBadge(status)}</summary><ul>${probeDetails}</ul></details>` :
+        statusBadge(status);
+      const holders = ip.users.map((user) => `<a href="#/users/${enc(user)}">${esc(user)}</a><span class="mono">:${esc(ip.ports[user])}</span>`).join(", ") || "—";
+      const actions = [
+        ip.status === "banned" || ip.status === "cooldown" ?
+          `<button class="link" data-ip-available="${esc(ip.ip)}">${ip.status === "banned" ? "Unban" : "End cooldown"}</button>` : "",
+        ip.status !== "banned" ? `<button class="link danger" data-ip-ban="${esc(ip.ip)}">Ban</button>` : "",
+        !ip.users.length ? `<button class="link danger" data-ip-del="${esc(ip.ip)}">Delete</button>` : "",
+      ].join("");
+      const cooldown = ip.status === "cooldown" && ip.cooldown_until ? `<div class="line">Until ${fmtTime(ip.cooldown_until)}</div>` : "";
+      return `<tr><td class="mono">${esc(ip.ip)}</td>
+        ${withHost ? `<td><a href="#/hosts/${enc(ip.host)}">${esc(ip.host)}</a></td>` : ""}
+        <td>${ipBadge(ip.status)}${cooldown}</td>
+        <td>${health}</td>
+        <td>${holders}</td><td class="small">${esc(ip.note)}</td><td class="actions">${actions}</td></tr>`;
+    });
+    return `<div class="table-wrap"><table><thead><tr><th>IP address</th>${withHost ? "<th>Host</th>" : ""}
+      <th>Allocation</th><th>Probe health</th><th>User / port</th><th>Note</th><th scope="col">Actions</th>
+      </tr></thead><tbody>${rows.join("") || `<tr><td colspan="${withHost ? 7 : 6}" class="empty">No egress IPs match this view.</td></tr>`}
+      </tbody></table></div>`;
   }
-  function bindIpActions() {
+  function bindIpActions(onChange = route) {
     $$("[data-ip-ban]").forEach((b) => b.onclick = async () => {
       const ip = b.dataset.ipBan;
-      const r = await form("封禁 " + ip, [{ name: "note", label: "原因（可选）", placeholder: "例如：目标站点返回 403" }],
-        (v) => api("POST", "/admin/ips/" + enc(ip) + "/ban", { note: v.note }), "封禁");
-      if (r) { toast(r.released_users.length ? "已封禁，已收回 " + r.released_users.join("、") + " 的出口" : "已封禁"); route(); }
+      const r = await form("Ban " + ip, [{ name: "note", label: "Reason (optional)", placeholder: "Example: target returned HTTP 403" }],
+        (v) => api("POST", "/admin/ips/" + enc(ip) + "/ban", { note: v.note }), "Ban");
+      if (r) { toast(r.released_users.length ? "Banned and released assignments for " + r.released_users.join(", ") + "." : "IP banned."); await onChange(); }
     });
     $$("[data-ip-available]").forEach((b) => b.onclick = async () => {
-      if (await act(() => api("POST", "/admin/ips/" + enc(b.dataset.ipAvailable) + "/available"), "已设为空闲")) route();
+      if (await act(() => api("POST", "/admin/ips/" + enc(b.dataset.ipAvailable) + "/available"), "Marked available.")) await onChange();
     });
     $$("[data-ip-del]").forEach((b) => b.onclick = async () => {
       const ip = b.dataset.ipDel;
-      if (!(await confirmBox("删除 " + ip, "从 IP 池中删除。agent 不会把它从出口机网卡上卸下。", "删除"))) return;
-      if (await act(() => api("DELETE", "/admin/ips/" + enc(ip)), "已删除")) route();
+      if (!(await confirmBox("Delete " + ip, "Remove this IP from the pool. It remains on the host network interface.", "Delete"))) return;
+      if (await act(() => api("DELETE", "/admin/ips/" + enc(ip)), "Deleted.")) await onChange();
     });
   }
 
   // ---- IPs ------------------------------------------------------------------------------------------------
   PAGES.ips = async (_, token) => {
-    setTitle("出口 IP");
-    const [ips, hosts, topo] = await Promise.all([api("GET", "/admin/ips"), api("GET", "/admin/hosts"), api("GET", "/admin/topology")]);
+    setTitle("Egress IPs");
+    const [initialIps, hosts, initialTopology] = await Promise.all([api("GET", "/admin/ips"), api("GET", "/admin/hosts"), api("GET", "/admin/topology")]);
     if (!current(token)) return;
-    const probes = Object.fromEntries(topo.ips.map((i) => [i.ip, i.probes]));
+    let ips = initialIps, topology = initialTopology;
+    let refreshToken = 0;
+    updateAlertCount(topology.alerts || []);
     const params = new URLSearchParams(location.hash.split("?")[1] || "");
-    $("#view").innerHTML = '<div class="toolbar"><select id="f-host"><option value="">全部主机</option>' + hosts.map((h) => "<option>" + esc(h.name) + "</option>").join("") + '</select>' +
-      '<select id="f-status"><option value="">全部状态</option>' + Object.entries(IP_STATUS).map(([k, [l]]) => '<option value="' + k + '">' + l + "</option>").join("") + "</select>" +
-      '<span class="muted small" id="ip-count"></span></div><div id="ip-table"></div>';
+    $("#view").innerHTML = `
+      <div id="pool-stats" class="summary pool-stats" aria-label="IP inventory summary"></div>
+      <div class="table-toolbar">
+        <input id="ip-search" type="search" placeholder="Find an IP or user" aria-label="Find an IP or user">
+        <select id="f-host" aria-label="Egress host"><option value="">All hosts</option>
+          ${hosts.map((host) => `<option>${esc(host.name)}</option>`).join("")}</select>
+        <select id="f-status" aria-label="Allocation state"><option value="">All states</option>
+          ${Object.entries(IP_STATUS).map(([key, [label]]) => `<option value="${key}">${label}</option>`).join("")}</select>
+        <span class="muted small" id="ip-count"></span>
+      </div><div id="ip-table"></div>`;
+    const hostFilter = $("#f-host"), stateFilter = $("#f-status"), search = $("#ip-search");
     const draw = () => {
-      const fh = $("#f-host").value, fs = $("#f-status").value;
-      const shown = ips.filter((e) => (!fh || e.host === fh) && (!fs || e.status === fs));
-      $("#ip-count").textContent = shown.length + " / " + ips.length;
-      $("#ip-table").innerHTML = ipTable(shown, probes, true);
-      bindIpActions();
+      const query = search.value.trim().toLowerCase();
+      const scoped = ips.filter((ip) => !hostFilter.value || ip.host === hostFilter.value);
+      const shown = scoped.filter((ip) => (!stateFilter.value || ip.status === stateFilter.value) &&
+        (!query || ip.ip.includes(query) || ip.users.some((user) => user.toLowerCase().includes(query))));
+      const counts = scoped.reduce((totals, ip) => {
+        totals[ip.status] = (totals[ip.status] || 0) + 1;
+        return totals;
+      }, {});
+      $("#pool-stats").innerHTML = [metric("Total", scoped.length), ...Object.entries(IP_STATUS).map(([key, [label]]) =>
+        metric(label, counts[key] || 0, "", key === "banned" && counts[key] ? "metric-bad" : ""))].join("");
+      $("#ip-count").textContent = `${shown.length} of ${scoped.length} IPs`;
+      const probes = new Map(topology.ips.map((ip) => [ip.ip, ip.probes]));
+      $("#ip-table").innerHTML = ipTable(shown, probes, topology.now, true);
+      bindIpActions(async () => {
+        const request = ++refreshToken;
+        await act(async () => {
+          const [latestIps, latestTopology] = await Promise.all([api("GET", "/admin/ips"), api("GET", "/admin/topology")]);
+          if (!current(token) || request !== refreshToken) return;
+          ips = latestIps;
+          topology = latestTopology;
+          updateAlertCount(topology.alerts || []);
+          draw();
+        });
+      });
     };
-    $("#f-host").value = params.get("host") || "";
-    $("#f-host").onchange = draw; $("#f-status").onchange = draw;
+    const host = params.get("host");
+    if (hosts.some((item) => item.name === host)) hostFilter.value = host;
+    hostFilter.addEventListener("change", draw);
+    stateFilter.addEventListener("change", draw);
+    search.addEventListener("input", draw);
     draw();
   };
 
   // ---- users ----------------------------------------------------------------------------------------------
   PAGES.users = async (args, token) => {
     if (args[0]) return userDetail(args[0], token);
-    setTitle("用户");
+    setTitle("Users");
     const users = await api("GET", "/admin/users");
     if (!current(token)) return;
-    $("#view").innerHTML = '<div class="toolbar"><input id="q" placeholder="搜索用户、主机或 IP" type="search"><span class="muted small" id="u-count"></span><span class="spacer"></span><button class="primary" id="add-user">添加用户</button></div><div id="u-table"></div>';
+    $("#view").innerHTML = '<div class="toolbar"><input id="q" placeholder="Search users, hosts, or IPs" type="search"><span class="muted small" id="u-count"></span><span class="spacer"></span><button class="primary" id="add-user">Add user</button></div><div id="u-table"></div>';
     const draw = () => {
       const q = $("#q").value.trim().toLowerCase();
       const shown = users.filter((u) => !q || [u.name, u.host, u.egress_ip].some((x) => (x || "").toLowerCase().includes(q)));
       $("#u-count").textContent = shown.length + " / " + users.length;
-      $("#u-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>用户</th><th>模式</th><th>出口主机</th><th>出口 IP</th><th>入口端口</th><th>设备</th><th>最近在线</th></tr></thead><tbody>' +
+      $("#u-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>User</th><th>Mode</th><th>Egress host</th><th>Egress IP</th><th>Entry port</th><th>Devices</th><th>Last seen</th></tr></thead><tbody>' +
         (shown.map((u) => {
           const live = u.devices.filter((d) => !d.revoked);
           const seen = Math.max(0, ...live.map((d) => d.last_seen || 0));
-          return '<tr><td><a href="#/users/' + enc(u.name) + '"><b>' + esc(u.name) + "</b></a></td><td>" + (u.mode === "shared" ? "共享" : "独享") + "</td><td>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">未分配</span>') +
+          return '<tr><td><a href="#/users/' + enc(u.name) + '"><b>' + esc(u.name) + "</b></a></td><td>" + (u.mode === "shared" ? "Shared" : "Exclusive") + "</td><td>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">Unassigned</span>') +
             '</td><td class="mono">' + esc(u.egress_ip || "—") + '</td><td class="mono">' + esc(u.port || "—") + "</td><td>" + live.length + " / " + u.max_devices + "</td><td>" + (seen ? ago(now() - seen) : "—") + "</td></tr>";
-        }).join("") || '<tr><td colspan="7" class="empty">没有用户</td></tr>') + "</tbody></table></div>";
+        }).join("") || '<tr><td colspan="7" class="empty">No users.</td></tr>') + "</tbody></table></div>";
     };
     $("#q").oninput = draw;
     draw();
     $("#add-user").onclick = async () => {
       const hosts = await act(() => api("GET", "/admin/hosts"));
       if (!hosts) return;
-      const r = await form("添加用户", [
-        { name: "name", label: "用户名", required: true, hint: "1–64 个字符，不能含空格和 /" },
-        { name: "password", label: "密码（可选）", type: "password", hint: "留空则自动生成，创建后只显示一次；至少 8 位" },
-        { name: "mode", label: "出口模式", type: "select", value: "exclusive", options: [["exclusive", "独享出口 IP"], ["shared", "可与其他共享用户共用出口 IP"]] },
-        { name: "max_devices", label: "设备上限", type: "number", value: 5, required: true },
-        { name: "host", label: "立即分配出口", type: "select", value: "", options: [["", "暂不分配"]].concat(hosts.map((h) => [h.name, "自动分配 · " + h.name])) },
+      const r = await form("Add user", [
+        { name: "name", label: "Username", required: true, hint: "1–64 characters. Spaces and slashes are prohibited." },
+        { name: "password", label: "Password (optional)", type: "password", hint: "Leave blank to generate a password shown once. Use at least 8 characters." },
+        { name: "mode", label: "Egress mode", type: "select", value: "exclusive", options: [["exclusive", "Dedicated egress IP"], ["shared", "Share an egress IP with other shared-mode users"]] },
+        { name: "max_devices", label: "Device limit", type: "number", value: 5, required: true },
+        { name: "host", label: "Assign an egress IP now", type: "select", value: "", options: [["", "Assign later"]].concat(hosts.map((h) => [h.name, "Auto-assign · " + h.name])) },
       ], async (v) => {
         const body = { name: v.name, mode: v.mode, max_devices: Number(v.max_devices) };
         if (v.password) body.password = v.password;
@@ -622,109 +1120,109 @@
         let assigned = null;
         if (v.host) assigned = await api("POST", "/admin/users/" + enc(v.name) + "/assign", { host: v.host });
         return { made, assigned };
-      }, "添加");
+      }, "Add");
       if (!r) return;
-      const entry = r.assigned && r.assigned.entry ? "出口 " + r.assigned.egress_ip + "，入口 " + r.assigned.entry.host + ":" + r.assigned.entry.port : "尚未分配出口";
-      if (r.made.password) reveal("用户 " + r.made.name + " 已创建", "初始密码（" + entry + "）", r.made.password);
-      else toast("用户已创建，" + entry);
+      const entry = r.assigned && r.assigned.entry ? "Egress " + r.assigned.egress_ip + ", entry " + r.assigned.entry.host + ":" + r.assigned.entry.port : "No egress IP assigned";
+      if (r.made.password) reveal("Created user " + r.made.name, "Initial password (" + entry + ")", r.made.password);
+      else toast("User created. " + entry);
       location.hash = "#/users/" + enc(r.made.name);
     };
   };
 
   async function userDetail(name, token) {
-    setTitle("用户 · " + name);
+    setTitle("User · " + name);
     const [users, hosts] = await Promise.all([api("GET", "/admin/users"), api("GET", "/admin/hosts")]);
     if (!current(token)) return;
     const u = users.find((x) => x.name === name);
-    if (!u) { $("#view").innerHTML = '<div class="empty">没有这个用户。<a href="#/users">返回列表</a></div>'; return; }
+    if (!u) { $("#view").innerHTML = '<div class="empty">User not found. <a href="#/users">Back to list</a></div>'; return; }
     const live = u.devices.filter((d) => !d.revoked);
     const entry = u.host ? hosts.find((h) => h.name === u.host) : null;
     $("#view").innerHTML =
-      '<div class="toolbar"><a href="#/users">← 全部用户</a><span class="spacer"></span><button id="pw">重置密码</button><button id="limit">设备上限</button><button class="danger" id="del">删除用户</button></div>' +
-      '<div class="grid2 section"><div class="card"><h2>出口绑定</h2><dl class="kv">' +
-      "<dt>出口主机</dt><dd>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">未分配</span>') + "</dd>" +
-      '<dt>出口 IP</dt><dd class="mono">' + esc(u.egress_ip || "—") + "</dd>" +
-      '<dt>客户端入口</dt><dd class="mono">' + (entry ? esc(entry.public_host) + ":" + u.port : "—") + "</dd>" +
-      "<dt>模式</dt><dd>" + (u.mode === "shared" ? "共享" : "独享") + "</dd></dl>" +
-      '<div class="toolbar" style="margin:14px 0 0">' + (u.egress_ip ? '<button id="reassign">更换出口</button><button class="danger" id="release">收回出口</button>' : '<button class="primary" id="assign">分配出口</button>') + "</div></div>" +
-      '<div class="card"><h2>账号</h2><dl class="kv"><dt>用户名</dt><dd class="mono">' + esc(u.name) + "</dd><dt>设备</dt><dd>" + live.length + " / " + u.max_devices + " 台在用</dd></dl>" +
-      '<p class="small muted" style="margin:12px 0 0">用户在客户端用用户名和密码登录，每台电脑首次登录时自动成为一台设备。</p></div></div>' +
-      '<div class="section"><h2>设备 <span class="spacer"></span><button id="add-dev">添加无界面设备</button></h2><div class="table-wrap"><table><thead><tr><th>设备</th><th>平台</th><th>最近在线</th><th>状态</th><th></th></tr></thead><tbody>' +
-      (u.devices.map((d) => '<tr><td class="mono">' + esc(d.name) + "</td><td>" + esc(d.platform || "—") + "</td><td>" + (d.last_seen ? ago(now() - d.last_seen) : "从未") + "</td><td>" + (d.revoked ? '<span class="badge">已下线</span>' : '<span class="badge ok">在用</span>') + '</td><td class="actions">' +
-        (d.revoked ? "" : '<button class="link danger" data-revoke="' + esc(d.name) + '">强制下线</button>') + "</td></tr>").join("") ||
-        '<tr><td colspan="5" class="empty">还没有设备登录过</td></tr>') + "</tbody></table></div></div>";
+      '<div class="toolbar"><a href="#/users">← All users</a><span class="spacer"></span><button id="pw">Reset password</button><button id="limit">Device limit</button><button class="danger" id="del">Delete user</button></div>' +
+      '<div class="grid2 section"><div class="card"><h2>Egress assignment</h2><dl class="kv">' +
+      "<dt>Egress host</dt><dd>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">Unassigned</span>') + "</dd>" +
+      '<dt>Egress IP</dt><dd class="mono">' + esc(u.egress_ip || "—") + "</dd>" +
+      '<dt>Client entry</dt><dd class="mono">' + (entry ? esc(entry.public_host) + ":" + u.port : "—") + "</dd>" +
+      "<dt>Mode</dt><dd>" + (u.mode === "shared" ? "Shared" : "Exclusive") + "</dd></dl>" +
+      '<div class="toolbar" style="margin:14px 0 0">' + (u.egress_ip ? '<button id="reassign">Change egress</button><button class="danger" id="release">Release egress</button>' : '<button class="primary" id="assign">Assign egress</button>') + "</div></div>" +
+      '<div class="card"><h2>Account</h2><dl class="kv"><dt>Username</dt><dd class="mono">' + esc(u.name) + "</dd><dt>Devices</dt><dd>" + live.length + " / " + u.max_devices + " active</dd></dl>" +
+      '<p class="small muted" style="margin:12px 0 0">The first sign-in on each computer registers a device for the account.</p></div></div>' +
+      '<div class="section"><h2>Devices <span class="spacer"></span><button id="add-dev">Add headless device</button></h2><div class="table-wrap"><table><thead><tr><th>Devices</th><th>Platform</th><th>Last seen</th><th>Status</th><th></th></tr></thead><tbody>' +
+      (u.devices.map((d) => '<tr><td class="mono">' + esc(d.name) + "</td><td>" + esc(d.platform || "—") + "</td><td>" + (d.last_seen ? ago(now() - d.last_seen) : "Never") + "</td><td>" + (d.revoked ? '<span class="badge">Revoked</span>' : '<span class="badge ok">Active</span>') + '</td><td class="actions">' +
+        (d.revoked ? "" : '<button class="link danger" data-revoke="' + esc(d.name) + '">Revoke</button>') + "</td></tr>").join("") ||
+        '<tr><td colspan="5" class="empty">No devices have signed in.</td></tr>') + "</tbody></table></div></div>";
 
     const assignForm = async (title) => {
       const ips = await act(() => api("GET", "/admin/ips"));
       if (!ips) return;
       const usable = ips.filter((e) => e.status === "available" || (e.status === "assigned" && u.mode === "shared" && e.users.every((x) => (users.find((y) => y.name === x) || {}).mode === "shared")));
       return form(title, [
-        { name: "host", label: "出口主机", type: "select", value: u.host || (hosts[0] || {}).name, options: hosts.map((h) => [h.name, h.name + " · " + h.public_host]) },
-        { name: "ip", label: "出口 IP", type: "select", value: "", options: [["", "自动：所选主机上数值最小的空闲 IP"]].concat(usable.filter((e) => e.ip !== u.egress_ip).map((e) => [e.ip, e.ip + " · " + e.host + (e.users.filter((x) => x !== name).length ? "（与 " + e.users.filter((x) => x !== name).join("、") + " 共享）" : "")])) },
-        { name: "port", label: "入口端口（可选）", type: "number", placeholder: "留空自动分配", hint: "必须在主机的端口范围内，且未被占用" },
+        { name: "host", label: "Egress host", type: "select", value: u.host || (hosts[0] || {}).name, options: hosts.map((h) => [h.name, h.name + " · " + h.public_host]) },
+        { name: "ip", label: "Egress IP", type: "select", value: "", options: [["", "Automatic: lowest available IP on the selected host"]].concat(usable.filter((e) => e.ip !== u.egress_ip).map((e) => [e.ip, e.ip + " · " + e.host + (e.users.filter((x) => x !== name).length ? "(shared with " + e.users.filter((x) => x !== name).join(", ") + ")" : "")])) },
+        { name: "port", label: "Entry port (optional)", type: "number", placeholder: "Leave blank for automatic assignment", hint: "Choose an unused port within the host range." },
       ], async (v) => {
         const body = { host: v.host };
         if (v.ip) { body.ip = v.ip; delete body.host; }
         if (v.port) body.port = Number(v.port);
         // A bound user moves in one step, so the client never sees "unassigned" and stays connected.
         return api("POST", "/admin/users/" + enc(name) + (u.egress_ip ? "/reassign" : "/assign"), body);
-      }, "分配");
+      }, "Assign");
     };
-    const afterAssign = (r) => { if (r) { toast("已分配：" + r.egress_ip + "，入口 " + r.entry.host + ":" + r.entry.port + "；客户端会自动切换"); route(); } };
-    if ($("#assign")) $("#assign").onclick = async () => afterAssign(await assignForm("给 " + name + " 分配出口"));
-    if ($("#reassign")) $("#reassign").onclick = async () => afterAssign(await assignForm("更换 " + name + " 的出口（原 IP 无人使用时进入冷却）"));
+    const afterAssign = (r) => { if (r) { toast("Assigned: " + r.egress_ip + ", entry " + r.entry.host + ":" + r.entry.port + ". The client will switch automatically."); route(); } };
+    if ($("#assign")) $("#assign").onclick = async () => afterAssign(await assignForm("Assign egress for " + name));
+    if ($("#reassign")) $("#reassign").onclick = async () => afterAssign(await assignForm("Change egress for " + name));
     if ($("#release")) $("#release").onclick = async () => {
-      if (!(await confirmBox("收回 " + name + " 的出口", "用户的客户端会断开；这个 IP 进入冷却期，期间不会分给别人。", "收回"))) return;
-      if (await act(() => api("POST", "/admin/users/" + enc(name) + "/release"), "已收回")) route();
+      if (!(await confirmBox("Release egress for " + name, "The client will disconnect. The IP enters cooldown and is unavailable for new assignments.", "Release"))) return;
+      if (await act(() => api("POST", "/admin/users/" + enc(name) + "/release"), "Released.")) route();
     };
     $("#pw").onclick = async () => {
-      const r = await form("重置 " + name + " 的密码", [
-        { name: "password", label: "新密码（可选）", type: "password", hint: "留空则自动生成；至少 8 位" },
-        { name: "revoke", label: "同时让所有设备下线", type: "checkbox", value: true, hint: "设备需要用新密码重新登录" },
-      ], (v) => api("POST", "/admin/users/" + enc(name) + "/password", Object.assign({ revoke_devices: v.revoke }, v.password ? { password: v.password } : {})), "重置");
+      const r = await form("Reset password for " + name, [
+        { name: "password", label: "New password (optional)", type: "password", hint: "Leave blank to generate a password. Use at least 8 characters." },
+        { name: "revoke", label: "Revoke all devices", type: "checkbox", value: true, hint: "Devices must sign in again with the new password." },
+      ], (v) => api("POST", "/admin/users/" + enc(name) + "/password", Object.assign({ revoke_devices: v.revoke }, v.password ? { password: v.password } : {})), "Reset");
       if (!r) return;
-      if (r.password) reveal("新密码", name + " 的新密码", r.password); else toast("密码已更新");
+      if (r.password) reveal("New password", "New password for " + name, r.password); else toast("Password updated.");
       route();
     };
     $("#limit").onclick = async () => {
-      if (await form("设备上限", [{ name: "max", label: "最多同时在用的设备数", type: "number", value: u.max_devices, required: true }],
-        (v) => api("PUT", "/admin/users/" + enc(name), { max_devices: Number(v.max) }))) { toast("已保存"); route(); }
+      if (await form("Device limit", [{ name: "max", label: "Maximum active devices", type: "number", value: u.max_devices, required: true }],
+        (v) => api("PUT", "/admin/users/" + enc(name), { max_devices: Number(v.max) }))) { toast("Saved."); route(); }
     };
     $("#del").onclick = async () => {
-      if (!(await confirmBox("删除用户 " + name, "用户和全部设备会被删除，客户端立即失效；出口 IP 进入冷却期。此操作不可撤销。", "删除"))) return;
-      if (await act(() => api("DELETE", "/admin/users/" + enc(name)), "已删除")) location.hash = "#/users";
+      if (!(await confirmBox("Delete user " + name, "This permanently removes the user and all devices, revokes client access immediately, and puts the egress IP into cooldown.", "Delete"))) return;
+      if (await act(() => api("DELETE", "/admin/users/" + enc(name)), "Deleted.")) location.hash = "#/users";
     };
     $("#add-dev").onclick = async () => {
-      const r = await form("添加无界面设备", [{ name: "name", label: "设备名", required: true, hint: "给服务器或脚本用：拿令牌直接订阅配置，不需要密码登录" }],
-        (v) => api("POST", "/admin/users/" + enc(name) + "/devices", { name: v.name }), "添加");
-      if (r) { reveal("设备 " + r.device + " 的令牌", "订阅令牌：GET /v1/config 时放在 Authorization: Bearer 里", r.token); route(); }
+      const r = await form("Add headless device", [{ name: "name", label: "Device name", required: true, hint: "For scripts and servers. The token authenticates config requests." }],
+        (v) => api("POST", "/admin/users/" + enc(name) + "/devices", { name: v.name }), "Add");
+      if (r) { reveal("Token for " + r.device, "Send this token as Authorization: Bearer when calling GET /v1/config.", r.token); route(); }
     };
     $$("[data-revoke]").forEach((b) => b.onclick = async () => {
-      if (!(await confirmBox("让 " + b.dataset.revoke + " 下线", "这台设备的凭证立即失效，客户端会断开并退出登录。", "下线"))) return;
-      if (await act(() => api("POST", "/admin/users/" + enc(name) + "/devices/" + enc(b.dataset.revoke) + "/revoke"), "已下线")) route();
+      if (!(await confirmBox("Revoke " + b.dataset.revoke, "The device credential expires immediately and the client disconnects and signs out.", "Revoke"))) return;
+      if (await act(() => api("POST", "/admin/users/" + enc(name) + "/devices/" + enc(b.dataset.revoke) + "/revoke"), "Revoked")) route();
     });
   }
 
   // ---- alerts ---------------------------------------------------------------------------------------------
-  const RULES = { egress_probe_failing: "出口探测失败", entry_unreachable: "入口不可达", agent_stale: "出口机失联", singbox_down: "sing-box 未运行", agent_out_of_sync: "配置未同步" };
+  const RULES = { egress_probe_failing: "Egress probe failed", entry_unreachable: "Entry unreachable", agent_stale: "Egress host offline", singbox_down: "sing-box stopped", agent_out_of_sync: "Config out of sync" };
   PAGES.alerts = async (_, token) => {
-    setTitle("告警");
+    setTitle("Alerts");
     const all = await api("GET", "/admin/alerts?all=1");
     if (!current(token)) return;
     updateAlertCount(all);
     const firing = all.filter((a) => a.state === "firing");
-    const row = (a) => "<tr><td>" + (a.severity === "critical" ? '<span class="badge bad">严重</span>' : '<span class="badge warn">警告</span>') + "</td><td>" + esc(RULES[a.rule] || a.rule) + '</td><td class="mono">' + esc(a.subject) + "</td><td>" + esc(a.summary) +
-      (a.notify_error ? '<div class="line" style="color:var(--bad)">通知发送失败：' + esc(a.notify_error) + "</div>" : "") + "</td><td>" + fmtTime(a.fired_at || a.started_at) + "</td><td>" + (a.state === "resolved" ? fmtTime(a.resolved_at) : a.state === "pending" ? '<span class="badge">待定</span>' : '<span class="badge bad">进行中</span>') + "</td></tr>";
-    const head = "<thead><tr><th>级别</th><th>规则</th><th>对象</th><th>内容</th><th>开始</th><th>解除</th></tr></thead>";
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + firing.length + ' 条进行中</span><span class="spacer"></span><a href="#/settings">告警设置</a><button id="test">发送测试通知</button></div>' +
-      '<div class="section"><h2>进行中</h2><div class="table-wrap"><table>' + head + "<tbody>" + (firing.map(row).join("") || '<tr><td colspan="6" class="empty">没有进行中的告警</td></tr>') + "</tbody></table></div></div>" +
-      '<div class="section"><h2>历史（保留 30 天）</h2><div class="table-wrap"><table>' + head + "<tbody>" + (all.filter((a) => a.state !== "firing").map(row).join("") || '<tr><td colspan="6" class="empty">没有记录</td></tr>') + "</tbody></table></div></div>";
+    const row = (a) => "<tr><td>" + (a.severity === "critical" ? '<span class="badge bad">Critical</span>' : '<span class="badge warn">Warning</span>') + "</td><td>" + esc(RULES[a.rule] || a.rule) + '</td><td class="mono">' + esc(a.subject) + "</td><td>" + esc(a.summary) +
+      (a.notify_error ? '<div class="line" style="color:var(--bad)">Notification failed: ' + esc(a.notify_error) + "</div>" : "") + "</td><td>" + fmtTime(a.fired_at || a.started_at) + "</td><td>" + (a.state === "resolved" ? fmtTime(a.resolved_at) : a.state === "pending" ? '<span class="badge">Pending</span>' : '<span class="badge bad">Active</span>') + "</td></tr>";
+    const head = "<thead><tr><th>Severity</th><th>Rule</th><th>Subject</th><th>Details</th><th>Started</th><th>Resolved</th></tr></thead>";
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + firing.length + ' active alerts</span><span class="spacer"></span><a href="#/settings">Alert settings</a><button id="test">Send test notification</button></div>' +
+      '<div class="section"><h2>Active</h2><div class="table-wrap"><table>' + head + "<tbody>" + (firing.map(row).join("") || '<tr><td colspan="6" class="empty">No active alerts.</td></tr>') + "</tbody></table></div></div>" +
+      '<div class="section"><h2>History (30 days)</h2><div class="table-wrap"><table>' + head + "<tbody>" + (all.filter((a) => a.state !== "firing").map(row).join("") || '<tr><td colspan="6" class="empty">No records.</td></tr>') + "</tbody></table></div></div>";
     $("#test").onclick = async () => {
       const r = await act(() => api("POST", "/admin/alerts/test"));
       if (!r) return;
-      if (!r.webhooks.length) return toast("还没有配置 webhook", true);
+      if (!r.webhooks.length) return toast("No webhooks configured.", true);
       const bad = r.webhooks.filter((w) => !w.ok);
-      toast(bad.length ? bad.length + " 个 webhook 失败：" + bad.map((w) => w.error).join("；") : "已发送到 " + r.webhooks.length + " 个 webhook", !!bad.length);
+      toast(bad.length ? bad.length + " webhooks failed: " + bad.map((w) => w.error).join("；") : "Sent to " + r.webhooks.length + " webhooks", !!bad.length);
     };
     refreshEvery(15, () => { if (current(token)) api("GET", "/admin/alerts?all=1").then(updateAlertCount).catch(() => {}); }, token);
   };
@@ -732,7 +1230,7 @@
   // ---- settings -------------------------------------------------------------------------------------------
   const lines = (t) => t.split("\n").map((s) => s.trim()).filter(Boolean);
   PAGES.settings = async (_, token) => {
-    setTitle("设置");
+    setTitle("Settings");
     const s = await api("GET", "/admin/settings");
     if (!current(token)) return;
     const cp = s.client_policy || {}, mon = s.monitor || {}, al = s.alerts || {};
@@ -740,43 +1238,43 @@
       (opts.area ? '<textarea id="' + id + '" placeholder="' + esc(opts.ph || "") + '">' + esc(value) + "</textarea>" : '<input id="' + id + '" type="' + (opts.type || "text") + '" value="' + esc(value) + '" placeholder="' + esc(opts.ph || "") + '">') +
       (opts.hint ? '<div class="hint">' + opts.hint + "</div>" : "") + "</div>";
     $("#view").innerHTML = '<div class="grid2">' +
-      '<form class="card" id="s-policy"><h2>分流规则（下发给所有客户端）</h2>' +
-      field("domains", "走代理的域名", (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: "每行一个，包含所有子域名。不要用 .test 后缀（macOS 会在本地拒绝解析）。" }) +
-      field("direct_dns", "其他域名用的 DNS", cp.direct_dns || "dhcp", { hint: "dhcp = 用户网络下发的 DNS；也可以写一个 IP，如 223.5.5.5" }) +
-      '<div class="form-row check"><label><input type="checkbox" id="block_quic"' + (cp.block_quic === false ? "" : " checked") + "> 拦截规则域名的 QUIC（UDP 443），让应用改用 TCP</label></div>" +
-      '<button class="primary" type="submit">保存分流规则</button><p class="small muted">客户端每 30 秒检查一次，会自动应用。</p></form>' +
-      '<form class="card" id="s-ip"><h2>出口 IP</h2>' + field("cooldown", "收回后的冷却天数", Math.round((s.cooldown_seconds || 0) / 86400 * 10) / 10, { type: "number", hint: "IP 从用户那里收回后，冷却期内不会分给别人，避免下一个人继承上一个人的信誉" }) +
-      '<button class="primary" type="submit">保存</button></form>' +
-      '<form class="card" id="s-monitor"><h2>健康探测</h2>' +
-      field("targets", "出口探测目标", (mon.egress_targets || []).join("\n"), { area: true, ph: "https://www.example.com/", hint: "每行一个 URL。每个出口 IP 都会按 agent 的探测间隔访问它们；403、429 视为被目标拒绝" }) +
-      field("entries", "额外入口", (mon.entries || []).map((e) => e.name + " " + e.host + ":" + e.port).join("\n"), { area: true, ph: "hk-relay 192.0.2.1:443", hint: "每行「名称 地址:端口」。出口主机本身已自动包含" }) +
-      '<button class="primary" type="submit">保存探测设置</button></form>' +
-      '<form class="card" id="s-alerts"><h2>告警</h2>' +
-      field("hooks", "Webhook", (al.webhooks || []).map((w) => (w.format || "generic") + " " + w.url).join("\n"), { area: true, ph: "feishu https://open.feishu.cn/open-apis/bot/v2/hook/...", hint: "每行「格式 URL」，格式：generic、feishu、dingtalk、wecom、slack。消息含 IP 和用户名" }) +
-      field("fails", "连续失败几次告警", al.consecutive_failures ?? 3, { type: "number" }) +
-      field("stale", "出口机失联判定（秒）", al.agent_stale_seconds ?? 120, { type: "number" }) +
-      field("sync", "配置未同步判定（秒）", al.out_of_sync_seconds ?? 300, { type: "number" }) +
-      field("repeat", "持续告警重复提醒（秒，0 为不提醒）", al.repeat_seconds ?? 0, { type: "number" }) +
-      '<button class="primary" type="submit">保存告警设置</button></form></div>';
+      '<form class="card" id="s-policy"><h2>Client routing policy</h2>' +
+      field("domains", "Proxied domains", (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: "One domain per line, including all of its subdomains. macOS rejects local resolution for .test domains." }) +
+      field("direct_dns", "DNS for other domains", cp.direct_dns || "dhcp", { hint: "Use dhcp for the DNS assigned by the local network, or enter an IP such as 223.5.5.5." }) +
+      '<div class="form-row check"><label><input type="checkbox" id="block_quic"' + (cp.block_quic === false ? "" : " checked") + "> Block QUIC (UDP 443) for proxied domains so apps use TCP.</label></div>" +
+      '<button class="primary" type="submit">Save routing policy</button><p class="small muted">Clients check for and apply updates every 30 seconds.</p></form>' +
+      '<form class="card" id="s-ip"><h2>Egress IPs</h2>' + field("cooldown", "Cooldown after release (days)", Math.round((s.cooldown_seconds || 0) / 86400 * 10) / 10, { type: "number", hint: "Released IPs stay out of the available pool during cooldown." }) +
+      '<button class="primary" type="submit">Save</button></form>' +
+      '<form class="card" id="s-monitor"><h2>Health probes</h2>' +
+      field("targets", "Egress probe targets", (mon.egress_targets || []).join("\n"), { area: true, ph: "https://www.example.com/", hint: "One URL per line. The agent probes each URL from every egress IP on its configured interval. HTTP 403 and 429 count as failures." }) +
+      field("entries", "Additional entries", (mon.entries || []).map((e) => e.name + " " + e.host + ":" + e.port).join("\n"), { area: true, ph: "hk-relay 192.0.2.1:443", hint: "Enter one name and address:port per line. Egress hosts are included automatically." }) +
+      '<button class="primary" type="submit">Save probe settings</button></form>' +
+      '<form class="card" id="s-alerts"><h2>Alerts</h2>' +
+      field("hooks", "Webhook", (al.webhooks || []).map((w) => (w.format || "generic") + " " + w.url).join("\n"), { area: true, ph: "feishu https://open.feishu.cn/open-apis/bot/v2/hook/...", hint: "Enter one format and URL per line. Formats: generic, feishu, dingtalk, wecom, slack. Alerts include IPs and usernames." }) +
+      field("fails", "Alert after consecutive failures", al.consecutive_failures ?? 3, { type: "number" }) +
+      field("stale", "Host offline threshold (seconds)", al.agent_stale_seconds ?? 120, { type: "number" }) +
+      field("sync", "Config sync threshold (seconds)", al.out_of_sync_seconds ?? 300, { type: "number" }) +
+      field("repeat", "Alert repeat interval (seconds, 0 disables repeats)", al.repeat_seconds ?? 0, { type: "number" }) +
+      '<button class="primary" type="submit">Save alert settings</button></form></div>';
     const save = (id, build, text) => { $(id).onsubmit = async (e) => { e.preventDefault(); let body; try { body = build(); } catch (err) { return toast(err.message, true); } if (await act(() => api("PUT", "/admin/settings", body), text)) route(); }; };
-    save("#s-policy", () => ({ client_policy: Object.assign({}, cp, { domain_suffix: lines($("#domains").value).map((d) => d.replace(/^\./, "").toLowerCase()), direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked }) }), "分流规则已保存");
-    save("#s-ip", () => ({ cooldown_seconds: Math.round(Number($("#cooldown").value) * 86400) }), "已保存");
+    save("#s-policy", () => ({ client_policy: Object.assign({}, cp, { domain_suffix: lines($("#domains").value).map((d) => d.replace(/^\./, "").toLowerCase()), direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked }) }), "Routing policy saved.");
+    save("#s-ip", () => ({ cooldown_seconds: Math.round(Number($("#cooldown").value) * 86400) }), "Saved.");
     save("#s-monitor", () => ({ monitor: { egress_targets: lines($("#targets").value), entries: lines($("#entries").value).map((l) => {
-      const m = l.match(/^(\S+)\s+(\S+):(\d+)$/); if (!m) throw new Error("额外入口格式不对：" + l); return { name: m[1], host: m[2], port: Number(m[3]) }; }) } }), "探测设置已保存");
+      const m = l.match(/^(\S+)\s+(\S+):(\d+)$/); if (!m) throw new Error("Invalid additional entry: " + l); return { name: m[1], host: m[2], port: Number(m[3]) }; }) } }), "Probe settings saved.");
     save("#s-alerts", () => ({ alerts: Object.assign({}, al, {
       webhooks: lines($("#hooks").value).map((l) => { const [f, ...rest] = l.split(/\s+/); const url = rest.join(" "); if (!url) return { url: f, format: "generic" }; return { format: f, url }; }),
-      consecutive_failures: Number($("#fails").value), agent_stale_seconds: Number($("#stale").value), out_of_sync_seconds: Number($("#sync").value), repeat_seconds: Number($("#repeat").value) }) }), "告警设置已保存");
+      consecutive_failures: Number($("#fails").value), agent_stale_seconds: Number($("#stale").value), out_of_sync_seconds: Number($("#sync").value), repeat_seconds: Number($("#repeat").value) }) }), "Alert settings saved.");
   };
 
   // ---- audit ----------------------------------------------------------------------------------------------
   PAGES.audit = async (_, token) => {
-    setTitle("审计日志");
+    setTitle("Audit log");
     let rows = [], done = false;
-    $("#view").innerHTML = '<div class="toolbar"><input id="actor" placeholder="按操作人筛选" type="search"><button id="apply">筛选</button><span class="spacer"></span><span class="muted small">保留 180 天；密码、令牌等不会记录</span></div><div id="a-table"></div><div class="toolbar" style="margin-top:12px"><button id="more">加载更多</button></div>';
+    $("#view").innerHTML = '<div class="toolbar"><input id="actor" placeholder="Filter by actor" type="search"><button id="apply">Filter</button><span class="spacer"></span><span class="muted small">Retained for 180 days. Sensitive values are omitted.</span></div><div id="a-table"></div><div class="toolbar" style="margin-top:12px"><button id="more">Load more</button></div>';
     const draw = () => {
-      $("#a-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>内容</th><th>来源</th></tr></thead><tbody>' +
+      $("#a-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Subject</th><th>Details</th><th>Source</th></tr></thead><tbody>' +
         (rows.map((r) => "<tr><td>" + fmtTime(r.at) + "</td><td>" + esc(r.actor) + '</td><td class="mono small">' + esc(r.action) + '</td><td class="mono small">' + esc(r.target) + '</td><td class="mono small" style="max-width:360px;overflow-wrap:anywhere">' + esc(r.detail) + '</td><td class="mono small">' + esc(r.address) + "</td></tr>").join("") ||
-          '<tr><td colspan="6" class="empty">没有记录</td></tr>') + "</tbody></table></div>";
+          '<tr><td colspan="6" class="empty">No records.</td></tr>') + "</tbody></table></div>";
       $("#more").hidden = done;
     };
     const load = async (reset) => {
@@ -796,34 +1294,34 @@
 
   // ---- admins ---------------------------------------------------------------------------------------------
   PAGES.admins = async (_, token) => {
-    setTitle("管理员");
+    setTitle("Administrators");
     const admins = await api("GET", "/admin/admins");
     if (!current(token)) return;
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">当前登录：' + esc(me) + '</span><span class="spacer"></span><button id="mypw">修改我的密码</button><button class="primary" id="add">添加管理员</button></div>' +
-      '<div class="table-wrap"><table><thead><tr><th>管理员</th><th>创建时间</th><th>最近登录</th><th>在线会话</th><th></th></tr></thead><tbody>' +
-      admins.map((a) => "<tr><td><b>" + esc(a.name) + "</b>" + (a.name === me ? ' <span class="badge info">我</span>' : "") + "</td><td>" + fmtTime(a.created_at) + "</td><td>" + fmtTime(a.last_login) + "</td><td>" + a.sessions + '</td><td class="actions">' +
-        (a.name !== me ? '<button class="link" data-reset="' + esc(a.name) + '">重置密码</button><button class="link danger" data-del="' + esc(a.name) + '">删除</button>' : "") + "</td></tr>").join("") + "</tbody></table></div>" +
-      '<p class="small muted">命令行和脚本仍可用 CP_ADMIN_TOKEN 调用接口，在审计日志里显示为 api-token。</p>';
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">Signed in as ' + esc(me) + '</span><span class="spacer"></span><button id="mypw">Change my password</button><button class="primary" id="add">Add administrator</button></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Administrator</th><th>Created</th><th>Last sign-in</th><th>Active sessions</th><th></th></tr></thead><tbody>' +
+      admins.map((a) => "<tr><td><b>" + esc(a.name) + "</b>" + (a.name === me ? ' <span class="badge info">You</span>' : "") + "</td><td>" + fmtTime(a.created_at) + "</td><td>" + fmtTime(a.last_login) + "</td><td>" + a.sessions + '</td><td class="actions">' +
+        (a.name !== me ? '<button class="link" data-reset="' + esc(a.name) + '">Reset password</button><button class="link danger" data-del="' + esc(a.name) + '">Delete</button>' : "") + "</td></tr>").join("") + "</tbody></table></div>" +
+      '<p class="small muted">CLI tools and scripts can authenticate with CP_ADMIN_TOKEN. The audit log records them as api-token.</p>';
     $("#add").onclick = async () => {
-      const r = await form("添加管理员", [{ name: "name", label: "用户名", required: true }, { name: "password", label: "密码（可选）", type: "password", hint: "留空则自动生成；至少 8 位" }],
-        (v) => api("POST", "/admin/admins", Object.assign({ name: v.name }, v.password ? { password: v.password } : {})), "添加");
+      const r = await form("Add administrator", [{ name: "name", label: "Username", required: true }, { name: "password", label: "Password (optional)", type: "password", hint: "Leave blank to generate a password. Use at least 8 characters." }],
+        (v) => api("POST", "/admin/admins", Object.assign({ name: v.name }, v.password ? { password: v.password } : {})), "Add");
       if (!r) return;
-      if (r.password) reveal("管理员 " + r.name + " 已创建", "初始密码", r.password); else toast("已添加");
+      if (r.password) reveal("Created administrator " + r.name, "Initial password", r.password); else toast("Added.");
       route();
     };
     $("#mypw").onclick = async () => {
-      const r = await form("修改我的密码", [{ name: "password", label: "新密码", type: "password", required: true, hint: "至少 8 位。修改后需要重新登录" }],
+      const r = await form("Change my password", [{ name: "password", label: "New password", type: "password", required: true, hint: "Use at least 8 characters. Sign in again after changing it." }],
         (v) => api("POST", "/admin/admins/" + enc(me) + "/password", { password: v.password }));
-      if (r) showLogin("密码已修改，请重新登录");
+      if (r) showLogin("Password changed. Sign in again.");
     };
     $$("[data-reset]").forEach((b) => b.onclick = async () => {
-      if (!(await confirmBox("重置 " + b.dataset.reset + " 的密码", "生成一个新密码，对方的所有会话立即失效。", "重置"))) return;
+      if (!(await confirmBox("Reset " + b.dataset.reset + " password", "Generate a new password and immediately revoke all of the administrator's sessions.", "Reset"))) return;
       const r = await act(() => api("POST", "/admin/admins/" + enc(b.dataset.reset) + "/password"));
-      if (r) reveal("新密码", b.dataset.reset + " 的新密码", r.password);
+      if (r) reveal("New password", "New password for " + b.dataset.reset, r.password);
     });
     $$("[data-del]").forEach((b) => b.onclick = async () => {
-      if (!(await confirmBox("删除管理员 " + b.dataset.del, "对方立即无法登录。", "删除"))) return;
-      if (await act(() => api("DELETE", "/admin/admins/" + enc(b.dataset.del)), "已删除")) route();
+      if (!(await confirmBox("Delete administrator " + b.dataset.del, "This administrator loses access immediately.", "Delete"))) return;
+      if (await act(() => api("DELETE", "/admin/admins/" + enc(b.dataset.del)), "Deleted.")) route();
     });
   };
 
