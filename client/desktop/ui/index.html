@@ -75,6 +75,7 @@
   .fields { display: grid; gap: 12px; margin: 17px 0; }
   .field label { font-weight: 600; font-size: 13px; display: block; margin-bottom: 4px; }
   .field small { color: var(--muted); font-weight: 400; }
+  .field-hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
   .password-field { position: relative; }
   .password-field input { padding-right: 45px; }
   .password-field button { position: absolute; inset: 3px 3px 3px auto; display: grid; place-items: center; width: 36px; border: 0; background: transparent; color: var(--muted); }
@@ -141,7 +142,8 @@
       </div>
       <div class="field">
         <label for="device">Device name <small>(optional)</small></label>
-        <input id="device" name="device" placeholder="This computer">
+        <input id="device" name="device" placeholder="This computer" aria-describedby="device-hint">
+        <p class="field-hint" id="device-hint">Up to 64 characters without spaces or slashes.</p>
       </div>
     </div>
     <button class="primary" id="login-btn" type="submit">Sign in</button>
@@ -275,13 +277,21 @@
 
   appearance.bind();
   $("show-password").addEventListener("click", () => showPassword($("password").type === "password"));
+  const device = $("device");
+  device.addEventListener("input", () => device.setCustomValidity(""));
   $("login").addEventListener("submit", (event) => {
     event.preventDefault();
+    const deviceName = device.value.trim();
+    if (Array.from(deviceName).length > 64 || /[\/ \t\n]/.test(deviceName)) {
+      device.setCustomValidity("Use up to 64 characters without spaces or slashes.");
+      device.reportValidity();
+      return;
+    }
     run("login", {
       server: $("server").value,
       username: $("username").value,
       password: $("password").value,
-      device: $("device").value,
+      device: deviceName,
     });
   });
   $("toggle").addEventListener("click", () => run(view.want_connected || view.tunnel === "running" ? "disconnect" : "connect"));
