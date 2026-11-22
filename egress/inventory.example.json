@@ -1,0 +1,35 @@
+{
+  "server": {
+    "public_host": "203.0.113.2",
+    "listen_port": 443,
+    "log_level": "info",
+    "block_private": true,
+    "block_cidrs": ["169.254.169.254/32"],
+    "reality": {
+      "private_key": "from: sing-box generate reality-keypair",
+      "public_key": "from: sing-box generate reality-keypair",
+      "short_id": "from: openssl rand -hex 8",
+      "server_name": "www.example.com",
+      "handshake_server": "www.example.com",
+      "handshake_port": 443
+    }
+  },
+  "client_policy": {
+    "domain_suffix": ["example-target.com"],
+    "process_name": [],
+    "process_path": ["/Applications/Example.app/Contents/MacOS/Example"],
+    "block_quic": true,
+    "direct_dns": "dhcp"
+  },
+  "egress_ips": [
+    { "ip": "203.0.113.3" },
+    { "ip": "203.0.113.4" },
+    { "ip": "203.0.113.5", "status": "cooldown" }
+  ],
+  "users": [
+    { "name": "alice", "egress_ip": "203.0.113.3", "devices": [
+      { "name": "alice-mac", "uuid": "from: uuidgen" } ] },
+    { "name": "bob", "egress_ip": "203.0.113.4", "devices": [
+      { "name": "bob-mac", "uuid": "from: uuidgen" } ] }
+  ]
+}

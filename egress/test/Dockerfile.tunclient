@@ -1,0 +1,9 @@
+# TUN client under test: sing-box plus Python for probes.
+# /usr/local/bin/tunapp is a copy of the Python interpreter, so app mode can route "tunapp" and leave "python3" direct.
+FROM ghcr.io/sagernet/sing-box:v1.14.4 AS singbox
+
+FROM python:3.12-alpine
+COPY --from=singbox /usr/local/bin/sing-box /usr/local/bin/sing-box
+RUN cp /usr/local/bin/python3.12 /usr/local/bin/tunapp
+COPY tun-entry.sh /usr/local/bin/tun-entry.sh
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/tun-entry.sh"]

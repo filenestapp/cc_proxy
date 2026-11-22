@@ -1,0 +1,46 @@
+{
+  "server": {
+    "public_host": "10.88.0.2",
+    "listen_port": 443,
+    "log_level": "info",
+    "block_private": false,
+    "block_cidrs": ["10.99.0.20/32", "169.254.169.254/32"],
+    "reality": {
+      "private_key": "@PRIVATE_KEY@",
+      "public_key": "@PUBLIC_KEY@",
+      "short_id": "@SHORT_ID@",
+      "server_name": "decoy.test",
+      "handshake_server": "10.99.0.20",
+      "handshake_port": 443
+    }
+  },
+  "client_policy": {
+    "domain_suffix": ["target.test"],
+    "process_path": ["/usr/local/bin/tunapp"],
+    "block_quic": true,
+    "direct_dns": "127.0.0.11"
+  },
+  "egress_ips": [
+    { "ip": "10.99.0.3" },
+    { "ip": "10.99.0.4" },
+    { "ip": "10.99.0.5" },
+    { "ip": "10.99.0.6" },
+    { "ip": "10.99.0.7", "status": "cooldown" }
+  ],
+  "users": [
+    { "name": "alice", "egress_ip": "10.99.0.3", "devices": [
+      { "name": "alice-mac", "uuid": "@UUID@" },
+      { "name": "alice-win", "uuid": "@UUID@" } ] },
+    { "name": "bob", "egress_ip": "10.99.0.4", "devices": [
+      { "name": "bob-mac", "uuid": "@UUID@" } ] },
+    { "name": "carol", "egress_ip": "10.99.0.5", "mode": "shared", "devices": [
+      { "name": "carol-mac", "uuid": "@UUID@" } ] },
+    { "name": "dave", "egress_ip": "10.99.0.5", "mode": "shared", "devices": [
+      { "name": "dave-mac", "uuid": "@UUID@" } ] },
+    { "name": "erin", "devices": [
+      { "name": "erin-mac", "uuid": "@UUID@" } ] },
+    { "name": "frank", "egress_ip": "10.99.0.6", "devices": [
+      { "name": "frank-old", "uuid": "@UUID@", "revoked": true },
+      { "name": "frank-new", "uuid": "@UUID@" } ] }
+  ]
+}

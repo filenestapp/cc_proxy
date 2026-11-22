@@ -1,0 +1,16 @@
+[package]
+name = "ccproxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "cc_proxy command-line client; also the privileged tunnel helper the desktop app launches"
+
+[[bin]]
+name = "ccproxy"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+ccproxy-core = { path = "../core" }
+clap = { version = "4", features = ["derive"] }

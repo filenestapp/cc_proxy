@@ -1,0 +1,19 @@
+# Adds the egress IPs at boot, before sing-box binds to them.
+# Install: copy to /etc/systemd/system/, set EGRESS_IFACE in /etc/egress/env, then
+#   systemctl daemon-reload && systemctl enable --now egress-ips
+[Unit]
+Description=Egress IP addresses for the proxy exit node
+After=network-online.target
+Wants=network-online.target
+Before=sing-box.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/egress/env
+ExecStart=/opt/egress/deploy/ips.sh up ${EGRESS_IFACE} /etc/egress/ips.txt
+ExecStop=/opt/egress/deploy/ips.sh down ${EGRESS_IFACE} /etc/egress/ips.txt
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=sing-box.service

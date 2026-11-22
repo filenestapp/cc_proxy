@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CC Proxy 管理后台</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --ink: #1c2330; --muted: #677285; --line: #dde1e8; --hover: #f0f2f6;
+    --accent: #2f5bea; --accent-ink: #fff; --accent-soft: #e8eefe;
+    --ok: #17803d; --ok-soft: #e5f4ea; --bad: #c8322b; --bad-soft: #fbe9e7;
+    --warn: #a86400; --warn-soft: #fdf1dc; --idle: #8a93a3; --idle-soft: #eef0f3;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --side: 208px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b2029; --ink: #e6e9ef; --muted: #98a2b3; --line: #2f3643; --hover: #232a35;
+      --accent: #5b82ff; --accent-soft: #1e2a4a;
+      --ok: #4cc27a; --ok-soft: #173323; --bad: #ff6b62; --bad-soft: #3a1d1c;
+      --warn: #f0b24a; --warn-soft: #3a2c13; --idle: #7d8696; --idle-soft: #232934;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button.danger { color: var(--bad); border-color: var(--bad); }
+  button.link { border: 0; background: none; color: var(--accent); padding: 2px 6px; }
+  button.link.danger { color: var(--bad); }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  input, select, textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; width: 100%; }
+  textarea { min-height: 96px; font-family: var(--mono); font-size: 13px; }
+  input[type=checkbox] { width: auto; }
+  .mono { font-family: var(--mono); }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+
+  /* layout */
+  .shell { display: grid; grid-template-columns: var(--side) 1fr; min-height: 100vh; }
+  nav.side { background: var(--panel); border-right: 1px solid var(--line); padding: 16px 10px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  nav.side .brand { font-weight: 700; font-size: 15px; padding: 4px 10px 16px; }
+  nav.side a { display: block; color: var(--ink); padding: 8px 10px; border-radius: 7px; margin-bottom: 2px; }
+  nav.side a:hover { background: var(--hover); text-decoration: none; }
+  nav.side a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  nav.side .count { float: right; font-size: 11px; background: var(--bad); color: #fff; border-radius: 999px; padding: 0 6px; }
+  .main { min-width: 0; }
+  header.top { display: flex; align-items: center; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  header.top h1 { font-size: 17px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .content { padding: 20px 24px 48px; max-width: 1400px; }
+  @media (max-width: 760px) {
+    .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    nav.side { position: static; height: auto; display: flex; gap: 4px; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
+    nav.side .brand { display: none; }
+    nav.side a { margin: 0; white-space: nowrap; }
+    header.top, .content { padding-left: 16px; padding-right: 16px; }
+  }
+
+  /* blocks */
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .section { margin-bottom: 20px; }
+  .section > h2, .card > h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .section > h2 .spacer, .toolbar .spacer { flex: 1; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .toolbar input, .toolbar select { width: auto; min-width: 160px; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--bg); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--hover); }
+  td.actions { white-space: nowrap; text-align: right; }
+  .empty { color: var(--muted); padding: 18px; text-align: center; }
+  .badge { font-size: 11px; border-radius: 999px; padding: 1px 8px; white-space: nowrap; background: var(--idle-soft); color: var(--idle); display: inline-block; }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); }
+  .badge.bad { background: var(--bad-soft); color: var(--bad); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .badge.info { background: var(--accent-soft); color: var(--accent); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .form-row { margin-bottom: 12px; }
+  .form-row label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .form-row .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .form-row.check label { display: flex; gap: 8px; align-items: center; color: var(--ink); font-size: 14px; }
+
+  /* topology (overview) */
+  .summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; min-width: 92px; }
+  .stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  .tcard { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--idle); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+  .tcard.ok { border-left-color: var(--ok); } .tcard.bad { border-left-color: var(--bad); } .tcard.warn { border-left-color: var(--warn); }
+  .tgrid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .thead { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  .thead .tcard { flex: 1 1 240px; }
+  .ttitle { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .ttitle b { font-family: var(--mono); overflow-wrap: anywhere; }
+  .line { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
+  .big { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ok); }
+  .probe { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); }
+  .target { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; margin-top: 0; }
+  .hist { display: flex; gap: 2px; margin-top: 4px; flex-wrap: wrap; }
+  .hist i { width: 6px; height: 10px; border-radius: 1px; background: var(--ok); }
+  .hist i.f { background: var(--bad); }
+  .alerts { display: grid; gap: 6px; margin-bottom: 16px; }
+  .alert { border-radius: 8px; padding: 8px 12px; border: 1px solid var(--line); background: var(--warn-soft); }
+  .alert.critical { background: var(--bad-soft); }
+
+  /* overlays */
+  .overlay { position: fixed; inset: 0; background: rgba(15, 20, 30, .45); display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px 16px; z-index: 20; overflow-y: auto; }
+  .modal { background: var(--panel); border-radius: 12px; width: 100%; max-width: 520px; padding: 18px 20px; box-shadow: 0 20px 50px rgba(0,0,0,.25); }
+  .modal h3 { margin: 0 0 14px; font-size: 16px; }
+  .modal .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .modal .err { color: var(--bad); font-size: 13px; min-height: 1.3em; }
+  .secret { font-family: var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px; overflow-wrap: anywhere; user-select: all; }
+  pre.snippet { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; margin: 8px 0 0; }
+  .toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px; z-index: 30; max-width: calc(100vw - 32px); }
+  .toast { background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-width: 420px; }
+  .toast.bad { background: var(--bad); color: #fff; }
+
+  /* login */
+  .login { max-width: 360px; margin: 14vh auto; padding: 0 16px; }
+  .login .card { padding: 22px; }
+  .login h1 { font-size: 18px; margin: 0 0 4px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form class="card" id="login-form">
+    <h1>CC Proxy 管理后台</h1>
+    <p class="muted small" style="margin:0 0 16px">使用管理员账号登录</p>
+    <div class="form-row"><label for="l-user">用户名</label><input id="l-user" autocomplete="username" required></div>
+    <div class="form-row"><label for="l-pass">密码</label><input id="l-pass" type="password" autocomplete="current-password" required></div>
+    <div class="err small" id="l-err" role="alert" style="color:var(--bad);min-height:1.4em"></div>
+    <button class="primary" style="width:100%;margin-top:6px" type="submit">登录</button>
+  </form>
+</div>
+
+<div id="app" class="shell" hidden>
+  <nav class="side" aria-label="主导航">
+    <div class="brand">CC Proxy</div>
+    <a href="#/" data-nav="overview">概览</a>
+    <a href="#/hosts" data-nav="hosts">出口主机</a>
+    <a href="#/ips" data-nav="ips">出口 IP</a>
+    <a href="#/users" data-nav="users">用户</a>
+    <a href="#/alerts" data-nav="alerts">告警 <span class="count" id="alert-count" hidden></span></a>
+    <a href="#/settings" data-nav="settings">设置</a>
+    <a href="#/audit" data-nav="audit">审计日志</a>
+    <a href="#/admins" data-nav="admins">管理员</a>
+  </nav>
+  <div class="main">
+    <header class="top">
+      <h1 id="title">概览</h1>
+      <span class="muted small" id="who"></span>
+      <button id="logout" type="button">退出</button>
+    </header>
+    <div class="content" id="view"></div>
+  </div>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const STALE = 180;
+  let csrf = null, me = null, timer = null, routeToken = 0;
+
+  // ---- helpers --------------------------------------------------------------------------------------------
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  const enc = encodeURIComponent;
+  const fmtTime = (t) => (t ? new Date(t * 1000).toLocaleString("zh-CN", { hour12: false }) : "—");
+  function ago(sec) {
+    if (sec == null) return "—";
+    sec = Math.max(0, Math.round(sec));
+    if (sec < 60) return sec + " 秒前";
+    if (sec < 3600) return Math.round(sec / 60) + " 分钟前";
+    if (sec < 86400) return Math.round(sec / 3600) + " 小时前";
+    return Math.round(sec / 86400) + " 天前";
+  }
+  const ms = (v) => (v == null ? "—" : v < 1 ? "<1 ms" : Math.round(v) + " ms");
+  const hist = (h) => '<div class="hist" title="最近 ' + h.length + ' 次">' + h.map((ok) => '<i class="' + (ok ? "" : "f") + '"></i>').join("") + "</div>";
+  const IP_STATUS = { assigned: ["已分配", "info"], available: ["空闲", ""], cooldown: ["冷却中", "warn"], banned: ["已封禁", "bad"] };
+  const ipBadge = (s) => '<span class="badge ' + (IP_STATUS[s] || ["", ""])[1] + '">' + esc((IP_STATUS[s] || [s])[0]) + "</span>";
+  const now = () => Date.now() / 1000;
+
+  function toast(text, bad) {
+    const el = document.createElement("div");
+    el.className = "toast" + (bad ? " bad" : "");
+    el.textContent = text;
+    $("#toasts").appendChild(el);
+    setTimeout(() => el.remove(), bad ? 6000 : 3000);
+  }
+
+  class ApiError extends Error {}
+
+  async function api(method, path, body) {
+    const opts = { method, headers: {}, credentials: "same-origin", cache: "no-store" };
+    if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+    if (method !== "GET" && csrf) opts.headers["X-CSRF-Token"] = csrf;
+    let resp;
+    try { resp = await fetch(path, opts); } catch (e) { throw new ApiError("无法连接控制端：" + e.message); }
+    let data = null;
+    try { data = await resp.json(); } catch (e) { /* empty body */ }
+    if (resp.status === 401 && path !== "/admin/session") { showLogin("登录已过期，请重新登录"); throw new ApiError("未登录"); }
+    if (!resp.ok) throw new ApiError((data && data.error) || "HTTP " + resp.status);
+    return data;
+  }
+
+  // Wrap an action: report errors as toasts, success optionally.
+  async function act(fn, okText) {
+    try { const r = await fn(); if (okText) toast(okText); return r; }
+    catch (e) { if (e.message !== "未登录") toast(e.message, true); return undefined; }
+  }
+
+  // ---- modals ---------------------------------------------------------------------------------------------
+  function overlay(html) {
+    const ov = document.createElement("div");
+    ov.className = "overlay";
+    ov.innerHTML = '<div class="modal" role="dialog" aria-modal="true">' + html + "</div>";
+    document.body.appendChild(ov);
+    const close = () => ov.remove();
+    ov.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+    return { ov, close };
+  }
+
+  /* fields: [{name, label, type: text|password|number|select|textarea|checkbox, value, options:[[v,label]], hint, placeholder, required}]
+     onSubmit(values) may throw; its return value resolves the promise. */
+  function form(title, fields, onSubmit, submitText = "保存") {
+    return new Promise((resolve) => {
+      const rows = fields.map((f, i) => {
+        const id = "f" + i, req = f.required ? " required" : "";
+        let input;
+        if (f.type === "select") {
+          input = '<select id="' + id + '" name="' + f.name + '">' + f.options.map(([v, l]) =>
+            '<option value="' + esc(v) + '"' + (String(v) === String(f.value ?? "") ? " selected" : "") + ">" + esc(l) + "</option>").join("") + "</select>";
+        } else if (f.type === "textarea") {
+          input = '<textarea id="' + id + '" name="' + f.name + '" placeholder="' + esc(f.placeholder || "") + '"' + req + ">" + esc(f.value ?? "") + "</textarea>";
+        } else if (f.type === "checkbox") {
+          return '<div class="form-row check"><label><input type="checkbox" id="' + id + '" name="' + f.name + '"' + (f.value ? " checked" : "") + "> " + esc(f.label) + "</label>" + (f.hint ? '<div class="hint">' + esc(f.hint) + "</div>" : "") + "</div>";
+        } else {
+          input = '<input id="' + id + '" name="' + f.name + '" type="' + (f.type || "text") + '" value="' + esc(f.value ?? "") + '" placeholder="' + esc(f.placeholder || "") + '"' + req + (f.type === "password" ? ' autocomplete="new-password"' : "") + ">";
+        }
+        return '<div class="form-row"><label for="' + id + '">' + esc(f.label) + "</label>" + input + (f.hint ? '<div class="hint">' + esc(f.hint) + "</div>" : "") + "</div>";
+      }).join("");
+      const { ov, close } = overlay('<h3>' + esc(title) + '</h3><form novalidate>' + rows + '<div class="err" role="alert"></div><div class="buttons"><button type="button" data-cancel>取消</button><button class="primary" type="submit">' + esc(submitText) + "</button></div></form>");
+      const formEl = $("form", ov);
+      $("[data-cancel]", ov).onclick = () => { close(); resolve(undefined); };
+      formEl.onsubmit = async (e) => {
+        e.preventDefault();
+        if (!formEl.reportValidity()) return;
+        const values = {};
+        fields.forEach((f, i) => {
+          const el = $("#f" + i, ov);
+          values[f.name] = f.type === "checkbox" ? el.checked : el.value.trim();
+        });
+        const btn = $("button[type=submit]", ov);
+        btn.disabled = true;
+        try { const r = await onSubmit(values); close(); resolve(r === undefined ? true : r); }
+        catch (err) { $(".err", ov).textContent = err.message; btn.disabled = false; }
+      };
+      const first = $("input,select,textarea", ov); if (first) first.focus();
+    });
+  }
+
+  function confirmBox(title, text, okText = "确认", danger = true) {
+    return new Promise((resolve) => {
+      const { ov, close } = overlay("<h3>" + esc(title) + "</h3><p>" + text + '</p><div class="buttons"><button type="button" data-no>取消</button><button type="button" class="' + (danger ? "danger" : "primary") + '" data-yes>' + esc(okText) + "</button></div>");
+      $("[data-no]", ov).onclick = () => { close(); resolve(false); };
+      $("[data-yes]", ov).onclick = () => { close(); resolve(true); };
+      $("[data-yes]", ov).focus();
+    });
+  }
+
+  // Show a credential exactly once (it cannot be retrieved later).
+  function reveal(title, label, secret, extraHtml = "") {
+    const { ov, close } = overlay("<h3>" + esc(title) + '</h3><p class="small muted">' + esc(label) + '（只显示这一次，请现在保存）</p><div class="secret" id="secret">' + esc(secret) + "</div>" + extraHtml +
+      '<div class="buttons"><button type="button" data-copy>复制</button><button type="button" class="primary" data-ok>我已保存</button></div>');
+    $("[data-copy]", ov).onclick = async () => {
+      try { await navigator.clipboard.writeText(secret); toast("已复制"); } catch (e) { toast("复制失败，请手动选中复制", true); }
+    };
+    $("[data-ok]", ov).onclick = close;
+  }
+
+  // ---- auth -----------------------------------------------------------------------------------------------
+  function showLogin(msg) {
+    clearInterval(timer);
+    csrf = null; me = null;
+    $("#app").hidden = true;
+    $("#login").hidden = false;
+    $("#l-err").textContent = msg || "";
+    $("#l-user").focus();
+  }
+
+  async function boot() {
+    try {
+      const s = await api("GET", "/admin/session");
+      csrf = s.csrf; me = s.admin;
+      start();
+    } catch (e) { showLogin(); }
+  }
+
+  function start() {
+    $("#login").hidden = true;
+    $("#app").hidden = false;
+    $("#who").textContent = me;
+    route();
+  }
+
+  $("#login-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("#l-err").textContent = "";
+    try {
+      const s = await api("POST", "/admin/session", { username: $("#l-user").value.trim(), password: $("#l-pass").value });
+      csrf = s.csrf; me = s.admin;
+      $("#l-pass").value = "";
+      start();
+    } catch (err) { $("#l-err").textContent = err.message === "wrong username or password" ? "用户名或密码错误" : err.message; }
+  });
+  $("#logout").onclick = async () => { await act(() => api("DELETE", "/admin/session")); showLogin("已退出"); };
+
+  // ---- router ---------------------------------------------------------------------------------------------
+  const PAGES = {};
+  function route() {
+    clearInterval(timer);
+    const parts = (location.hash.replace(/^#\/?/, "") || "").split("/").map(decodeURIComponent);
+    const page = parts[0] || "overview";
+    const fn = PAGES[page] || PAGES.overview;
+    $$("nav.side a").forEach((a) => a.classList.toggle("active", a.dataset.nav === (PAGES[page] ? page : "overview")));
+    const token = ++routeToken;
+    $("#view").innerHTML = '<div class="empty">加载中…</div>';
+    fn(parts.slice(1), token).catch((e) => { if (token === routeToken && e.message !== "未登录") $("#view").innerHTML = '<div class="empty">加载失败：' + esc(e.message) + "</div>"; });
+  }
+  window.addEventListener("hashchange", () => { if (me) route(); });
+  const setTitle = (t) => { $("#title").textContent = t; document.title = t + " · CC Proxy"; };
+  const current = (token) => token === routeToken;
+  function refreshEvery(sec, fn, token) { timer = setInterval(() => { if (current(token)) fn(); }, sec * 1000); }
+
+  function updateAlertCount(alerts) {
+    const n = alerts.filter((a) => a.state === "firing").length;
+    $("#alert-count").hidden = !n;
+    $("#alert-count").textContent = n;
+  }
+
+  // ---- overview (topology) --------------------------------------------------------------------------------
+  function entryCard(e, t, title) {
+    const best = e.best;
+    const stale = !e.probes.length || e.probes.every((p) => t - p.at > STALE);
+    const allBad = e.probes.length && e.probes.every((p) => !p.ok);
+    const cls = !e.probes.length ? "" : allBad ? "bad" : stale ? "warn" : "ok";
+    const rows = e.probes.map((p) => '<div class="line"><span class="mono">' + esc(p.source) + "</span> " +
+      (p.ok ? ms(p.latency_ms) : '<span style="color:var(--bad)">不可达</span>') + " · " + ago(t - p.at) + hist(p.history) + "</div>").join("");
+    return '<div class="tcard ' + cls + '"><div class="ttitle"><b>' + esc(title || e.name) + '</b><span class="badge ' + cls + '">' +
+      (cls === "ok" ? "正常" : cls === "bad" ? "不可达" : cls === "warn" ? "数据过期" : "无数据") + "</span></div>" +
+      '<div class="line mono">' + esc(e.host) + ":" + esc(e.port) + "</div>" +
+      (best ? '<div class="big">' + ms(best.latency_ms) + ' <span class="line">最快 · ' + esc(best.source) + "</span></div>" : "") +
+      (rows || '<div class="line">尚无探测点上报</div>') + "</div>";
+  }
+  function agentCard(a) {
+    if (!a) return '<div class="tcard bad"><div class="ttitle"><b>agent</b><span class="badge bad">未上报</span></div><div class="line">还没有收到这台出口机的心跳</div></div>';
+    const alive = a.age < STALE, down = a.singbox_running === false, failed = !!a.apply_error && !a.in_sync;
+    const cls = !alive || down || failed ? "bad" : a.in_sync ? "ok" : "warn";
+    return '<div class="tcard ' + cls + '"><div class="ttitle"><b>agent</b><span class="badge ' + cls + '">' +
+      (!alive ? "失联" : down ? "sing-box 未运行" : failed ? "新配置未生效" : a.in_sync ? "配置已同步" : "等待同步") + "</span></div>" +
+      (failed ? '<div class="line" style="color:var(--bad)">' + esc(a.apply_error) + "</div>" : "") +
+      '<div class="line">心跳 ' + ago(a.age) + '</div><div class="line">已装配置 <span class="mono">' + esc((a.config_etag || "—").replace(/"/g, "")) + "</span></div></div>";
+  }
+  function ipCard(ip, t) {
+    const probes = ip.probes, fresh = probes.filter((p) => t - p.at <= STALE);
+    let cls = "";
+    if (ip.status === "banned") cls = "bad";
+    else if (probes.some((p) => !p.ok && t - p.at <= STALE)) cls = "bad";
+    else if (probes.length && !fresh.length) cls = "warn";
+    else if (fresh.length) cls = "ok";
+    const users = ip.users.length ? ip.users.map((u) => '<a href="#/users/' + enc(u) + '">' + esc(u) + '</a> <span class="mono">:' + esc(ip.ports[u]) + "</span>").join(", ") + (ip.users.length > 1 ? "（共享）" : "（独享）") : "无用户";
+    const rows = probes.map((p) => '<div class="probe"><div class="ttitle"><span class="line mono target" title="' + esc(p.target) + '">' + esc(p.target.replace(/^https?:\/\//, "")) + "</span>" +
+      '<span class="badge ' + (p.ok ? "ok" : "bad") + '">' + (p.ok ? ms(p.latency_ms) : "失败") + "</span></div>" +
+      (p.ok ? "" : '<div class="line" style="color:var(--bad)">' + esc(p.detail) + "</div>") + '<div class="line">' + ago(t - p.at) + hist(p.history) + "</div></div>").join("");
+    return '<div class="tcard ' + cls + '"><div class="ttitle"><b>' + esc(ip.ip) + "</b>" + ipBadge(ip.status) + "</div>" +
+      '<div class="line">' + users + " · 设备 " + ip.devices + "</div>" + (ip.note ? '<div class="line">' + esc(ip.note) + "</div>" : "") +
+      (rows || '<div class="line">尚无探测结果</div>') + "</div>";
+  }
+
+  PAGES.overview = async (_, token) => {
+    setTitle("概览");
+    const draw = async () => {
+      const t = await api("GET", "/admin/topology");
+      if (!current(token)) return;
+      updateAlertCount(t.alerts || []);
+      const tn = t.now;
+      const failing = t.ips.filter((ip) => ip.probes.some((p) => !p.ok && tn - p.at <= STALE)).length;
+      const agents = Object.fromEntries(t.agents.map((a) => [a.name, a]));
+      const entries = Object.fromEntries(t.entries.filter((e) => e.kind === "host").map((e) => [e.name, e]));
+      const stats = [[(t.alerts || []).length, "告警"], [t.hosts.length, "出口主机"], [t.ips.length, "出口 IP"],
+        [t.ips.filter((i) => i.status === "assigned").length, "已分配"], [t.ips.filter((i) => i.status === "available").length, "空闲"],
+        [failing, "探测失败"], [t.agents.filter((a) => a.age < STALE && a.in_sync && a.singbox_running !== false).length + " / " + t.hosts.length, "出口机正常"]];
+      const extras = t.entries.filter((e) => e.kind === "extra");
+      $("#view").innerHTML =
+        '<div class="alerts">' + (t.alerts || []).map((a) => '<div class="alert ' + (a.severity === "critical" ? "critical" : "") + '"><b>' + (a.severity === "critical" ? "严重" : "警告") + "</b> " + esc(a.summary) + ' <span class="line">· 自 ' + ago(tn - a.fired_at) + "</span></div>").join("") + "</div>" +
+        '<div class="summary">' + stats.map(([v, k]) => '<div class="stat"><b>' + esc(v) + "</b><span>" + k + "</span></div>").join("") + "</div>" +
+        (extras.length ? '<div class="section"><h2>其他入口</h2><div class="tgrid">' + extras.map((e) => entryCard(e, tn)).join("") + "</div></div>" : "") +
+        (t.hosts.map((h) => {
+          const ips = t.ips.filter((ip) => ip.host === h.name);
+          const entry = entries[h.name];
+          return '<div class="section"><h2><a href="#/hosts/' + enc(h.name) + '">' + esc(h.name) + '</a> <span class="muted small mono">' + esc(h.public_host) + " · 端口 " + h.port_range[0] + "–" + h.port_range[1] + " · " + h.users + " 个用户</span></h2>" +
+            '<div class="thead">' + agentCard(agents[h.name]) + (entry ? entryCard(entry, tn, "入口延迟") : '<div class="tcard"><div class="ttitle"><b>入口延迟</b><span class="badge">无数据</span></div><div class="line">没有用户时不监听端口，也就不测入口</div></div>') + "</div>" +
+            '<div class="tgrid">' + (ips.map((ip) => ipCard(ip, tn)).join("") || '<div class="empty">这台主机还没有出口 IP</div>') + "</div></div>";
+        }).join("") || '<div class="card empty">还没有出口主机。<a href="#/hosts">去添加</a></div>');
+    };
+    await draw();
+    refreshEvery(10, () => draw().catch(() => {}), token);
+  };
+
+  // ---- hosts ----------------------------------------------------------------------------------------------
+  function agentStatus(a) {
+    if (!a) return '<span class="badge bad">未上报</span>';
+    if (a.age >= STALE) return '<span class="badge bad">失联</span>';
+    if (a.singbox_running === false) return '<span class="badge bad">sing-box 未运行</span>';
+    if (a.apply_error && !a.in_sync) return '<span class="badge bad" title="' + esc(a.apply_error) + '">新配置未生效</span>';
+    return a.in_sync ? '<span class="badge ok">正常</span>' : '<span class="badge warn">等待同步</span>';
+  }
+  function agentCommand(token) {
+    return "CP_AGENT_TOKEN=" + token + " python3 controlplane/agent.py \\\n  --cp " + location.origin + " --iface eth0 \\\n  --reload-cmd \"systemctl reload sing-box\" --status-cmd \"systemctl is-active --quiet sing-box\"";
+  }
+  function showAgentToken(host, token) {
+    reveal("主机 " + host + " 的 agent 令牌", "在出口机上用它启动 agent", token,
+      '<p class="small muted" style="margin:12px 0 0">在出口机上运行（网卡名按实际修改）：</p><pre class="snippet">' + esc(agentCommand(token)) + "</pre>");
+  }
+  const hostFields = (h = {}) => [
+    { name: "public_host", label: "公网入口地址", value: h.public_host, required: true, placeholder: "192.0.2.2 或域名", hint: "客户端连接这个地址" },
+    { name: "server_name", label: "Reality 伪装域名（SNI）", value: h.server_name, required: true, placeholder: "www.example.com", hint: "一个支持 TLS 1.3 的真实站点" },
+    { name: "handshake_server", label: "握手目标（可选）", value: h.handshake_server || "", placeholder: "默认同伪装域名" },
+    { name: "port_min", label: "用户入口端口起", type: "number", value: h.port_range ? h.port_range[0] : 20000, required: true },
+    { name: "port_max", label: "用户入口端口止", type: "number", value: h.port_range ? h.port_range[1] : 29999, required: true, hint: "这一段端口需要在出口机防火墙上放行" },
+  ];
+  function hostBody(v) {
+    const b = { public_host: v.public_host, server_name: v.server_name, port_min: Number(v.port_min), port_max: Number(v.port_max) };
+    if (v.handshake_server) b.handshake_server = v.handshake_server;
+    return b;
+  }
+
+  PAGES.hosts = async (args, token) => {
+    if (args[0]) return hostDetail(args[0], token);
+    setTitle("出口主机");
+    const [hosts, topo] = await Promise.all([api("GET", "/admin/hosts"), api("GET", "/admin/topology")]);
+    if (!current(token)) return;
+    updateAlertCount(topo.alerts || []);
+    const agents = Object.fromEntries(topo.agents.map((a) => [a.name, a]));
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + hosts.length + ' 台主机</span><span class="spacer"></span><button class="primary" id="add-host">添加主机</button></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>名称</th><th>公网入口</th><th>端口范围</th><th>出口 IP</th><th>用户</th><th>agent</th><th>伪装域名</th></tr></thead><tbody>' +
+      (hosts.map((h) => "<tr><td><a href=\"#/hosts/" + enc(h.name) + '"><b>' + esc(h.name) + "</b></a></td><td class=\"mono\">" + esc(h.public_host) + '</td><td class="mono">' + h.port_range[0] + "–" + h.port_range[1] + "</td><td>" + h.ips + "</td><td>" + h.users + "</td><td>" + agentStatus(agents[h.name]) + '</td><td class="mono small">' + esc(h.server_name) + "</td></tr>").join("") ||
+        '<tr><td colspan="7" class="empty">还没有出口主机</td></tr>') + "</tbody></table></div>";
+    $("#add-host").onclick = async () => {
+      const r = await form("添加出口主机", [{ name: "name", label: "主机名称", required: true, placeholder: "hk-1" }, ...hostFields()],
+        (v) => api("POST", "/admin/hosts", Object.assign({ name: v.name }, hostBody(v))), "添加");
+      if (r) { showAgentToken(r.host, r.agent_token); route(); }
+    };
+  };
+
+  async function hostDetail(name, token) {
+    setTitle("出口主机 · " + name);
+    const [hosts, ips, topo, users] = await Promise.all([api("GET", "/admin/hosts"), api("GET", "/admin/ips?host=" + enc(name)), api("GET", "/admin/topology"), api("GET", "/admin/users")]);
+    if (!current(token)) return;
+    const h = hosts.find((x) => x.name === name);
+    if (!h) { $("#view").innerHTML = '<div class="empty">没有这台主机。<a href="#/hosts">返回列表</a></div>'; return; }
+    const agent = topo.agents.find((a) => a.name === name);
+    const probes = Object.fromEntries(topo.ips.map((i) => [i.ip, i.probes]));
+    const onHost = users.filter((u) => u.host === name);
+    $("#view").innerHTML =
+      '<div class="toolbar"><a href="#/hosts">← 全部主机</a><span class="spacer"></span><button id="edit">编辑</button><button id="rotate">轮换 agent 令牌</button><button class="danger" id="del">删除主机</button></div>' +
+      '<div class="grid2 section"><div class="card"><h2>主机信息</h2><dl class="kv">' +
+      "<dt>公网入口</dt><dd class=\"mono\">" + esc(h.public_host) + "</dd><dt>端口范围</dt><dd class=\"mono\">" + h.port_range[0] + "–" + h.port_range[1] + "</dd>" +
+      "<dt>伪装域名</dt><dd class=\"mono\">" + esc(h.server_name) + "</dd><dt>Reality 公钥</dt><dd class=\"mono small\">" + esc(h.reality_public_key) + "</dd>" +
+      "<dt>出口 IP</dt><dd>" + h.ips + "</dd><dt>用户</dt><dd>" + h.users + "</dd></dl></div>" +
+      '<div class="card"><h2>agent</h2><dl class="kv"><dt>状态</dt><dd>' + agentStatus(agent) + "</dd><dt>最近心跳</dt><dd>" + (agent ? ago(agent.age) : "—") + "</dd>" +
+      "<dt>sing-box</dt><dd>" + (agent ? (agent.singbox_running === null ? "未知" : agent.singbox_running ? "运行中" : "未运行") : "—") + "</dd>" +
+      "<dt>已装配置</dt><dd class=\"mono small\">" + esc(agent ? (agent.config_etag || "—") : "—") + "</dd>" +
+      "<dt>当前配置</dt><dd class=\"mono small\">" + esc(topo.server_config_etags[name] || "—") + "</dd></dl></div></div>" +
+      '<div class="section"><h2>出口 IP <span class="spacer"></span><button class="primary" id="add-ips">添加 IP</button></h2>' + ipTable(ips, probes, false) + "</div>" +
+      '<div class="section"><h2>这台主机上的用户</h2><div class="table-wrap"><table><thead><tr><th>用户</th><th>出口 IP</th><th>入口端口</th><th>设备</th></tr></thead><tbody>' +
+      (onHost.map((u) => '<tr><td><a href="#/users/' + enc(u.name) + '">' + esc(u.name) + '</a></td><td class="mono">' + esc(u.egress_ip) + '</td><td class="mono">' + u.port + "</td><td>" + u.devices.filter((d) => !d.revoked).length + " / " + u.max_devices + "</td></tr>").join("") ||
+        '<tr><td colspan="4" class="empty">还没有用户绑定到这台主机</td></tr>') + "</tbody></table></div></div>";
+    $("#edit").onclick = async () => {
+      if (await form("编辑主机 " + name, hostFields(h), (v) => api("PUT", "/admin/hosts/" + enc(name), hostBody(v)))) { toast("已保存，agent 会在下一次同步时生效"); route(); }
+    };
+    $("#rotate").onclick = async () => {
+      if (!(await confirmBox("轮换 agent 令牌", "旧令牌立即失效，出口机上的 agent 需要换成新令牌后重启，否则会失联。", "轮换"))) return;
+      const r = await act(() => api("POST", "/admin/hosts/" + enc(name) + "/rotate-token"));
+      if (r) showAgentToken(name, r.agent_token);
+    };
+    $("#del").onclick = async () => {
+      if (!(await confirmBox("删除主机 " + name, "主机和它的出口 IP 会一起删除。还有用户绑定在这台主机上时无法删除。", "删除"))) return;
+      if (await act(() => api("DELETE", "/admin/hosts/" + enc(name)), "已删除")) location.hash = "#/hosts";
+    };
+    $("#add-ips").onclick = () => addIps(name);
+    bindIpActions();
+  }
+
+  // Expand "a.b.c.d", "a.b.c.d-e", "a.b.c.d-a.b.c.e" and "a.b.c.d/n" (n >= 22) into addresses.
+  function expandIps(text) {
+    const toInt = (s) => { const p = s.split(".").map(Number); if (p.length !== 4 || p.some((x) => !(x >= 0 && x <= 255) || isNaN(x))) throw new Error("不是 IPv4 地址：" + s); return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]; };
+    const toStr = (n) => [n >>> 24, (n >> 16) & 255, (n >> 8) & 255, n & 255].join(".");
+    const out = [];
+    for (const raw of text.split(/[\s,]+/).filter(Boolean)) {
+      let lo, hi;
+      if (raw.includes("/")) {
+        const [ip, bits] = raw.split("/"); const b = Number(bits);
+        if (!(b >= 22 && b <= 32)) throw new Error("CIDR 前缀需在 /22 到 /32 之间：" + raw);
+        const size = 2 ** (32 - b); lo = Math.floor(toInt(ip) / size) * size; hi = lo + size - 1;
+      } else if (raw.includes("-")) {
+        const [a, b] = raw.split("-"); lo = toInt(a); hi = b.includes(".") ? toInt(b) : (lo - (lo & 255)) + Number(b);
+        if (!(hi >= lo)) throw new Error("范围不对：" + raw);
+      } else { lo = hi = toInt(raw); }
+      for (let n = lo; n <= hi; n++) { out.push(toStr(n)); if (out.length > 1024) throw new Error("一次最多添加 1024 个"); }
+    }
+    return out;
+  }
+  async function addIps(host) {
+    const r = await form("给 " + host + " 添加出口 IP", [{ name: "ips", label: "IP 列表", type: "textarea", required: true, placeholder: "192.0.2.3\n192.0.2.10-20\n192.0.2.64/28",
+      hint: "每行一个，支持单个地址、末段范围（.10-20）、完整范围和 /22–/32 网段。这些地址必须已经由机房路由到这台主机；agent 会自动把它们加到网卡上。" }],
+    (v) => api("POST", "/admin/hosts/" + enc(host) + "/ips", { ips: expandIps(v.ips) }), "添加");
+    if (r) { toast("新增 " + r.added.length + " 个 IP"); route(); }
+  }
+
+  function ipTable(ips, probes, withHost) {
+    return '<div class="table-wrap"><table><thead><tr><th>IP</th>' + (withHost ? "<th>主机</th>" : "") + "<th>状态</th><th>用户 : 端口</th><th>探测</th><th>备注</th><th></th></tr></thead><tbody>" +
+      (ips.map((e) => {
+        const ps = (probes && probes[e.ip]) || [];
+        const pr = ps.length ? ps.map((p) => '<span class="badge ' + (p.ok ? "ok" : "bad") + '" title="' + esc(p.target + " · " + p.detail) + '">' + (p.ok ? ms(p.latency_ms) : esc(p.detail || "失败")) + "</span>").join(" ") : '<span class="muted small">—</span>';
+        const holders = e.users.map((u) => '<a href="#/users/' + enc(u) + '">' + esc(u) + '</a><span class="mono">:' + e.ports[u] + "</span>").join(", ") || '<span class="muted">—</span>';
+        const acts = (e.status === "banned" || e.status === "cooldown" ? '<button class="link" data-ip-available="' + esc(e.ip) + '">' + (e.status === "banned" ? "解除封禁" : "结束冷却") + "</button>" : "") +
+          (e.status !== "banned" ? '<button class="link danger" data-ip-ban="' + esc(e.ip) + '">封禁</button>' : "") +
+          (!e.users.length ? '<button class="link danger" data-ip-del="' + esc(e.ip) + '">删除</button>' : "");
+        return '<tr><td class="mono">' + esc(e.ip) + "</td>" + (withHost ? '<td><a href="#/hosts/' + enc(e.host) + '">' + esc(e.host) + "</a></td>" : "") + "<td>" + ipBadge(e.status) +
+          (e.status === "cooldown" && e.cooldown_until ? '<div class="line">至 ' + fmtTime(e.cooldown_until) + "</div>" : "") + "</td><td>" + holders + "</td><td>" + pr + '</td><td class="small">' + esc(e.note) + '</td><td class="actions">' + acts + "</td></tr>";
+      }).join("") || '<tr><td colspan="7" class="empty">没有出口 IP</td></tr>') + "</tbody></table></div>";
+  }
+  function bindIpActions() {
+    $$("[data-ip-ban]").forEach((b) => b.onclick = async () => {
+      const ip = b.dataset.ipBan;
+      const r = await form("封禁 " + ip, [{ name: "note", label: "原因（可选）", placeholder: "例如：目标站点返回 403" }],
+        (v) => api("POST", "/admin/ips/" + enc(ip) + "/ban", { note: v.note }), "封禁");
+      if (r) { toast(r.released_users.length ? "已封禁，已收回 " + r.released_users.join("、") + " 的出口" : "已封禁"); route(); }
+    });
+    $$("[data-ip-available]").forEach((b) => b.onclick = async () => {
+      if (await act(() => api("POST", "/admin/ips/" + enc(b.dataset.ipAvailable) + "/available"), "已设为空闲")) route();
+    });
+    $$("[data-ip-del]").forEach((b) => b.onclick = async () => {
+      const ip = b.dataset.ipDel;
+      if (!(await confirmBox("删除 " + ip, "从 IP 池中删除。agent 不会把它从出口机网卡上卸下。", "删除"))) return;
+      if (await act(() => api("DELETE", "/admin/ips/" + enc(ip)), "已删除")) route();
+    });
+  }
+
+  // ---- IPs ------------------------------------------------------------------------------------------------
+  PAGES.ips = async (_, token) => {
+    setTitle("出口 IP");
+    const [ips, hosts, topo] = await Promise.all([api("GET", "/admin/ips"), api("GET", "/admin/hosts"), api("GET", "/admin/topology")]);
+    if (!current(token)) return;
+    const probes = Object.fromEntries(topo.ips.map((i) => [i.ip, i.probes]));
+    const params = new URLSearchParams(location.hash.split("?")[1] || "");
+    $("#view").innerHTML = '<div class="toolbar"><select id="f-host"><option value="">全部主机</option>' + hosts.map((h) => "<option>" + esc(h.name) + "</option>").join("") + '</select>' +
+      '<select id="f-status"><option value="">全部状态</option>' + Object.entries(IP_STATUS).map(([k, [l]]) => '<option value="' + k + '">' + l + "</option>").join("") + "</select>" +
+      '<span class="muted small" id="ip-count"></span></div><div id="ip-table"></div>';
+    const draw = () => {
+      const fh = $("#f-host").value, fs = $("#f-status").value;
+      const shown = ips.filter((e) => (!fh || e.host === fh) && (!fs || e.status === fs));
+      $("#ip-count").textContent = shown.length + " / " + ips.length;
+      $("#ip-table").innerHTML = ipTable(shown, probes, true);
+      bindIpActions();
+    };
+    $("#f-host").value = params.get("host") || "";
+    $("#f-host").onchange = draw; $("#f-status").onchange = draw;
+    draw();
+  };
+
+  // ---- users ----------------------------------------------------------------------------------------------
+  PAGES.users = async (args, token) => {
+    if (args[0]) return userDetail(args[0], token);
+    setTitle("用户");
+    const users = await api("GET", "/admin/users");
+    if (!current(token)) return;
+    $("#view").innerHTML = '<div class="toolbar"><input id="q" placeholder="搜索用户、主机或 IP" type="search"><span class="muted small" id="u-count"></span><span class="spacer"></span><button class="primary" id="add-user">添加用户</button></div><div id="u-table"></div>';
+    const draw = () => {
+      const q = $("#q").value.trim().toLowerCase();
+      const shown = users.filter((u) => !q || [u.name, u.host, u.egress_ip].some((x) => (x || "").toLowerCase().includes(q)));
+      $("#u-count").textContent = shown.length + " / " + users.length;
+      $("#u-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>用户</th><th>模式</th><th>出口主机</th><th>出口 IP</th><th>入口端口</th><th>设备</th><th>最近在线</th></tr></thead><tbody>' +
+        (shown.map((u) => {
+          const live = u.devices.filter((d) => !d.revoked);
+          const seen = Math.max(0, ...live.map((d) => d.last_seen || 0));
+          return '<tr><td><a href="#/users/' + enc(u.name) + '"><b>' + esc(u.name) + "</b></a></td><td>" + (u.mode === "shared" ? "共享" : "独享") + "</td><td>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">未分配</span>') +
+            '</td><td class="mono">' + esc(u.egress_ip || "—") + '</td><td class="mono">' + esc(u.port || "—") + "</td><td>" + live.length + " / " + u.max_devices + "</td><td>" + (seen ? ago(now() - seen) : "—") + "</td></tr>";
+        }).join("") || '<tr><td colspan="7" class="empty">没有用户</td></tr>') + "</tbody></table></div>";
+    };
+    $("#q").oninput = draw;
+    draw();
+    $("#add-user").onclick = async () => {
+      const hosts = await act(() => api("GET", "/admin/hosts"));
+      if (!hosts) return;
+      const r = await form("添加用户", [
+        { name: "name", label: "用户名", required: true, hint: "1–64 个字符，不能含空格和 /" },
+        { name: "password", label: "密码（可选）", type: "password", hint: "留空则自动生成，创建后只显示一次；至少 8 位" },
+        { name: "mode", label: "出口模式", type: "select", value: "exclusive", options: [["exclusive", "独享出口 IP"], ["shared", "可与其他共享用户共用出口 IP"]] },
+        { name: "max_devices", label: "设备上限", type: "number", value: 5, required: true },
+        { name: "host", label: "立即分配出口", type: "select", value: "", options: [["", "暂不分配"]].concat(hosts.map((h) => [h.name, "自动分配 · " + h.name])) },
+      ], async (v) => {
+        const body = { name: v.name, mode: v.mode, max_devices: Number(v.max_devices) };
+        if (v.password) body.password = v.password;
+        const made = await api("POST", "/admin/users", body);
+        let assigned = null;
+        if (v.host) assigned = await api("POST", "/admin/users/" + enc(v.name) + "/assign", { host: v.host });
+        return { made, assigned };
+      }, "添加");
+      if (!r) return;
+      const entry = r.assigned && r.assigned.entry ? "出口 " + r.assigned.egress_ip + "，入口 " + r.assigned.entry.host + ":" + r.assigned.entry.port : "尚未分配出口";
+      if (r.made.password) reveal("用户 " + r.made.name + " 已创建", "初始密码（" + entry + "）", r.made.password);
+      else toast("用户已创建，" + entry);
+      location.hash = "#/users/" + enc(r.made.name);
+    };
+  };
+
+  async function userDetail(name, token) {
+    setTitle("用户 · " + name);
+    const [users, hosts] = await Promise.all([api("GET", "/admin/users"), api("GET", "/admin/hosts")]);
+    if (!current(token)) return;
+    const u = users.find((x) => x.name === name);
+    if (!u) { $("#view").innerHTML = '<div class="empty">没有这个用户。<a href="#/users">返回列表</a></div>'; return; }
+    const live = u.devices.filter((d) => !d.revoked);
+    const entry = u.host ? hosts.find((h) => h.name === u.host) : null;
+    $("#view").innerHTML =
+      '<div class="toolbar"><a href="#/users">← 全部用户</a><span class="spacer"></span><button id="pw">重置密码</button><button id="limit">设备上限</button><button class="danger" id="del">删除用户</button></div>' +
+      '<div class="grid2 section"><div class="card"><h2>出口绑定</h2><dl class="kv">' +
+      "<dt>出口主机</dt><dd>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">未分配</span>') + "</dd>" +
+      '<dt>出口 IP</dt><dd class="mono">' + esc(u.egress_ip || "—") + "</dd>" +
+      '<dt>客户端入口</dt><dd class="mono">' + (entry ? esc(entry.public_host) + ":" + u.port : "—") + "</dd>" +
+      "<dt>模式</dt><dd>" + (u.mode === "shared" ? "共享" : "独享") + "</dd></dl>" +
+      '<div class="toolbar" style="margin:14px 0 0">' + (u.egress_ip ? '<button id="reassign">更换出口</button><button class="danger" id="release">收回出口</button>' : '<button class="primary" id="assign">分配出口</button>') + "</div></div>" +
+      '<div class="card"><h2>账号</h2><dl class="kv"><dt>用户名</dt><dd class="mono">' + esc(u.name) + "</dd><dt>设备</dt><dd>" + live.length + " / " + u.max_devices + " 台在用</dd></dl>" +
+      '<p class="small muted" style="margin:12px 0 0">用户在客户端用用户名和密码登录，每台电脑首次登录时自动成为一台设备。</p></div></div>' +
+      '<div class="section"><h2>设备 <span class="spacer"></span><button id="add-dev">添加无界面设备</button></h2><div class="table-wrap"><table><thead><tr><th>设备</th><th>平台</th><th>最近在线</th><th>状态</th><th></th></tr></thead><tbody>' +
+      (u.devices.map((d) => '<tr><td class="mono">' + esc(d.name) + "</td><td>" + esc(d.platform || "—") + "</td><td>" + (d.last_seen ? ago(now() - d.last_seen) : "从未") + "</td><td>" + (d.revoked ? '<span class="badge">已下线</span>' : '<span class="badge ok">在用</span>') + '</td><td class="actions">' +
+        (d.revoked ? "" : '<button class="link danger" data-revoke="' + esc(d.name) + '">强制下线</button>') + "</td></tr>").join("") ||
+        '<tr><td colspan="5" class="empty">还没有设备登录过</td></tr>') + "</tbody></table></div></div>";
+
+    const assignForm = async (title) => {
+      const ips = await act(() => api("GET", "/admin/ips"));
+      if (!ips) return;
+      const usable = ips.filter((e) => e.status === "available" || (e.status === "assigned" && u.mode === "shared" && e.users.every((x) => (users.find((y) => y.name === x) || {}).mode === "shared")));
+      return form(title, [
+        { name: "host", label: "出口主机", type: "select", value: u.host || (hosts[0] || {}).name, options: hosts.map((h) => [h.name, h.name + " · " + h.public_host]) },
+        { name: "ip", label: "出口 IP", type: "select", value: "", options: [["", "自动：所选主机上数值最小的空闲 IP"]].concat(usable.filter((e) => e.ip !== u.egress_ip).map((e) => [e.ip, e.ip + " · " + e.host + (e.users.filter((x) => x !== name).length ? "（与 " + e.users.filter((x) => x !== name).join("、") + " 共享）" : "")])) },
+        { name: "port", label: "入口端口（可选）", type: "number", placeholder: "留空自动分配", hint: "必须在主机的端口范围内，且未被占用" },
+      ], async (v) => {
+        const body = { host: v.host };
+        if (v.ip) { body.ip = v.ip; delete body.host; }
+        if (v.port) body.port = Number(v.port);
+        // A bound user moves in one step, so the client never sees "unassigned" and stays connected.
+        return api("POST", "/admin/users/" + enc(name) + (u.egress_ip ? "/reassign" : "/assign"), body);
+      }, "分配");
+    };
+    const afterAssign = (r) => { if (r) { toast("已分配：" + r.egress_ip + "，入口 " + r.entry.host + ":" + r.entry.port + "；客户端会自动切换"); route(); } };
+    if ($("#assign")) $("#assign").onclick = async () => afterAssign(await assignForm("给 " + name + " 分配出口"));
+    if ($("#reassign")) $("#reassign").onclick = async () => afterAssign(await assignForm("更换 " + name + " 的出口（原 IP 无人使用时进入冷却）"));
+    if ($("#release")) $("#release").onclick = async () => {
+      if (!(await confirmBox("收回 " + name + " 的出口", "用户的客户端会断开；这个 IP 进入冷却期，期间不会分给别人。", "收回"))) return;
+      if (await act(() => api("POST", "/admin/users/" + enc(name) + "/release"), "已收回")) route();
+    };
+    $("#pw").onclick = async () => {
+      const r = await form("重置 " + name + " 的密码", [
+        { name: "password", label: "新密码（可选）", type: "password", hint: "留空则自动生成；至少 8 位" },
+        { name: "revoke", label: "同时让所有设备下线", type: "checkbox", value: true, hint: "设备需要用新密码重新登录" },
+      ], (v) => api("POST", "/admin/users/" + enc(name) + "/password", Object.assign({ revoke_devices: v.revoke }, v.password ? { password: v.password } : {})), "重置");
+      if (!r) return;
+      if (r.password) reveal("新密码", name + " 的新密码", r.password); else toast("密码已更新");
+      route();
+    };
+    $("#limit").onclick = async () => {
+      if (await form("设备上限", [{ name: "max", label: "最多同时在用的设备数", type: "number", value: u.max_devices, required: true }],
+        (v) => api("PUT", "/admin/users/" + enc(name), { max_devices: Number(v.max) }))) { toast("已保存"); route(); }
+    };
+    $("#del").onclick = async () => {
+      if (!(await confirmBox("删除用户 " + name, "用户和全部设备会被删除，客户端立即失效；出口 IP 进入冷却期。此操作不可撤销。", "删除"))) return;
+      if (await act(() => api("DELETE", "/admin/users/" + enc(name)), "已删除")) location.hash = "#/users";
+    };
+    $("#add-dev").onclick = async () => {
+      const r = await form("添加无界面设备", [{ name: "name", label: "设备名", required: true, hint: "给服务器或脚本用：拿令牌直接订阅配置，不需要密码登录" }],
+        (v) => api("POST", "/admin/users/" + enc(name) + "/devices", { name: v.name }), "添加");
+      if (r) { reveal("设备 " + r.device + " 的令牌", "订阅令牌：GET /v1/config 时放在 Authorization: Bearer 里", r.token); route(); }
+    };
+    $$("[data-revoke]").forEach((b) => b.onclick = async () => {
+      if (!(await confirmBox("让 " + b.dataset.revoke + " 下线", "这台设备的凭证立即失效，客户端会断开并退出登录。", "下线"))) return;
+      if (await act(() => api("POST", "/admin/users/" + enc(name) + "/devices/" + enc(b.dataset.revoke) + "/revoke"), "已下线")) route();
+    });
+  }
+
+  // ---- alerts ---------------------------------------------------------------------------------------------
+  const RULES = { egress_probe_failing: "出口探测失败", entry_unreachable: "入口不可达", agent_stale: "出口机失联", singbox_down: "sing-box 未运行", agent_out_of_sync: "配置未同步" };
+  PAGES.alerts = async (_, token) => {
+    setTitle("告警");
+    const all = await api("GET", "/admin/alerts?all=1");
+    if (!current(token)) return;
+    updateAlertCount(all);
+    const firing = all.filter((a) => a.state === "firing");
+    const row = (a) => "<tr><td>" + (a.severity === "critical" ? '<span class="badge bad">严重</span>' : '<span class="badge warn">警告</span>') + "</td><td>" + esc(RULES[a.rule] || a.rule) + '</td><td class="mono">' + esc(a.subject) + "</td><td>" + esc(a.summary) +
+      (a.notify_error ? '<div class="line" style="color:var(--bad)">通知发送失败：' + esc(a.notify_error) + "</div>" : "") + "</td><td>" + fmtTime(a.fired_at || a.started_at) + "</td><td>" + (a.state === "resolved" ? fmtTime(a.resolved_at) : a.state === "pending" ? '<span class="badge">待定</span>' : '<span class="badge bad">进行中</span>') + "</td></tr>";
+    const head = "<thead><tr><th>级别</th><th>规则</th><th>对象</th><th>内容</th><th>开始</th><th>解除</th></tr></thead>";
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + firing.length + ' 条进行中</span><span class="spacer"></span><a href="#/settings">告警设置</a><button id="test">发送测试通知</button></div>' +
+      '<div class="section"><h2>进行中</h2><div class="table-wrap"><table>' + head + "<tbody>" + (firing.map(row).join("") || '<tr><td colspan="6" class="empty">没有进行中的告警</td></tr>') + "</tbody></table></div></div>" +
+      '<div class="section"><h2>历史（保留 30 天）</h2><div class="table-wrap"><table>' + head + "<tbody>" + (all.filter((a) => a.state !== "firing").map(row).join("") || '<tr><td colspan="6" class="empty">没有记录</td></tr>') + "</tbody></table></div></div>";
+    $("#test").onclick = async () => {
+      const r = await act(() => api("POST", "/admin/alerts/test"));
+      if (!r) return;
+      if (!r.webhooks.length) return toast("还没有配置 webhook", true);
+      const bad = r.webhooks.filter((w) => !w.ok);
+      toast(bad.length ? bad.length + " 个 webhook 失败：" + bad.map((w) => w.error).join("；") : "已发送到 " + r.webhooks.length + " 个 webhook", !!bad.length);
+    };
+    refreshEvery(15, () => { if (current(token)) api("GET", "/admin/alerts?all=1").then(updateAlertCount).catch(() => {}); }, token);
+  };
+
+  // ---- settings -------------------------------------------------------------------------------------------
+  const lines = (t) => t.split("\n").map((s) => s.trim()).filter(Boolean);
+  PAGES.settings = async (_, token) => {
+    setTitle("设置");
+    const s = await api("GET", "/admin/settings");
+    if (!current(token)) return;
+    const cp = s.client_policy || {}, mon = s.monitor || {}, al = s.alerts || {};
+    const field = (id, label, value, opts = {}) => '<div class="form-row"><label for="' + id + '">' + label + "</label>" +
+      (opts.area ? '<textarea id="' + id + '" placeholder="' + esc(opts.ph || "") + '">' + esc(value) + "</textarea>" : '<input id="' + id + '" type="' + (opts.type || "text") + '" value="' + esc(value) + '" placeholder="' + esc(opts.ph || "") + '">') +
+      (opts.hint ? '<div class="hint">' + opts.hint + "</div>" : "") + "</div>";
+    $("#view").innerHTML = '<div class="grid2">' +
+      '<form class="card" id="s-policy"><h2>分流规则（下发给所有客户端）</h2>' +
+      field("domains", "走代理的域名", (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: "每行一个，包含所有子域名。不要用 .test 后缀（macOS 会在本地拒绝解析）。" }) +
+      field("direct_dns", "其他域名用的 DNS", cp.direct_dns || "dhcp", { hint: "dhcp = 用户网络下发的 DNS；也可以写一个 IP，如 223.5.5.5" }) +
+      '<div class="form-row check"><label><input type="checkbox" id="block_quic"' + (cp.block_quic === false ? "" : " checked") + "> 拦截规则域名的 QUIC（UDP 443），让应用改用 TCP</label></div>" +
+      '<button class="primary" type="submit">保存分流规则</button><p class="small muted">客户端每 30 秒检查一次，会自动应用。</p></form>' +
+      '<form class="card" id="s-ip"><h2>出口 IP</h2>' + field("cooldown", "收回后的冷却天数", Math.round((s.cooldown_seconds || 0) / 86400 * 10) / 10, { type: "number", hint: "IP 从用户那里收回后，冷却期内不会分给别人，避免下一个人继承上一个人的信誉" }) +
+      '<button class="primary" type="submit">保存</button></form>' +
+      '<form class="card" id="s-monitor"><h2>健康探测</h2>' +
+      field("targets", "出口探测目标", (mon.egress_targets || []).join("\n"), { area: true, ph: "https://www.example.com/", hint: "每行一个 URL。每个出口 IP 都会按 agent 的探测间隔访问它们；403、429 视为被目标拒绝" }) +
+      field("entries", "额外入口", (mon.entries || []).map((e) => e.name + " " + e.host + ":" + e.port).join("\n"), { area: true, ph: "hk-relay 192.0.2.1:443", hint: "每行「名称 地址:端口」。出口主机本身已自动包含" }) +
+      '<button class="primary" type="submit">保存探测设置</button></form>' +
+      '<form class="card" id="s-alerts"><h2>告警</h2>' +
+      field("hooks", "Webhook", (al.webhooks || []).map((w) => (w.format || "generic") + " " + w.url).join("\n"), { area: true, ph: "feishu https://open.feishu.cn/open-apis/bot/v2/hook/...", hint: "每行「格式 URL」，格式：generic、feishu、dingtalk、wecom、slack。消息含 IP 和用户名" }) +
+      field("fails", "连续失败几次告警", al.consecutive_failures ?? 3, { type: "number" }) +
+      field("stale", "出口机失联判定（秒）", al.agent_stale_seconds ?? 120, { type: "number" }) +
+      field("sync", "配置未同步判定（秒）", al.out_of_sync_seconds ?? 300, { type: "number" }) +
+      field("repeat", "持续告警重复提醒（秒，0 为不提醒）", al.repeat_seconds ?? 0, { type: "number" }) +
+      '<button class="primary" type="submit">保存告警设置</button></form></div>';
+    const save = (id, build, text) => { $(id).onsubmit = async (e) => { e.preventDefault(); let body; try { body = build(); } catch (err) { return toast(err.message, true); } if (await act(() => api("PUT", "/admin/settings", body), text)) route(); }; };
+    save("#s-policy", () => ({ client_policy: Object.assign({}, cp, { domain_suffix: lines($("#domains").value).map((d) => d.replace(/^\./, "").toLowerCase()), direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked }) }), "分流规则已保存");
+    save("#s-ip", () => ({ cooldown_seconds: Math.round(Number($("#cooldown").value) * 86400) }), "已保存");
+    save("#s-monitor", () => ({ monitor: { egress_targets: lines($("#targets").value), entries: lines($("#entries").value).map((l) => {
+      const m = l.match(/^(\S+)\s+(\S+):(\d+)$/); if (!m) throw new Error("额外入口格式不对：" + l); return { name: m[1], host: m[2], port: Number(m[3]) }; }) } }), "探测设置已保存");
+    save("#s-alerts", () => ({ alerts: Object.assign({}, al, {
+      webhooks: lines($("#hooks").value).map((l) => { const [f, ...rest] = l.split(/\s+/); const url = rest.join(" "); if (!url) return { url: f, format: "generic" }; return { format: f, url }; }),
+      consecutive_failures: Number($("#fails").value), agent_stale_seconds: Number($("#stale").value), out_of_sync_seconds: Number($("#sync").value), repeat_seconds: Number($("#repeat").value) }) }), "告警设置已保存");
+  };
+
+  // ---- audit ----------------------------------------------------------------------------------------------
+  PAGES.audit = async (_, token) => {
+    setTitle("审计日志");
+    let rows = [], done = false;
+    $("#view").innerHTML = '<div class="toolbar"><input id="actor" placeholder="按操作人筛选" type="search"><button id="apply">筛选</button><span class="spacer"></span><span class="muted small">保留 180 天；密码、令牌等不会记录</span></div><div id="a-table"></div><div class="toolbar" style="margin-top:12px"><button id="more">加载更多</button></div>';
+    const draw = () => {
+      $("#a-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>内容</th><th>来源</th></tr></thead><tbody>' +
+        (rows.map((r) => "<tr><td>" + fmtTime(r.at) + "</td><td>" + esc(r.actor) + '</td><td class="mono small">' + esc(r.action) + '</td><td class="mono small">' + esc(r.target) + '</td><td class="mono small" style="max-width:360px;overflow-wrap:anywhere">' + esc(r.detail) + '</td><td class="mono small">' + esc(r.address) + "</td></tr>").join("") ||
+          '<tr><td colspan="6" class="empty">没有记录</td></tr>') + "</tbody></table></div>";
+      $("#more").hidden = done;
+    };
+    const load = async (reset) => {
+      const actor = $("#actor").value.trim();
+      const before = !reset && rows.length ? rows[rows.length - 1].id : "";
+      const page = await api("GET", "/admin/audit?limit=100" + (before ? "&before=" + before : "") + (actor ? "&actor=" + enc(actor) : ""));
+      if (!current(token)) return;
+      rows = reset ? page : rows.concat(page);
+      done = page.length < 100;
+      draw();
+    };
+    $("#apply").onclick = () => act(() => load(true));
+    $("#actor").onkeydown = (e) => { if (e.key === "Enter") act(() => load(true)); };
+    $("#more").onclick = () => act(() => load(false));
+    await load(true);
+  };
+
+  // ---- admins ---------------------------------------------------------------------------------------------
+  PAGES.admins = async (_, token) => {
+    setTitle("管理员");
+    const admins = await api("GET", "/admin/admins");
+    if (!current(token)) return;
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">当前登录：' + esc(me) + '</span><span class="spacer"></span><button id="mypw">修改我的密码</button><button class="primary" id="add">添加管理员</button></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>管理员</th><th>创建时间</th><th>最近登录</th><th>在线会话</th><th></th></tr></thead><tbody>' +
+      admins.map((a) => "<tr><td><b>" + esc(a.name) + "</b>" + (a.name === me ? ' <span class="badge info">我</span>' : "") + "</td><td>" + fmtTime(a.created_at) + "</td><td>" + fmtTime(a.last_login) + "</td><td>" + a.sessions + '</td><td class="actions">' +
+        (a.name !== me ? '<button class="link" data-reset="' + esc(a.name) + '">重置密码</button><button class="link danger" data-del="' + esc(a.name) + '">删除</button>' : "") + "</td></tr>").join("") + "</tbody></table></div>" +
+      '<p class="small muted">命令行和脚本仍可用 CP_ADMIN_TOKEN 调用接口，在审计日志里显示为 api-token。</p>';
+    $("#add").onclick = async () => {
+      const r = await form("添加管理员", [{ name: "name", label: "用户名", required: true }, { name: "password", label: "密码（可选）", type: "password", hint: "留空则自动生成；至少 8 位" }],
+        (v) => api("POST", "/admin/admins", Object.assign({ name: v.name }, v.password ? { password: v.password } : {})), "添加");
+      if (!r) return;
+      if (r.password) reveal("管理员 " + r.name + " 已创建", "初始密码", r.password); else toast("已添加");
+      route();
+    };
+    $("#mypw").onclick = async () => {
+      const r = await form("修改我的密码", [{ name: "password", label: "新密码", type: "password", required: true, hint: "至少 8 位。修改后需要重新登录" }],
+        (v) => api("POST", "/admin/admins/" + enc(me) + "/password", { password: v.password }));
+      if (r) showLogin("密码已修改，请重新登录");
+    };
+    $$("[data-reset]").forEach((b) => b.onclick = async () => {
+      if (!(await confirmBox("重置 " + b.dataset.reset + " 的密码", "生成一个新密码，对方的所有会话立即失效。", "重置"))) return;
+      const r = await act(() => api("POST", "/admin/admins/" + enc(b.dataset.reset) + "/password"));
+      if (r) reveal("新密码", b.dataset.reset + " 的新密码", r.password);
+    });
+    $$("[data-del]").forEach((b) => b.onclick = async () => {
+      if (!(await confirmBox("删除管理员 " + b.dataset.del, "对方立即无法登录。", "删除"))) return;
+      if (await act(() => api("DELETE", "/admin/admins/" + enc(b.dataset.del)), "已删除")) route();
+    });
+  };
+
+  boot();
+})();
+</script>
+</body>
+</html>

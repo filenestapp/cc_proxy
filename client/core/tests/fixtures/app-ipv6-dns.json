@@ -1,0 +1,127 @@
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": [
+        "172.19.0.1/30"
+      ],
+      "auto_route": true,
+      "stack": "mixed",
+      "strict_route": true
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "egress",
+      "server": "203.0.113.2",
+      "server_port": 20007,
+      "uuid": "8f1b5a52-7a8e-4c9f-9d0e-0d0b7d3c1a11",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "-6Iuhkm557EwDtXUpdumSWb_nulhGCWMwpC238ioMhM",
+          "short_id": "0123456789abcdef"
+        }
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "domain_suffix": [
+          "example.com"
+        ],
+        "network": "udp",
+        "port": 443,
+        "action": "reject"
+      },
+      {
+        "ip_cidr": [
+          "198.18.0.0/15"
+        ],
+        "network": "udp",
+        "port": 443,
+        "action": "reject"
+      },
+      {
+        "domain_suffix": [
+          "example.com"
+        ],
+        "outbound": "egress"
+      },
+      {
+        "ip_cidr": [
+          "198.18.0.0/15"
+        ],
+        "outbound": "egress"
+      }
+    ],
+    "final": "direct",
+    "auto_detect_interface": true,
+    "default_domain_resolver": "direct-dns",
+    "find_process": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "fakeip",
+        "tag": "fakeip",
+        "inet4_range": "198.18.0.0/15"
+      },
+      {
+        "type": "udp",
+        "tag": "direct-dns",
+        "server": "2606:4700:4700::1111"
+      }
+    ],
+    "rules": [
+      {
+        "domain_suffix": [
+          "example.com"
+        ],
+        "query_type": [
+          "AAAA"
+        ],
+        "action": "predefined",
+        "rcode": "NOERROR"
+      },
+      {
+        "domain_suffix": [
+          "example.com"
+        ],
+        "server": "fakeip"
+      }
+    ],
+    "final": "direct-dns"
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "store_fakeip": true
+    }
+  }
+}

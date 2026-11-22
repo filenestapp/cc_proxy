@@ -1,0 +1,107 @@
+# Hermetic e2e harness with two networks:
+#   lan 10.88.0.0/24  the user side: clients reach the exit node at 10.88.0.2
+#   wan 10.99.0.0/24  "the internet": target sites and the exit node's IP block
+# The exit node also routes lan -> wan, so lan clients reach wan only through their default route.
+# That matters for TUN clients: sing-box keeps on-link (LAN) destinations out of the TUN.
+#
+#   egress     lan 10.88.0.2, wan 10.99.0.2 + 10.99.0.3-.7 (the egress IP block); router lan<->wan
+#   echo       wan 10.99.0.10  target site reporting the source IP it sees (TCP 8080, UDP 9090 and 443)
+#                              aliases target.test (in client_policy) and other.test (not)
+#   decoy      wan 10.99.0.20  TLS 1.3 site used as the Reality handshake target; also a blocked destination
+#   clients    lan 10.88.0.30  one SOCKS client per device, ports 2081-2088
+#   tun-domain lan 10.88.0.31  TUN client, domain mode, device alice-mac
+#   tun-app    lan 10.88.0.32  TUN client, app mode, device bob-mac
+#   probe      lan 10.88.0.40  runs probe.py
+name: egress-e2e
+
+x-singbox: &singbox
+  image: ghcr.io/sagernet/sing-box:v1.14.4
+
+x-tunclient: &tunclient
+  image: egress-e2e-tunclient
+  cap_add: [NET_ADMIN]
+  devices: ["/dev/net/tun:/dev/net/tun"]
+  extra_hosts: ["other.test:10.99.0.10"]   # the local name for the non-target site; target.test is never in hosts
+  depends_on: [egress]
+  healthcheck: { test: ["CMD", "test", "-f", "/tmp/ready"], interval: 1s, retries: 30 }
+
+services:
+  decoy:
+    image: caddy:2.10.2-alpine
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
+    volumes: ["./Caddyfile:/etc/caddy/Caddyfile:ro"]
+    networks: { wan: { ipv4_address: 10.99.0.20 } }
+
+  echo:
+    image: python:3.12-alpine
+    cap_add: [NET_ADMIN]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ip route add 10.88.0.0/24 via 10.99.0.2
+        exec python -u /app/echo.py
+    volumes: ["./echo.py:/app/echo.py:ro"]
+    networks:
+      wan:
+        ipv4_address: 10.99.0.10
+        aliases: [target.test, other.test]
+
+  egress:
+    <<: *singbox
+    cap_add: [NET_ADMIN]
+    sysctls: { net.ipv4.ip_forward: 1 }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        wan=$$(ip -o -4 addr | awk '/ 10\.99\.0\./ {print $$2; exit}')
+        for ip in $$(cat /etc/egress/ips.txt); do ip addr add "$$ip/32" dev "$$wan"; done
+        ip -4 addr show dev "$$wan"
+        exec sing-box run -c /etc/egress/server.json
+    volumes: ["./out/egress:/etc/egress:ro"]
+    depends_on: [decoy, echo]
+    networks:
+      lan: { ipv4_address: 10.88.0.2 }
+      wan: { ipv4_address: 10.99.0.2 }
+
+  clients:
+    <<: *singbox
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for f in /etc/clients/*.json; do sing-box run -c "$$f" & done
+        wait
+    volumes: ["./out/clients:/etc/clients:ro"]
+    depends_on: [egress]
+    networks: { lan: { ipv4_address: 10.88.0.30 } }
+
+  # Domain mode: the system resolver is the TUN DNS address, as /etc/resolver does on macOS (here for every
+  # name; non-target names are forwarded to Docker's DNS). App mode: the resolver is an off-link address that
+  # only answers because the TUN hijacks DNS.
+  tun-domain:
+    <<: *tunclient
+    build: { context: ., dockerfile: Dockerfile.tunclient }
+    environment: { RESOLVER: 172.19.0.2, GATEWAY: 10.88.0.2 }
+    volumes: ["./out/tun/domain.json:/etc/client/config.json:ro", "./client_probe.py:/app/client_probe.py:ro"]
+    networks: { lan: { ipv4_address: 10.88.0.31 } }
+
+  tun-app:
+    <<: *tunclient
+    depends_on: [egress, tun-domain]   # tun-domain builds the shared image
+    environment: { RESOLVER: 192.0.2.53, GATEWAY: 10.88.0.2 }
+    volumes: ["./out/tun/app.json:/etc/client/config.json:ro", "./client_probe.py:/app/client_probe.py:ro"]
+    networks: { lan: { ipv4_address: 10.88.0.32 } }
+
+  probe:
+    image: python:3.12-alpine
+    command: ["sleep", "infinity"]
+    volumes: ["./probe.py:/app/probe.py:ro"]
+    networks: { lan: { ipv4_address: 10.88.0.40 } }
+
+networks:
+  lan:
+    ipam:
+      config: [{ subnet: 10.88.0.0/24, gateway: 10.88.0.1, ip_range: 10.88.0.128/25 }]
+  wan:
+    ipam:
+      config: [{ subnet: 10.99.0.0/24, gateway: 10.99.0.1, ip_range: 10.99.0.128/25 }]

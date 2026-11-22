@@ -1,0 +1,47 @@
+# Local demo for trying the desktop app on this computer.
+#   control plane  runs on the host (127.0.0.1:18450), started by up.sh
+#   egress         exit node "local": agent + sing-box; entry ports 20000-20009 published on 127.0.0.1;
+#                  egress IP 10.99.0.3 on the demo "internet"
+#   echo           echo.test:8080 replies with the source IP it sees (10.99.0.3 when it went through the tunnel)
+#   decoy          TLS site used as the Reality handshake target
+name: ccproxy-demo
+
+services:
+  decoy:
+    image: caddy:2.10.2-alpine
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
+    volumes: ["../../../egress/test/Caddyfile:/etc/caddy/Caddyfile:ro"]
+    networks: { wan: { ipv4_address: 10.99.0.20 } }
+
+  echo:
+    image: python:3.12-alpine
+    command: ["python", "-u", "/app/echo.py"]
+    volumes: ["../../../egress/test/echo.py:/app/echo.py:ro"]
+    networks:
+      wan:
+        ipv4_address: 10.99.0.10
+        aliases: [echo.test, echo.example.com]   # macOS answers *.test locally, so the app is tested with echo.example.com
+
+  egress:
+    image: egress-e2e-tunclient   # python + sing-box, built from egress/test/Dockerfile.tunclient
+    build: { context: ../../../egress/test, dockerfile: Dockerfile.tunclient }
+    cap_add: [NET_ADMIN]
+    environment: { CP_AGENT_TOKEN: "${AGENT_TOKEN}" }
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports: ["127.0.0.1:20000-20009:20000-20009"]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        wan=$$(ip -o -4 addr | awk '/ 10\.99\.0\./ {print $$2; exit}')
+        mkdir -p /etc/sing-box
+        exec python3 -u /src/controlplane/agent.py --cp http://host.docker.internal:18450 --iface "$$wan" \
+          --config /etc/sing-box/config.json --state-dir /var/lib/agent --interval 2 --settle 2 --run
+    volumes: ["../../../controlplane:/src/controlplane:ro", "../../../egress:/src/egress:ro"]
+    depends_on: [decoy, echo]
+    networks: { wan: { ipv4_address: 10.99.0.2 } }
+
+networks:
+  wan:
+    ipam:
+      config: [{ subnet: 10.99.0.0/24, gateway: 10.99.0.1, ip_range: 10.99.0.128/25 }]

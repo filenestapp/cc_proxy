@@ -1,0 +1,19 @@
+# Inventories hold private keys and device credentials.
+/.remember/
+.env
+.env.*
+!.env.example
+/settings.json
+*.token
+.DS_Store
+egress/inventory.json
+egress/test/out/
+__pycache__/
+controlplane/test/out/
+*.db
+*.db-wal
+*.db-shm
+client/target/
+client/desktop/src-tauri/binaries/
+client/desktop/src-tauri/gen/
+client/test/local-demo/out/
