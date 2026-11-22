@@ -140,13 +140,9 @@ CP_PROBE_TOKEN=... controlplane/prober.py --cp $CP_URL --vantage sh-telecom
 
 agent 用 `--reload-cmd` 模式时，加上 `--status-cmd "systemctl is-active --quiet sing-box"` 才能上报 sing-box 是否在运行，否则显示为未知。
 
-**看板**：就是管理后台的「概览」页，每 10 秒从 `/admin/topology` 刷新一次，按主机分组：
+**Network topology** refreshes from `/admin/topology` every 10 seconds. Search by host name, public entry, or egress IP, and use **Needs attention** to surface failures and warnings. Select a host to see agent status, entry-probe history, assigned users and devices, and egress-probe results. **Manage host** opens its settings. **Open IP inventory** scopes the table to that host.
 
-- **每台主机**：地址、端口范围、用户数；agent 心跳和配置是否已同步；入口延迟（最快的探测点和各探测点的历史）。
-- **该主机的出口 IP 卡片**：分配状态、用户和各自的端口（独享或共享）、设备数、每个目标的结果和历史。
-- **其他入口**（`monitor.entries`）单独一行。
-
-超过 3 分钟没有新数据的卡片标为黄色，探测失败的标为红色。
+The inventory shows allocation and probe health in separate columns. A probe result more than three minutes old is stale. **System**, **Light**, and **Dark** are available at sign-in and in the console header. The browser remembers the choice.
 
 ## 自动告警
 

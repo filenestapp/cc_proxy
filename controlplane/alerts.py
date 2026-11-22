@@ -77,8 +77,8 @@ def validate_settings(cfg):
 
 def message(alert, status):
     if status == "resolved":
-        return "[已解除] %s" % alert["summary"]  # the condition cleared: recovered, or e.g. the IP was banned
-    return "[%s] %s" % ("严重" if alert["severity"] == "critical" else "警告", alert["summary"])
+        return "[Resolved] %s" % alert["summary"]  # the condition cleared: recovered, or e.g. the IP was banned
+    return "[%s] %s" % ("Critical" if alert["severity"] == "critical" else "Warning", alert["summary"])
 
 
 def payload(fmt, alert, status):
@@ -135,11 +135,11 @@ class Alerter:
                     continue
                 users = ip["users"]
                 sev = "critical" if users else "warning"
-                who = "，影响用户 %s" % ", ".join(users) if users else "（未分配）"
+                who = " (affected users: %s)" % ", ".join(users) if users else " (unassigned)"
                 out["egress_probe_failing/%s/%s" % (ip["ip"], p["target"])] = (
                     "egress_probe_failing", ip["ip"], sev,
-                    "出口 IP %s 访问 %s 连续 %d 次失败：%s%s。确认被目标封禁后可执行 cpctl ban %s"
-                    % (ip["ip"], p["target"], k, p["detail"], who, ip["ip"]), 0)
+                    "Egress IP %s failed to reach %s %d times in a row%s%s. If the target confirmed a ban, run cpctl ban %s."
+                    % (ip["ip"], p["target"], k, ": " + p["detail"] if p["detail"] else "", who, ip["ip"]), 0)
 
         for e in topo["entries"]:
             bad = [p for p in e["probes"] if failing(p)]
@@ -147,23 +147,23 @@ class Alerter:
             for p in bad:
                 out["entry_unreachable/%s/%s" % (e["name"], p["source"])] = (
                     "entry_unreachable", e["name"], "critical" if all_bad else "warning",
-                    "入口 %s（%s:%s）从探测点 %s 连续 %d 次不可达：%s%s"
-                    % (e["name"], e["host"], e["port"], p["source"], k, p["detail"],
-                       "；所有探测点均不可达" if all_bad else ""), 0)
+                    "Entry %s (%s:%s) was unreachable from %s %d times in a row%s%s."
+                    % (e["name"], e["host"], e["port"], p["source"], k, ": " + p["detail"] if p["detail"] else "",
+                       ". All probe locations failed" if all_bad else ""), 0)
 
         for a in topo["agents"]:
             if a["age"] > cfg["agent_stale_seconds"]:
                 out["agent_stale/%s" % a["name"]] = (
                     "agent_stale", a["name"], "critical",
-                    "出口机 %s 已 %d 秒没有心跳" % (a["name"], a["age"]), 0)
+                    "Egress host %s has missed heartbeats for %d seconds." % (a["name"], a["age"]), 0)
                 continue  # a silent agent's other fields are stale too
             if a["singbox_running"] is False:
                 out["singbox_down/%s" % a["name"]] = (
-                    "singbox_down", a["name"], "critical", "出口机 %s 上的 sing-box 未运行" % a["name"], 0)
+                    "singbox_down", a["name"], "critical", "sing-box is stopped on egress host %s." % a["name"], 0)
             if not a["in_sync"] and topo["server_config_etags"].get(a["name"]):
                 out["agent_out_of_sync/%s" % a["name"]] = (
                     "agent_out_of_sync", a["name"], "warning",
-                    "出口机 %s 的配置未同步到当前版本" % a["name"], cfg["out_of_sync_seconds"])
+                    "The configuration on egress host %s is out of sync." % a["name"], cfg["out_of_sync_seconds"])
         return out
 
     # -- state machine -----------------------------------------------------------------------------------

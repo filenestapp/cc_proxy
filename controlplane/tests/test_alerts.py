@@ -179,12 +179,12 @@ class AlerterTest(unittest.TestCase):
         self.assertEqual(self.s.version(), v)
 
     def test_payload_formats(self):
-        al = {"rule": "r", "subject": "s", "severity": "critical", "summary": "出口 IP 1.2.3.4 失败",
+        al = {"rule": "r", "subject": "s", "severity": "critical", "summary": "Egress IP 1.2.3.4 failed",
               "started_at": 1, "fired_at": 1, "resolved_at": None}
-        self.assertEqual(alerts.payload("slack", al, "firing"), {"text": "[严重] 出口 IP 1.2.3.4 失败"})
+        self.assertEqual(alerts.payload("slack", al, "firing"), {"text": "[Critical] Egress IP 1.2.3.4 failed"})
         self.assertEqual(alerts.payload("feishu", al, "resolved"),
-                         {"msg_type": "text", "content": {"text": "[已解除] 出口 IP 1.2.3.4 失败"}})
-        self.assertEqual(alerts.payload("dingtalk", al, "firing")["text"]["content"], "[严重] 出口 IP 1.2.3.4 失败")
+                         {"msg_type": "text", "content": {"text": "[Resolved] Egress IP 1.2.3.4 failed"}})
+        self.assertEqual(alerts.payload("dingtalk", al, "firing")["text"]["content"], "[Critical] Egress IP 1.2.3.4 failed")
         self.assertEqual(alerts.payload("generic", al, "firing")["status"], "firing")
 
     def test_settings_are_validated(self):
@@ -226,7 +226,7 @@ class AlertApiTest(tc.ServerFixture):
         self.assertEqual(status, 200)
         status, out = self.admin("POST", "/admin/alerts/test")
         self.assertEqual([r["ok"] for r in out["webhooks"]], [True, False])
-        self.assertEqual(Sink.received, [{"msg_type": "text", "content": {"text": "[警告] 告警通道测试"}}])
+        self.assertEqual(Sink.received, [{"msg_type": "text", "content": {"text": "[Warning] Test alert"}}])
 
     def test_bad_alert_settings_are_409(self):
         self.assertEqual(self.admin("PUT", "/admin/settings", {"alerts": {"webhooks": [{"url": "nope"}]}})[0], 409)

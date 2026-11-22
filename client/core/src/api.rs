@@ -57,10 +57,10 @@ impl std::error::Error for LoginError {}
 impl std::fmt::Display for LoginError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LoginError::WrongCredentials => write!(f, "用户名或密码错误"),
-            LoginError::TooManyAttempts => write!(f, "登录失败次数过多，请稍后再试"),
+            LoginError::WrongCredentials => write!(f, "Incorrect username or password."),
+            LoginError::TooManyAttempts => write!(f, "Too many sign-in attempts. Try again later."),
             LoginError::Rejected(m) => write!(f, "{m}"),
-            LoginError::Network(m) => write!(f, "无法连接控制端：{m}"),
+            LoginError::Network(m) => write!(f, "Could not reach the control plane: {m}"),
         }
     }
 }

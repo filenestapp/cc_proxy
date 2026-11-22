@@ -122,10 +122,10 @@ impl App {
                             Session::clear_locked(&self.paths);
                             *self.me.lock().unwrap() = None;
                             v.signed_in = false;
-                            v.message = "登录已失效（可能在其他地方被退出或被管理员停用），请重新登录".into();
+                            v.message = "Your session expired or was revoked. Sign in again.".into();
                             return v;
                         }
-                        Err(e) => v.message = format!("无法连接控制端：{e}"),
+                        Err(e) => v.message = format!("Could not reach the control plane: {e}"),
                     }
                 }
             }
@@ -177,7 +177,7 @@ async fn logout(app: tauri::State<'_, Arc<App>>) -> Result<View, String> {
             }
         }
         Session::clear(&app.paths);
-        app.set_message("已退出登录");
+        app.set_message("Signed out.");
         app.view(false)
     })
     .await
@@ -188,10 +188,10 @@ async fn logout(app: tauri::State<'_, Arc<App>>) -> Result<View, String> {
 async fn connect(app: tauri::State<'_, Arc<App>>) -> Result<View, String> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let session = Session::load(&app.paths).ok_or("请先登录")?;
-        match sync_once(&app.paths, &session, DEFAULT_MODE).map_err(|e| format!("获取配置失败：{e:#}"))? {
-            SyncOutcome::SignedOut => return Err("登录已失效，请重新登录".into()),
-            SyncOutcome::Unassigned(m) => return Err(format!("还没有分配出口：{m}")),
+        let session = Session::load(&app.paths).ok_or("Sign in first.")?;
+        match sync_once(&app.paths, &session, DEFAULT_MODE).map_err(|e| format!("Could not load the configuration: {e:#}"))? {
+            SyncOutcome::SignedOut => return Err("Your session expired. Sign in again.".into()),
+            SyncOutcome::Unassigned(m) => return Err(format!("No egress IP is assigned: {m}")),
             _ => {}
         }
         let _ = fs::remove_file(app.paths.stop());
@@ -201,7 +201,7 @@ async fn connect(app: tauri::State<'_, Arc<App>>) -> Result<View, String> {
         let args = elevate::tunnel_args(&app.paths, &sidecar("sing-box"), HEARTBEAT_TIMEOUT_SECS);
         if let Err(e) = elevate::launch(&sidecar("ccproxy"), &args) {
             app.want_connected.store(false, Ordering::SeqCst);
-            return Err(format!("没有获得管理员授权：{e:#}"));
+            return Err(format!("Administrator authorization was unavailable: {e:#}"));
         }
         app.set_message("");
         Ok(app.view(true))
@@ -236,11 +236,11 @@ fn background(app: Arc<App>) {
                 match sync_once(&app.paths, &s, DEFAULT_MODE) {
                     Ok(SyncOutcome::SignedOut) => {
                         app.request_stop();
-                        app.set_message("登录已失效（可能被管理员停用），隧道已断开");
+                        app.set_message("Your session expired or was revoked. The tunnel disconnected.");
                     }
                     Ok(SyncOutcome::Unassigned(m)) => {
                         app.request_stop();
-                        app.set_message(format!("出口已被收回，隧道已断开：{m}"));
+                        app.set_message(format!("The egress assignment was revoked and the tunnel disconnected: {m}"));
                     }
                     Ok(_) => {}
                     Err(_) => {} // offline for a moment: keep running on the current config

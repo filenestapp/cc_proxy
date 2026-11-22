@@ -580,7 +580,7 @@ def alerts_list(h, store, _p, _b, query):
 @route("POST", "/admin/alerts/test", "admin")
 def alerts_test(h, store, _p, _b, _q):
     """Send a test notification to every configured webhook; report each result."""
-    sample = {"rule": "test", "subject": "test", "severity": "warning", "summary": "告警通道测试",
+    sample = {"rule": "test", "subject": "test", "severity": "warning", "summary": "Test alert",
               "started_at": None, "fired_at": None, "resolved_at": None}
     results = []
     for hook in h.alerter.settings()["webhooks"]:
