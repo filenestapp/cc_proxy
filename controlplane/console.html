@@ -259,6 +259,12 @@
   .modal .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   .modal .err { color: var(--bad); font-size: 13px; min-height: 1.3em; }
   .secret { font-family: var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px; overflow-wrap: anywhere; user-select: all; }
+  .os-tabs { display: flex; gap: 6px; margin: 10px 0 4px; }
+  .os-tabs button[aria-selected="true"] { background: var(--accent, #2563eb); color: #fff; border-color: transparent; }
+  .install-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+  .install-row .form-row { flex: 1 1 200px; margin: 0; }
+  .install-cmd { display: flex; gap: 6px; align-items: flex-start; }
+  .install-cmd pre { flex: 1; min-width: 0; }
   pre.snippet { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; margin: 8px 0 0; }
   .toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px; z-index: 30; max-width: calc(100vw - 32px); }
   .toast { background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-width: 420px; }
@@ -466,6 +472,7 @@
       try { await navigator.clipboard.writeText(secret); toast("Copied"); } catch (e) { toast("Could not copy. Select the value and copy it manually.", true); }
     };
     $("[data-ok]", ov).onclick = close;
+    return ov;
   }
 
   // ---- auth -----------------------------------------------------------------------------------------------
@@ -861,12 +868,82 @@
     if (current(token)) refreshEvery(10, load, token);
   };
 
-  function agentCommand(token) {
-    return "CP_AGENT_TOKEN=" + token + " python3 controlplane/agent.py \\\n  --cp " + location.origin + " --iface eth0 \\\n  --reload-cmd \"systemctl reload sing-box\" --status-cmd \"systemctl is-active --quiet sing-box\"";
+  // Install / uninstall commands for an exit host. The token is never part of a command: the installer asks for it
+  // with hidden input. Commands come from /admin/install-commands, which accepts only an https control plane URL.
+  const INSTALL_OS = [["macos", "macOS"], ["linux", "Linux"], ["windows", "Windows"]];
+  function installPanel(root) {
+    let os = "macos";
+    root.innerHTML = `
+      <div class="install-row">
+        <div class="form-row"><label for="inst-cp">Control plane URL the host uses</label>
+          <input id="inst-cp" value="${esc(location.origin)}" placeholder="https://cp.example:8443"></div>
+        <div class="form-row" id="inst-iface-row" hidden><label for="inst-iface">Interface for routed egress IPs (optional)</label>
+          <input id="inst-iface" placeholder="eth0"></div>
+      </div>
+      <div class="os-tabs" role="tablist" aria-label="Operating system">${INSTALL_OS.map(([k, l]) =>
+        `<button type="button" role="tab" data-os="${k}" aria-selected="${k === os}">${l}</button>`).join("")}</div>
+      <p class="small muted" id="inst-how"></p>
+      <div class="install-cmd"><pre class="snippet" id="inst-cmd"></pre><button type="button" data-copy-cmd="inst-cmd">Copy</button></div>
+      <p class="small muted" style="margin:10px 0 0">Uninstall (stops the services and removes the files and the stored token):</p>
+      <div class="install-cmd"><pre class="snippet" id="inst-uninstall"></pre><button type="button" data-copy-cmd="inst-uninstall">Copy</button></div>
+      <p class="small muted" id="inst-note"></p>`;
+    const how = {
+      macos: "Run in Terminal on the Mac. sudo asks for the Mac password, then the installer asks for the agent token (hidden). Add the Mac's local IPv4 (for example 192.168.1.20) as this host's egress IP; set the public entry address to the router's public address or DNS name and forward the port range to the Mac.",
+      linux: "Run on the host. sudo asks for your password, then the installer asks for the agent token (hidden). Name an interface only when the provider routes extra egress IPs to this host; otherwise its existing address is the egress IP.",
+      windows: "Run in PowerShell started with \"Run as administrator\". The installer asks for the agent token (hidden).",
+    };
+    let timer;
+    let seq = 0;  // only the response to the latest request may fill the commands
+    // Any change makes the shown commands stale at once: clear them and disable Copy until the new ones arrive, so a
+    // quick Copy after switching OS or editing the URL can never copy the previous command.
+    function invalidate() {
+      seq++;
+      $("#inst-cmd", root).textContent = $("#inst-uninstall", root).textContent = "";
+      root.querySelectorAll("[data-copy-cmd]").forEach((b) => { b.disabled = true; });
+      $("#inst-note", root).textContent = "Loading the command…";
+      $("#inst-iface-row", root).hidden = os !== "linux";
+      $("#inst-how", root).textContent = how[os];
+      return seq;
+    }
+    async function refresh() {
+      const mine = invalidate(), want = os;
+      const q = "cp=" + encodeURIComponent($("#inst-cp", root).value.trim()) +
+        (want === "linux" && $("#inst-iface", root).value.trim() ? "&iface=" + encodeURIComponent($("#inst-iface", root).value.trim()) : "");
+      let cmds, error;
+      try { cmds = await api("GET", "/admin/install-commands?" + q); } catch (e) { error = e; }
+      if (mine !== seq || want !== os) return;  // a newer tab or input superseded this response
+      if (error) { $("#inst-note", root).textContent = error.message; return; }
+      $("#inst-cmd", root).textContent = cmds[want].install;
+      $("#inst-uninstall", root).textContent = cmds[want].uninstall;
+      $("#inst-note", root).textContent = "";
+      root.querySelectorAll("[data-copy-cmd]").forEach((b) => { b.disabled = false; });
+    }
+    root.addEventListener("click", async (e) => {
+      const tab = e.target.closest("[data-os]");
+      if (tab) {
+        os = tab.dataset.os;
+        root.querySelectorAll("[data-os]").forEach((b) => b.setAttribute("aria-selected", String(b === tab)));
+        refresh();
+      }
+      const copy = e.target.closest("[data-copy-cmd]");
+      if (copy) {
+        const text = $("#" + copy.dataset.copyCmd, root).textContent;
+        if (copy.disabled || !text) return;
+        try { await navigator.clipboard.writeText(text); toast("Command copied"); } catch (err) { toast("Could not copy. Select the command and copy it manually.", true); }
+      }
+    });
+    root.addEventListener("input", () => { invalidate(); clearTimeout(timer); timer = setTimeout(refresh, 300); });
+    refresh();
   }
   function showAgentToken(host, token) {
-    reveal("Host " + host + " agent token", "Use this token to start the agent on the egress host.", token,
-      '<p class="small muted" style="margin:12px 0 0">Run on the egress host with its network interface name:</p><pre class="snippet">' + esc(agentCommand(token)) + "</pre>");
+    const ov = reveal("Host " + host + " agent token", "Paste this token when the installer asks for it.", token,
+      '<h4 style="margin:16px 0 0">Install on the exit host</h4><div id="install-panel"></div>');
+    installPanel($("#install-panel", ov));
+  }
+  function showInstall(host) {
+    const { ov, close } = overlay("<h3>Install or update the agent on " + esc(host) + '</h3><p class="small muted">The installer asks for the host\'s agent token. Lost it? Rotate the token; the old one stops working at once.</p><div id="install-panel"></div><div class="buttons"><button type="button" class="primary" data-ok>Done</button></div>');
+    installPanel($("#install-panel", ov));
+    $("[data-ok]", ov).onclick = close;
   }
   const hostFields = (h = {}) => [
     { name: "public_host", label: "Public entry address", value: h.public_host, required: true, placeholder: "192.0.2.2 or hostname", hint: "Clients connect to this address." },
@@ -914,6 +991,7 @@
       <div class="toolbar"><a href="#/hosts">All hosts</a>
         ${node ? statusBadge(node.health) : ""}<span class="spacer"></span>
         <button class="primary" id="edit" type="button">Edit host</button>
+        <button id="install" type="button">Install command</button>
         <button id="rotate" type="button">Rotate agent token</button>
         <button class="danger" id="del" type="button">Delete host</button>
       </div>
@@ -945,8 +1023,9 @@
     $("#edit").onclick = async () => {
       if (await form("Edit host " + name, hostFields(h), (v) => api("PUT", "/admin/hosts/" + enc(name), hostBody(v)))) { toast("Saved. The agent will apply the change on its next sync."); route(); }
     };
+    $("#install").onclick = () => showInstall(name);
     $("#rotate").onclick = async () => {
-      if (!(await confirmBox("Rotate agent token", "The previous token expires immediately. Update the agent with the new token and restart it to restore reporting.", "Rotate"))) return;
+      if (!(await confirmBox("Rotate agent token", "The previous token expires immediately. Then run the install command again on the host and paste the new token: the rerun keeps the configuration and restarts the agent.", "Rotate"))) return;
       const r = await act(() => api("POST", "/admin/hosts/" + enc(name) + "/rotate-token"));
       if (r) showAgentToken(name, r.agent_token);
     };
