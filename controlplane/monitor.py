@@ -143,7 +143,10 @@ class Monitor:
         with store.lock:
             agents = [{
                 "name": a["name"], "last_seen": a["last_seen"], "age": now - a["last_seen"],
-                "config_etag": a["config_etag"], "in_sync": a["config_etag"] == current.get(a["name"]),
+                "config_etag": a["config_etag"],
+                # Same ETag is not enough when the agent says the installed generation is not proved yet (it may
+                # be re-proving the same content after another version ran). Legacy agents send no apply_state.
+                "in_sync": a["config_etag"] == current.get(a["name"]) and a["apply_state"] in (None, "confirmed"),
                 "singbox_running": None if a["singbox_running"] is None else bool(a["singbox_running"]),
                 "apply_error": a["apply_error"], "apply_state": a["apply_state"],
             } for a in store.db.execute("SELECT * FROM agents WHERE name IN (SELECT name FROM hosts) ORDER BY name")]

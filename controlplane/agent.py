@@ -14,30 +14,44 @@ The heartbeat reports the *applied* version: the one the running sing-box has be
 successful SIGHUP or reload command, or the file on disk prove nothing about what the process serves, so the agent
 asks the process itself:
 
-  * Every installed candidate gets its own random secret in `experimental.clash_api` (listening on --confirm-api,
-    loopback only). The agent owns that block; one sent by the control plane is replaced.
-  * After start / SIGHUP / --reload-cmd, the agent calls GET /version on that API with the candidate's secret.
-    sing-box only accepts the secret of the configuration it has loaded, so 200 proves this candidate is running;
-    401 proves the process is still serving another configuration.
+  * Every installed candidate gets two independent random values: a secret for `experimental.clash_api`
+    (listening on --confirm-api, a numeric loopback address) and a marker, the tag of an extra `block` outbound
+    that no rule uses. The agent owns that API block; one sent by the control plane is replaced.
+  * After start / SIGHUP / --reload-cmd, the agent calls GET /proxies on that API with the candidate's secret, and
+    the candidate counts as running only when the answer lists the marker. The marker is never sent, so only a
+    process that loaded the candidate can return it: an old sing-box (with or without API authentication) or an
+    unrelated listener on the port cannot. Redirects are not followed and the answer is size-bounded.
+  * An answer from sing-box without the marker (401 for the new secret, or a list without it) proves the process
+    still serves another configuration.
 
 The heartbeat carries apply_state:
   confirmed   the installed version is the applied one
   pending     written, not reloaded yet
-  failed      the reload failed, sing-box exited, or the running process still answers with another
-              configuration's secret; retried every cycle (also after a 304)
-  unknown     reloaded, but the API never answered, so nothing can be said; re-checked every cycle, reloaded
-              again after UNKNOWN_RETRY_SECONDS
+  failed      the reload failed, sing-box exited, or the running process still serves another configuration;
+              retried every cycle (also after a 304)
+  unknown     reloaded, but no usable answer (nothing listening, a redirect, an answer that is not sing-box's),
+              so nothing can be said; re-checked every cycle, reloaded again after UNKNOWN_RETRY_SECONDS
 Until a candidate is confirmed the previous applied version stays in the heartbeat, with apply_error saying why.
+
+Files: a checked candidate is kept in --state-dir/candidate-config.json and copied to --config only for a reload;
+the last confirmed configuration is kept in --state-dir/confirmed-config.json. When a reload fails definitively
+(the reload command fails, sing-box exits, or it still serves another configuration) the confirmed configuration
+is put back at --config atomically, so a later restart or reboot starts what worked; the candidate stays in the
+state directory and is tried again (also after a 304). A sing-box that is still running is left alone. With --run,
+if the agent's own sing-box exited, it is started once more on the confirmed configuration, and only a version it
+confirms is reported. Such a candidate (it took sing-box down) is retried after FAILED_OUTAGE_RETRY_SECONDS rather
+than every cycle. An unknown result keeps the candidate at --config: it may well be running.
 
 systemd deployment (official sing-box package, whose sing-box.service reloads with SIGHUP):
 
   --reload-cmd "systemctl reload sing-box" --status-cmd "systemctl is-active --quiet sing-box"
 
 and keep --confirm-api (default 127.0.0.1:9095) free on the exit host. The official builds include the Clash API
-(`sing-box version` lists with_clash_api). To check by hand what is running:
-  curl -H "Authorization: Bearer $(jq -r .experimental.clash_api.secret /etc/sing-box/config.json)" \
-       http://127.0.0.1:9095/version
-200 means the file on disk is the configuration sing-box is serving; 401 means it is not (reload it).
+(`sing-box version` lists with_clash_api) and the block outbound. To check by hand what is running:
+  c=/etc/sing-box/config.json
+  curl -s -H "Authorization: Bearer $(jq -r .experimental.clash_api.secret $c)" http://127.0.0.1:9095/proxies \
+    | jq --arg m "$(jq -r '.outbounds[] | select(.tag | startswith("confirm-")) | .tag' $c)" '.proxies | has($m)'
+true means the file on disk is the configuration sing-box is serving; anything else means it is not (reload it).
 
 Health (for the dashboard): every cycle the agent posts a heartbeat. Every --probe-interval seconds a probe
 round starts on its own thread (never overlapping the previous one): each URL in /agent/probe-targets is
@@ -52,8 +66,10 @@ Reload, one of:
 """
 import argparse
 import collections
+import http.client
 import json
 import os
+import ipaddress
 import secrets
 import shlex
 import signal
@@ -76,13 +92,43 @@ PROBE_WORKERS = 16
 PROBE_BUFFER = 4000          # results kept for reporting; the oldest are dropped beyond this
 REPORT_MAX = 2000            # results per report (the control plane accepts up to this many)
 DEFAULT_CONFIRM_API = "127.0.0.1:9095"
+CONFIRM_MAX_BYTES = 4 << 20  # /proxies lists every outbound: about 200 bytes each, so this covers thousands
+MARKER_PREFIX = "confirm-"
 UNKNOWN_RETRY_SECONDS = 60   # reload again when a reload stayed unconfirmed (API silent) this long
+FAILED_OUTAGE_RETRY_SECONDS = 60  # retry a candidate that made sing-box exit only after this long
+PREVIOUS = "previous"        # on_disk: the --config found before this process wrote one (never claimed applied)
 
 CONFIRMED, PENDING, FAILED, UNKNOWN = "confirmed", "pending", "failed", "unknown"
 
 
 class NotLoaded(Exception):
     """The running sing-box demonstrably does not serve the candidate."""
+
+
+def loopback_api(addr):
+    """Check --confirm-api: a numeric loopback IP and a port, "127.0.0.1:9095" or "[::1]:9095". Returns it in the
+    form both sing-box and URLs accept. Host names are refused (resolution could lead anywhere), and so is any
+    address that is not loopback."""
+    host, sep, port = str(addr).rpartition(":")
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    try:
+        ip = ipaddress.ip_address(host)
+        port = int(port)
+    except ValueError:
+        raise ValueError("--confirm-api must be a numeric loopback address with a port, e.g. 127.0.0.1:9095")
+    if not sep or not ip.is_loopback or not 1 <= port <= 65535:
+        raise ValueError("--confirm-api must be a numeric loopback address with a port, e.g. 127.0.0.1:9095")
+    return "%s:%d" % ("[%s]" % ip if ip.version == 6 else ip, port)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None  # urllib then raises HTTPError for the 3xx itself
+
+
+# Loopback only: no proxy from the environment, no redirects.
+_CONFIRM_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 
 
 def log(msg):
@@ -100,7 +146,15 @@ class Agent:
         self.installed = None   # version written to the config file; may still await a successful reload
         self.apply_error = None # why the installed version is not applied yet
         self.apply_state = None # PENDING / FAILED / UNKNOWN while installed != applied
-        self.secret = None      # confirmation secret embedded in the installed version
+        self.secret = None      # API secret embedded in the installed version (sent when asking)
+        self.marker = None      # tag of the installed version's marker outbound (never sent; must come back)
+        self.applied_secret = None  # the same two values for the applied (confirmed) version
+        self.applied_marker = None
+        self.on_disk = None     # generation at --config: a version's marker, PREVIOUS, or None (not written yet)
+        self.kept_previous = False  # this process saved the --config it found at start to previous_copy
+        self.retry_after = 0.0  # time.monotonic() before which a failed candidate is not retried
+        self.confirm_address = loopback_api(args.confirm_api)
+        self.confirm_url = "http://" + self.confirm_address
         self.last_reload = None # time.monotonic() of the last reload attempt
         self.pending = None     # newer version waiting for the settle window: {etag, body, first, last}
         self.rejected = None    # version that failed `sing-box check`
@@ -137,11 +191,18 @@ class Agent:
         with urllib.request.urlopen(req, timeout=10, context=self.ctx) as resp:
             return json.loads(resp.read())
 
+    @property
+    def settled(self):
+        """The installed generation is the confirmed one. Compared by marker, not ETag: a version staged again with
+        the same content as the confirmed one (A -> B -> A) is a new generation and must be proved again, since B
+        may be what runs."""
+        return self.installed is not None and self.marker == self.applied_marker
+
     def state(self):
         """What the heartbeat says about the installed version (None before anything was installed)."""
         if self.installed is None:
             return None
-        return CONFIRMED if self.installed == self.applied else self.apply_state
+        return CONFIRMED if self.settled else self.apply_state
 
     def singbox_running(self):
         if self.args.run:
@@ -212,7 +273,7 @@ class Agent:
         try:
             self.post("/agent/report", {"agent": self.args.name, "config_etag": self.applied,
                                         "apply_state": self.state(), "apply_error": self.apply_error,
-                                        "candidate_etag": None if self.installed == self.applied else self.installed,
+                                        "candidate_etag": None if self.settled else self.installed,
                                         "singbox_running": self.singbox_running(), "probes": probes})
         except (OSError, ValueError):
             with self.probe_lock:  # keep them for the next heartbeat (the deque bound still applies)
@@ -258,50 +319,113 @@ class Agent:
         experimental = config.setdefault("experimental", {}) if isinstance(config, dict) else None
         if not isinstance(experimental, dict):
             raise ValueError("server config is not a JSON object with an object 'experimental'")
-        # Per-candidate secret: only a sing-box that loaded this file accepts it (see the module docstring).
-        secret = secrets.token_hex(16)
-        experimental["clash_api"] = {"external_controller": self.args.confirm_api, "secret": secret}
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(self.args.config)), suffix=".json")
-        with os.fdopen(fd, "wb") as f:
-            f.write(json.dumps(config, indent=2).encode())
-        os.chmod(tmp, 0o600)
+        outbounds = config.setdefault("outbounds", [])
+        if not isinstance(outbounds, list):
+            raise ValueError("server config 'outbounds' is not a list")
+        # Per-candidate values (see the module docstring): the secret authorizes the question, the marker is the
+        # answer only a sing-box running this file can give. Appended, so the first (default) outbound is unchanged.
+        secret, marker = secrets.token_hex(16), MARKER_PREFIX + secrets.token_hex(16)
+        experimental["clash_api"] = {"external_controller": self.confirm_address, "secret": secret}
+        outbounds.append({"type": "block", "tag": marker})
+        tmp = self._write_temp(self.args.state_dir, json.dumps(config, indent=2).encode())
         check = subprocess.run([self.args.singbox, "check", "-c", tmp], capture_output=True, text=True)
         if check.returncode != 0:
             os.unlink(tmp)
             self.rejected = etag
             log("version %s rejected by sing-box check, keeping current config: %s" % (etag, check.stderr.strip()))
             return False
-        os.replace(tmp, self.args.config)
-        self.installed, self.secret = etag, secret
-        self.apply_state, self.apply_error = PENDING, "installed, not yet reloaded"
+        os.replace(tmp, self.candidate_copy)  # --config is untouched until the reload
+        self.installed, self.secret, self.marker = etag, secret, marker
+        self.apply_state, self.apply_error, self.retry_after = PENDING, "installed, not yet reloaded", 0.0
         log("wrote config version %s" % etag)
         return True
 
-    def loaded_evidence(self):
-        """Ask the running sing-box whether it serves the installed candidate: "loaded" (it accepted the
-        candidate's secret), "other" (it answered and refused it, so it runs another configuration) or None (no
-        answer: unknown)."""
-        req = urllib.request.Request("http://%s/version" % self.args.confirm_api)
-        req.add_header("Authorization", "Bearer " + (self.secret or ""))
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # loopback: never via a proxy
-        try:
-            with opener.open(req, timeout=2) as resp:
-                if resp.status == 200 and "version" in json.loads(resp.read()):
-                    return "loaded"
-                return None
-        except urllib.error.HTTPError as e:
-            return "other" if e.code in (401, 403) else None
-        except (OSError, ValueError):
-            return None
+    @property
+    def candidate_copy(self):
+        return os.path.join(self.args.state_dir, "candidate-config.json")
 
-    def await_confirmation(self):
-        """After a start / reload: True once sing-box serves the candidate, None if it never answered within
+    @property
+    def confirmed_copy(self):
+        return os.path.join(self.args.state_dir, "confirmed-config.json")
+
+    @staticmethod
+    def _write_temp(directory, data):
+        fd, tmp = tempfile.mkstemp(dir=directory, suffix=".json")
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        return tmp
+
+    def _place(self, src, dst):
+        """Atomically make dst a copy of src (temp file in dst's directory, then rename)."""
+        with open(src, "rb") as f:
+            data = f.read()
+        os.replace(self._write_temp(os.path.dirname(os.path.abspath(dst)), data), dst)
+
+    @property
+    def previous_copy(self):
+        return os.path.join(self.args.state_dir, "previous-config.json")
+
+    def _put_candidate(self):
+        """Stage exactly the installed candidate at --config (by its marker: a newer candidate always replaces an
+        older, unconfirmed one). The first time this process writes --config, whatever was there before (from an
+        earlier run) is kept as the working configuration to fall back to."""
+        if self.on_disk == self.marker:
+            return
+        if self.on_disk is None and self.applied is None and os.path.isfile(self.args.config):
+            self._place(self.args.config, self.previous_copy)
+            self.kept_previous = True
+            log("kept the existing %s as the fallback configuration" % self.args.config)
+        self._place(self.candidate_copy, self.args.config)
+        self.on_disk = self.marker
+
+    def _restore_working(self):
+        """Put the working configuration back at --config: the last confirmed version, or (before this process
+        confirmed anything) the --config found at start. False when there is neither."""
+        if self.applied is not None:
+            src, generation, what = self.confirmed_copy, self.applied_marker, "config version %s" % self.applied
+        elif self.kept_previous:
+            src, generation, what = self.previous_copy, PREVIOUS, "the configuration found at start"
+        else:
+            return False
+        if self.on_disk != generation:
+            self._place(src, self.args.config)
+            self.on_disk = generation
+            log("restored %s at %s" % (what, self.args.config))
+        return True
+
+    def loaded_evidence(self, version="candidate"):
+        """Ask the running sing-box whether it serves the installed candidate (or, with version="confirmed", the
+        applied version): "loaded" (its outbound list has that version's marker), "other" (sing-box answered
+        without it: another configuration is running) or None (no usable answer: unknown)."""
+        secret, marker = ((self.secret, self.marker) if version == "candidate"
+                          else (self.applied_secret, self.applied_marker))
+        req = urllib.request.Request(self.confirm_url + "/proxies")
+        req.add_header("Authorization", "Bearer " + (secret or ""))
+        try:
+            with _CONFIRM_OPENER.open(req, timeout=2) as resp:
+                body = resp.read(CONFIRM_MAX_BYTES + 1)
+                if resp.status != 200 or len(body) > CONFIRM_MAX_BYTES:
+                    return None
+            proxies = json.loads(body).get("proxies")
+        except urllib.error.HTTPError as e:
+            return "other" if e.code in (401, 403) else None  # sing-box refusing this candidate's secret
+        except (OSError, ValueError, AttributeError, http.client.HTTPException):
+            return None  # includes a truncated or malformed HTTP answer: no usable evidence
+        if not isinstance(proxies, dict):
+            return None  # not sing-box's answer
+        return "loaded" if marker is not None and marker in proxies else "other"
+
+    def await_confirmation(self, version="candidate"):
+        """After a start / reload: True once sing-box serves `version`, None if it never answered within
         --confirm-timeout. Raises NotLoaded when it keeps serving another configuration or exits."""
         deadline = time.monotonic() + self.args.confirm_timeout
         while True:
             if self.args.run and self.child.poll() is not None:
                 raise NotLoaded("sing-box exited with %s" % self.child.returncode)
-            evidence = self.loaded_evidence()
+            evidence = self.loaded_evidence(version)
             if evidence == "loaded":
                 return True
             if time.monotonic() >= deadline:
@@ -327,43 +451,85 @@ class Agent:
             log("ran %s" % self.args.reload_cmd)
 
     def _confirmed(self):
-        self.applied, self.apply_state, self.apply_error = self.installed, None, None
+        """sing-box proved it runs the installed candidate. If --config was rolled back meanwhile (a reload that
+        looked failed took effect late), that exact candidate goes back first, so a restart keeps it."""
+        if self.on_disk != self.marker:
+            self._place(self.candidate_copy, self.args.config)
+            self.on_disk = self.marker
+        self._place(self.candidate_copy, self.confirmed_copy)
+        self.applied, self.applied_secret, self.applied_marker = self.installed, self.secret, self.marker
+        self.apply_state, self.apply_error = None, None
         log("sing-box confirmed running config version %s" % self.applied)
         return True
 
-    def restart(self):
-        """--run: start sing-box again after it exited, and wait for it to confirm what it loaded (the installed
-        file). Waiting also keeps the next cycle from signalling a process that is still starting."""
+    def _fail(self, reason):
+        """A definitive failure for the candidate: the working configuration goes back on disk, and with --run an
+        exited sing-box is started once on it."""
+        self.apply_state, self.apply_error = FAILED, reason
+        log("version %s not running, will retry: %s" % (self.installed, reason))
+        restored = self._restore_working()
+        if self.args.run and self.child is not None and self.child.poll() is not None:
+            self.retry_after = time.monotonic() + FAILED_OUTAGE_RETRY_SECONDS
+            if restored:
+                self._recover()
+
+    def _recover(self):
+        """--run: start sing-box on the restored working configuration, once. Only a confirmed version is ever
+        reported; the configuration found at start has no version this process could claim."""
+        what = "version %s" % self.applied if self.applied is not None else "the configuration found at start"
         try:
             self.reload()
-            loaded = self.await_confirmation()
+            ok = self.await_confirmation("confirmed") if self.applied is not None else None
         except (OSError, NotLoaded) as e:
-            if self.installed != self.applied:
-                self.apply_state = FAILED
-            self.apply_error = "restart failed: %s" % e
+            self.apply_error += "; recovery on %s failed: %s" % (what, e)
             log(self.apply_error)
             return
-        if loaded and self.installed != self.applied:
+        log("recovery on %s: %s" % (what, "confirmed" if ok else "started, not confirmed"))
+
+    def restart(self):
+        """--run: start sing-box again after it exited, and wait for it to confirm what --config holds. Waiting
+        also keeps the next cycle from signalling a process that is still starting."""
+        if not self.settled and self.on_disk == self.marker:
+            version = "candidate"
+        elif self.applied is not None and self.on_disk == self.applied_marker:
+            version = "confirmed"
+        else:
+            version = None  # the configuration found at start: started, never claimed
+        try:
+            self.reload()
+            loaded = self.await_confirmation(version) if version else None
+        except (OSError, NotLoaded) as e:
+            if version == "candidate":
+                self._fail("restart failed: %s" % e)
+            else:
+                self.apply_error = "restart failed: %s" % e
+                log(self.apply_error)
+            return
+        if loaded and version == "candidate":
             self._confirmed()
 
     def apply(self):
         """Reload until the running sing-box confirms the installed version; only then is it reported applied."""
-        if self.installed is None or self.installed == self.applied:
+        if self.installed is None or self.settled:
             return False
         if self.apply_state in (FAILED, UNKNOWN) and self.loaded_evidence() == "loaded":
             return self._confirmed()  # an earlier reload took effect late
-        if self.apply_state == UNKNOWN and time.monotonic() - self.last_reload < UNKNOWN_RETRY_SECONDS:
+        now = time.monotonic()
+        if self.apply_state == UNKNOWN and now - self.last_reload < UNKNOWN_RETRY_SECONDS:
             return False
+        if self.apply_state == FAILED and now < self.retry_after:
+            return False
+        self._put_candidate()
         try:
             self.reload()
             loaded = self.await_confirmation()
         except (OSError, subprocess.CalledProcessError, NotLoaded) as e:
-            self.apply_state, self.apply_error = FAILED, "reload failed: %s" % e
-            log("version %s installed but not running, will retry: %s" % (self.installed, e))
+            self._fail("reload failed: %s" % e)
             return False
         if not loaded:
+            # Inconclusive: the candidate may be running, so it stays at --config.
             self.apply_state = UNKNOWN
-            self.apply_error = "reload not confirmed: no answer from sing-box at %s" % self.args.confirm_api
+            self.apply_error = "reload not confirmed: no answer from sing-box at %s" % self.confirm_address
             log("version %s: %s" % (self.installed, self.apply_error))
             return False
         return self._confirmed()
@@ -388,6 +554,14 @@ class Agent:
             time.sleep(self.args.interval)
 
 
+def _confirm_api_arg(value):
+    try:
+        loopback_api(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
+    return value
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--cp", required=True, help="control plane base URL")
@@ -408,8 +582,9 @@ def main(argv=None):
     p.add_argument("--status-cmd", help='with --reload-cmd: exit 0 when sing-box is up, '
                                        'e.g. "systemctl is-active --quiet sing-box" (reported only; it does '
                                        'not confirm a reload)')
-    p.add_argument("--confirm-api", default=DEFAULT_CONFIRM_API,
-                   help="loopback address for the sing-box API the agent uses to confirm what is running")
+    p.add_argument("--confirm-api", default=DEFAULT_CONFIRM_API, type=_confirm_api_arg,
+                   help="numeric loopback address:port for the sing-box API the agent uses to confirm what is "
+                        "running (default %(default)s)")
     p.add_argument("--confirm-timeout", type=float, default=15,
                    help="seconds to wait for sing-box to confirm a reloaded config")
     p.add_argument("--once", action="store_true", help="sync once and exit")

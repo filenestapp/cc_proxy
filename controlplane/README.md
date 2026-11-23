@@ -107,6 +107,22 @@ CP_AGENT_TOKEN=<这台主机的 agent 令牌> controlplane/agent.py --cp https:/
   --reload-cmd "systemctl reload sing-box" --status-cmd "systemctl is-active --quiet sing-box"
 ```
 
+**确认生效。** agent 只在正在运行的 sing-box 证明自己加载了新配置后，才在心跳里上报新版本（`apply_state`：`confirmed` / `pending` / `failed` / `unknown`）。进程存活、`systemctl reload` 成功、磁盘文件内容都不算证据：
+
+- 每个候选配置带两个独立随机值：`experimental.clash_api` 的 secret（监听 `--confirm-api`，默认 `127.0.0.1:9095`，只接受数字回环地址），以及一个不被任何规则使用的 `block` 出站的 tag（marker）。
+- 重载后 agent 用 secret 请求 `GET /proxies`，返回里有这个 marker 才算生效。marker 从不发出去，旧进程（即使 API 没设 secret）或端口上的其他服务都给不出它；不跟随重定向，响应大小有上限。
+- 重载明确失败（命令失败、进程退出、仍在跑别的配置）时，上一份已确认的配置原子地放回 `--config`，候选配置留在 `--state-dir` 里，之后（包括收到 304 时）继续重试；仍在运行的 sing-box 不去动它。`--run` 模式下若自己管理的 sing-box 已退出，就用已确认的配置再启动一次。没有答复时状态为 `unknown`，候选配置留在 `--config`。
+
+systemd 部署（官方 sing-box 包，`sing-box.service` 用 SIGHUP 重载，官方构建包含 `with_clash_api`）只需保证 `--confirm-api` 端口空闲。手工核对当前运行的是不是磁盘上的配置：
+
+```bash
+c=/etc/sing-box/config.json
+curl -s -H "Authorization: Bearer $(jq -r .experimental.clash_api.secret $c)" http://127.0.0.1:9095/proxies \
+  | jq --arg m "$(jq -r '.outbounds[] | select(.tag | startswith("confirm-")) | .tag' $c)" '.proxies | has($m)'
+```
+
+输出 `true` 表示正在运行的就是这份配置。
+
 **合并重载。** 每次重载都会断开当时正在进行的连接，所以 agent 不会一看到新版本就装：
 
 - 新版本出现后，要等 `--settle` 秒（默认 10）内不再有更新的版本，才执行一次 `sing-box check`、安装和重载。
@@ -123,7 +139,7 @@ CP_AGENT_TOKEN=<这台主机的 agent 令牌> controlplane/agent.py --cp https:/
 
 | 来源 | 内容 | 频率 |
 | --- | --- | --- |
-| agent 心跳 | 已安装的配置版本、sing-box 是否在运行 | 每个同步周期（`--interval`） |
+| agent 心跳 | sing-box 已确认在运行的配置版本、新版本的生效状态（`apply_state`）、sing-box 是否在运行 | 每个同步周期（`--interval`） |
 | agent 出口探测 | 从每个出口 IP（连接绑定到该 IP）请求 `monitor.egress_targets` 里的每个 URL，记录状态码和到响应头的延迟。2xx/3xx 算成功；403、429 这类「目标开始拒绝这个 IP」的信号算失败 | `--probe-interval`，默认 60 秒 |
 | `prober.py` | 从探测点到每个入口的 TCP 建连延迟，取 3 次中最好的一次。入口包括每台有用户的出口机（以主机名命名，测它正在使用的最小入口端口）和 `monitor.entries` 里配的其他入口 | `--interval`，默认 30 秒 |
 
