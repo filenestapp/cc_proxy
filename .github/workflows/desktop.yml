@@ -1,0 +1,75 @@
+# Build CC Proxy desktop packages for macOS, Windows, and Linux.
+# Each job bundles the ccproxy helper and a SHA-256-verified sing-box next to the app, then uploads the installers.
+# Unsigned: macOS notarisation and Windows code signing need certificates and are not configured here.
+name: desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["client/**", ".github/workflows/desktop.yml"]
+  pull_request:
+    paths: ["client/**", ".github/workflows/desktop.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    defaults:
+      run:
+        shell: bash
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup target add ${{ matrix.target }}
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Sidecars (ccproxy + verified sing-box)
+        run: desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
+      - name: Core and CLI checks
+        run: cargo clippy --locked -p ccproxy -p ccproxy-core --target ${{ matrix.target }} -- -D warnings
+      - name: Build app
+        working-directory: client/desktop/src-tauri
+        run: npx --yes @tauri-apps/cli@2.12.6 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccproxy-${{ matrix.target }}
+          path: |
+            client/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            client/target/${{ matrix.target }}/release/bundle/**/*.app
+            client/target/${{ matrix.target }}/release/bundle/**/*.exe
+            client/target/${{ matrix.target }}/release/bundle/**/*.deb
+            client/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
