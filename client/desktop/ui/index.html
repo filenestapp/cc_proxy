@@ -55,7 +55,7 @@
   ::selection { background: var(--accent); color: var(--accent-ink); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   main { padding: 0 22px 22px; max-width: 520px; margin-inline: auto; }
-  .app-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 60px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+  .app-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-height: 66px; padding: 8px 0; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
   .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 680; }
   .brand svg { color: var(--accent); flex: none; }
   h1, h2, p, dl, ol { margin: 0; }
@@ -71,7 +71,9 @@
   button.primary:not(:disabled):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   button.primary.on { background: var(--accent-soft); color: var(--accent); }
   button.primary.on:not(:disabled):hover { background: var(--panel); border-color: var(--accent); }
-  .appearance { font-size: 12px; }
+  .preferences { display: flex; flex-wrap: wrap; gap: 8px; }
+  .preference { display: grid; gap: 3px; color: var(--muted); font-size: 12px; }
+  .preference select { min-height: 32px; color: var(--ink); }
   .fields { display: grid; gap: 12px; margin: 17px 0; }
   .field label { font-weight: 600; font-size: 13px; display: block; margin-bottom: 4px; }
   .field small { color: var(--muted); font-weight: 400; }
@@ -106,6 +108,9 @@
   .notice { margin-top: 12px; border-radius: 8px; padding: 8px 10px; font-size: 13px; background: var(--warn-soft); color: var(--warn); overflow-wrap: anywhere; }
   .notice.bad { background: var(--bad-soft); color: var(--bad); }
   .notice:empty { display: none; }
+  .diagnostics { color: var(--muted); margin-top: 8px; font-size: 12px; }
+  .diagnostics summary { cursor: pointer; }
+  .diagnostics p { margin-top: 4px; font-family: var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -116,39 +121,60 @@
       <svg aria-hidden="true" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a4 4 0 0 0 6 .4l3-3a4 4 0 0 0-5.7-5.7l-1.6 1.6M14 11a4 4 0 0 0-6-.4l-3 3a4 4 0 0 0 5.7 5.7l1.6-1.6"/></svg>
       CC Proxy
     </div>
-    <select class="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+    <div class="preferences">
+      <label class="preference">
+        <span data-i18n="language">Language</span>
+        <select id="language">
+          <option value="system" data-i18n="system">System</option>
+          <option value="en" lang="en" data-i18n="english">English</option>
+          <option value="zh-Hans" lang="zh-Hans" data-i18n="simplified_chinese"></option>
+        </select>
+      </label>
+      <label class="preference">
+        <span data-i18n="appearance">Appearance</span>
+        <select class="appearance">
+          <option value="system" data-i18n="system">System</option>
+          <option value="light" data-i18n="light">Light</option>
+          <option value="dark" data-i18n="dark">Dark</option>
+        </select>
+      </label>
+    </div>
   </header>
 
   <p id="loading" class="detail" role="status">Loading session…</p>
-  <form id="login" hidden>
-    <h1>Sign in</h1>
+  <form id="login" hidden novalidate>
+    <h1 data-i18n="sign_in">Sign in</h1>
     <div class="fields">
       <div class="field">
-        <label for="server">Control plane URL</label>
-        <input id="server" name="server" type="url" placeholder="https://cp.example.com" required>
+        <label for="server" data-i18n="server">Control plane URL</label>
+        <input id="server" name="server" type="url" placeholder="https://cp.example.com" required data-required-message="server_required">
       </div>
       <div class="field">
-        <label for="username">Username</label>
-        <input id="username" name="username" autocomplete="username" required>
+        <label for="username" data-i18n="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required data-required-message="username_required">
       </div>
       <div class="field">
-        <label for="password">Password</label>
+        <label for="password" data-i18n="password">Password</label>
         <div class="password-field">
-          <input id="password" name="password" type="password" autocomplete="current-password" required>
-          <button id="show-password" type="button" aria-label="Show password" aria-pressed="false">
+          <input id="password" name="password" type="password" autocomplete="current-password" required data-required-message="password_required">
+          <button id="show-password" type="button" aria-label="Show password" aria-pressed="false" data-i18n-label="show_password">
             <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>
           </button>
         </div>
       </div>
       <div class="field">
-        <label for="device">Device name <small>(optional)</small></label>
+        <label for="device"><span data-i18n="device_name">Device name</span> <small data-i18n="optional">(optional)</small></label>
         <input id="device" name="device" placeholder="This computer" aria-describedby="device-hint">
-        <p class="field-hint" id="device-hint">Up to 64 characters without spaces or slashes.</p>
+        <p class="field-hint" id="device-hint" data-i18n="device_name_hint">Up to 64 characters without spaces or slashes.</p>
       </div>
     </div>
     <button class="primary" id="login-btn" type="submit">Sign in</button>
-    <div class="notice bad" id="login-err" role="alert"></div>
-    <p class="note">This app saves a revocable device credential after sign-in.</p>
+    <div class="notice" id="login-err" role="alert"></div>
+    <details id="login-details" class="diagnostics" hidden>
+      <summary data-i18n="technical_details">Technical details</summary>
+      <p id="login-details-text"></p>
+    </details>
+    <p class="note" data-i18n="credential_note">This app saves a revocable device credential after sign-in.</p>
   </form>
 
   <section id="home" hidden>
@@ -160,40 +186,96 @@
     </div>
     <button class="primary" id="toggle" type="button">Connect</button>
     <div class="notice" id="msg" role="status"></div>
+    <details id="home-details" class="diagnostics" hidden>
+      <summary data-i18n="technical_details">Technical details</summary>
+      <p id="home-details-text"></p>
+    </details>
     <section class="connection-path" aria-labelledby="path-heading">
-      <h2 id="path-heading">Connection path</h2>
+      <h2 id="path-heading" data-i18n="connection_path">Connection path</h2>
       <ol class="route" id="route">
-        <li><strong>Entry</strong><code id="v-entry">—</code><small id="v-host" class="detail"></small></li>
-        <li><strong>Egress IP</strong><code id="v-egress">Unassigned</code></li>
+        <li><strong data-i18n="entry">Entry</strong><code id="v-entry">—</code><small id="v-host" class="detail"></small></li>
+        <li><strong data-i18n="egress_ip">Egress IP</strong><code id="v-egress">Unassigned</code></li>
       </ol>
     </section>
     <dl class="account">
-      <dt>Account</dt><dd id="v-user">—</dd>
-      <dt>Device</dt><dd id="v-device">—</dd>
+      <dt data-i18n="account">Account</dt><dd id="v-user">—</dd>
+      <dt data-i18n="device">Device</dt><dd id="v-device">—</dd>
     </dl>
     <div class="footer"><span id="v-server"></span><button id="logout" type="button">Sign out</button></div>
   </section>
 </main>
-<script>
+<script type="module">
+import { messages, resolveLanguage } from "./locale.mjs";
+
 (() => {
   const $ = (id) => document.getElementById(id);
   const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args || {});
-  let view, pending = "", operationError = "", stopping = false, revision = 0;
+  const language = $("language");
+  const loginInputs = [$("server"), $("username"), $("password"), $("device")];
+  const languageKey = "ccproxy.language";
+  const webviewLanguages = () => navigator.languages?.length ? navigator.languages : [navigator.language];
+  let systemLanguages = webviewLanguages();
+  let activeLanguage, readingSystemLanguage = false;
+  let view, pending = "", operationError = null, stopping = false, revision = 0;
+  let loadingFailed = false;
 
   const STATES = {
-    idle: ["Disconnected", "Connect to route selected domains through your assigned egress IP."],
-    stopped: ["Disconnected", "Connect to route selected domains through your assigned egress IP."],
-    connecting: ["Connecting…", "Waiting for authorization and tunnel startup."],
-    running: ["Connected", "Selected domains use the proxy."],
-    failed: ["Connection failed", "Check the connection and try again."],
+    stopped: ["disconnected", "connect_help"],
+    starting: ["connecting", "connect_wait"],
+    connecting: ["connecting", "connect_wait"],
+    running: ["connected", "connected_help"],
+    failed: ["connection_failed", "connection_failed_help"],
   };
 
+  const t = (key) => messages[activeLanguage][key] ?? messages.en.operation_failed;
   const text = (id, value) => {
     const el = $(id);
     if (el.textContent !== value) el.textContent = value;
   };
 
+  function applyLanguage() {
+    const next = resolveLanguage(language.value, systemLanguages);
+    if (next === activeLanguage) return;
+    activeLanguage = next;
+    document.documentElement.lang = next;
+    for (const element of document.querySelectorAll("[data-i18n]")) {
+      element.textContent = t(element.dataset.i18n);
+    }
+    for (const element of document.querySelectorAll("[data-i18n-label]")) {
+      element.setAttribute("aria-label", t(element.dataset.i18nLabel));
+    }
+    for (const input of loginInputs) {
+      if (input.dataset.validationError) input.setCustomValidity(t(input.dataset.validationError));
+    }
+    render();
+  }
+
+  async function readSystemLanguages() {
+    if (language.value !== "system" || readingSystemLanguage) return;
+    readingSystemLanguage = true;
+    try {
+      const preferred = await invoke("system_languages");
+      systemLanguages = preferred.length ? preferred : webviewLanguages();
+    } catch {
+      systemLanguages = webviewLanguages();
+    } finally {
+      readingSystemLanguage = false;
+    }
+    applyLanguage();
+  }
+
+  function showNotice(id, detailsId, notice, tunnelDetails = "") {
+    const key = notice?.key || "operation_failed";
+    text(id, notice ? t(key) : "");
+    const details = $(detailsId);
+    const diagnostic = notice?.detail || notice?.message || (typeof notice === "string" ? notice : "") || tunnelDetails;
+    text(detailsId + "-text", diagnostic);
+    details.hidden = !diagnostic;
+    if (details.hidden) details.open = false;
+  }
+
   function render() {
+    text("loading", t(loadingFailed ? "loading_failed" : "loading"));
     if (!view) return;
     const v = view;
     const state = v.tunnel;
@@ -203,35 +285,38 @@
     $("login").hidden = v.signed_in;
     $("home").hidden = !v.signed_in;
     $("login-btn").disabled = Boolean(pending);
-    text("login-btn", pending === "login" ? "Signing in…" : "Sign in");
+    text("login-btn", t(pending === "login" ? "signing_in" : "sign_in"));
     if (!v.signed_in) {
-      $("device").placeholder = v.device || "This computer";
-      text("login-err", operationError || v.message || "");
+      $("device").placeholder = v.device || t("this_computer");
+      const notice = operationError || v.message;
+      showNotice("login-err", "login-details", notice);
+      $("login-err").classList.toggle("bad", Boolean(notice && notice.key !== "signed_out"));
       return;
     }
 
-    const [title, sub] = STATES[state] || ["Disconnected", ""];
+    const [title, sub] = STATES[state] || STATES.stopped;
     const connecting = pending === "connect";
     const disconnecting = pending === "disconnect" || stopping;
     $("connection-status").dataset.state = connecting ? "connecting" : state;
-    text("state-title", connecting ? "Connecting…" : disconnecting ? "Disconnecting…" : title);
-    text("state-sub", connecting ? STATES.connecting[1] : disconnecting ? "Waiting for the tunnel to stop." : v.tunnel_message || sub);
+    text("state-title", t(connecting ? "connecting" : disconnecting ? "disconnecting" : title));
+    text("state-sub", t(connecting ? "connect_wait" : disconnecting ? "disconnect_wait" : sub));
     $("route").dataset.connected = String(state === "running" && !disconnecting);
     $("toggle").classList.toggle("on", on || disconnecting);
-    text("toggle", connecting ? "Connecting…" : disconnecting ? "Disconnecting…" : on ? "Disconnect" : "Connect");
+    text("toggle", t(connecting ? "connecting" : disconnecting ? "disconnecting" : on ? "disconnect" : "connect"));
     $("toggle").disabled = Boolean(pending || stopping || (!v.entry && !on));
     $("logout").disabled = Boolean(pending);
-    text("logout", pending === "logout" ? "Signing out…" : "Sign out");
+    text("logout", t(pending === "logout" ? "signing_out" : "sign_out"));
 
     text("v-user", v.user || "—");
     text("v-device", v.device || "—");
-    text("v-egress", v.egress_ip || "Unassigned");
+    text("v-egress", v.egress_ip || t("unassigned"));
     const host = v.entry?.host;
     text("v-entry", host ? (host.includes(":") ? "[" + host + "]" : host) + ":" + v.entry.port : "—");
     text("v-host", v.host || "");
     text("v-server", v.server || "");
     if (v.server) $("server").value = v.server;
-    text("msg", operationError || v.message || (!v.entry ? "Ask your administrator to assign an egress IP." : ""));
+    const notice = operationError || v.message || (!v.entry ? { key: "no_egress_assigned" } : null);
+    showNotice("msg", "home-details", notice, connecting || disconnecting ? "" : v.tunnel_message);
     $("msg").classList.toggle("bad", Boolean(operationError));
   }
 
@@ -244,7 +329,10 @@
       view = result;
       render();
     } catch (error) {
-      if (!view) text("loading", "Could not load the session. Retrying…");
+      if (!view) {
+        loadingFailed = true;
+        render();
+      }
       console.error(error);
     }
   }
@@ -253,7 +341,7 @@
     if (pending) return;
     revision++;
     pending = command;
-    operationError = "";
+    operationError = null;
     render();
     try {
       view = await invoke(command, args);
@@ -263,7 +351,7 @@
       }
       if (command === "disconnect") stopping = true;
     } catch (error) {
-      operationError = String(error?.message || error);
+      operationError = error;
     } finally {
       pending = "";
       render();
@@ -275,23 +363,55 @@
     $("show-password").setAttribute("aria-pressed", String(show));
   }
 
+  function checkLoginInput(input) {
+    if (input.validity.valueMissing || (input.id === "username" && !input.value.trim())) {
+      return input.dataset.requiredMessage;
+    }
+    if (input.id === "server" && (input.validity.typeMismatch || !/^https?:\/\//.test(input.value))) {
+      return "invalid_server";
+    }
+    if (input.id === "device") {
+      const name = input.value.trim();
+      if (Array.from(name).length > 64 || /[\/ \t\n]/.test(name)) return "invalid_device";
+    }
+    return "";
+  }
+
+  try {
+    const stored = localStorage.getItem(languageKey);
+    if (stored === "en" || stored === "zh-Hans") language.value = stored;
+  } catch { /* Storage may be unavailable. */ }
+  language.addEventListener("change", () => {
+    try { localStorage.setItem(languageKey, language.value); } catch { /* Keep the in-memory selection. */ }
+    applyLanguage();
+    readSystemLanguages();
+  });
+  window.addEventListener("languagechange", readSystemLanguages);
+  window.addEventListener("focus", readSystemLanguages);
+  applyLanguage();
+  readSystemLanguages();
+
   appearance.bind();
   $("show-password").addEventListener("click", () => showPassword($("password").type === "password"));
-  const device = $("device");
-  device.addEventListener("input", () => device.setCustomValidity(""));
+  for (const input of loginInputs) {
+    input.addEventListener("input", () => {
+      delete input.dataset.validationError;
+      input.setCustomValidity("");
+    });
+  }
   $("login").addEventListener("submit", (event) => {
     event.preventDefault();
-    const deviceName = device.value.trim();
-    if (Array.from(deviceName).length > 64 || /[\/ \t\n]/.test(deviceName)) {
-      device.setCustomValidity("Use up to 64 characters without spaces or slashes.");
-      device.reportValidity();
-      return;
+    for (const input of loginInputs) {
+      const key = checkLoginInput(input);
+      input.dataset.validationError = key;
+      input.setCustomValidity(key ? t(key) : "");
+      if (!input.reportValidity()) return;
     }
     run("login", {
       server: $("server").value,
       username: $("username").value,
       password: $("password").value,
-      device: deviceName,
+      device: $("device").value.trim(),
     });
   });
   $("toggle").addEventListener("click", () => run(view.want_connected || view.tunnel === "running" ? "disconnect" : "connect"));

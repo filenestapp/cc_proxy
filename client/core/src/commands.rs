@@ -14,6 +14,7 @@
 use crate::session::{self, Paths, Session};
 use crate::sync::SyncOutcome;
 use anyhow::Result;
+use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -73,12 +74,35 @@ pub enum Connected {
     Superseded,
 }
 
-/// Connect for the stored session. Errors are messages for the user, as before.
-pub fn connect(paths: &Paths, tunnel: &Tunnel, fx: &dyn Effects) -> Result<Connected, String> {
-    let session = Session::load(paths).ok_or("Sign in first.")?;
-    match fx.sync(paths, &session).map_err(|e| format!("Could not load the configuration: {e:#}"))? {
-        SyncOutcome::SignedOut => return Err("Your session expired. Sign in again.".into()),
-        SyncOutcome::Unassigned(m) => return Err(format!("No egress IP is assigned: {m}")),
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConnectError {
+    SignInRequired,
+    SessionExpired,
+    Unassigned(String),
+    Configuration(String),
+    Authorization(String),
+}
+
+impl fmt::Display for ConnectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SignInRequired => f.write_str("Sign in first."),
+            Self::SessionExpired => f.write_str("Your session expired. Sign in again."),
+            Self::Unassigned(detail) => write!(f, "No egress IP is assigned: {detail}"),
+            Self::Configuration(detail) => write!(f, "Could not load the configuration: {detail}"),
+            Self::Authorization(detail) => write!(f, "Administrator authorization was unavailable: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for ConnectError {}
+
+/// Connect for the stored session, preserving the error reason separately from diagnostic text.
+pub fn connect(paths: &Paths, tunnel: &Tunnel, fx: &dyn Effects) -> Result<Connected, ConnectError> {
+    let session = Session::load(paths).ok_or(ConnectError::SignInRequired)?;
+    match fx.sync(paths, &session).map_err(|error| ConnectError::Configuration(format!("{error:#}")))? {
+        SyncOutcome::SignedOut => return Err(ConnectError::SessionExpired),
+        SyncOutcome::Unassigned(detail) => return Err(ConnectError::Unassigned(detail)),
         SyncOutcome::Superseded => return Ok(Connected::Superseded),
         SyncOutcome::Updated | SyncOutcome::Unchanged => {}
     }
@@ -92,9 +116,9 @@ pub fn connect(paths: &Paths, tunnel: &Tunnel, fx: &dyn Effects) -> Result<Conne
     *tunnel.connected_at.lock().unwrap_or_else(|e| e.into_inner()) = now();
     touch(&paths.heartbeat());
     tunnel.want_connected.store(true, Ordering::SeqCst);
-    if let Err(e) = fx.launch_supervisor(paths) {
+    if let Err(error) = fx.launch_supervisor(paths) {
         tunnel.want_connected.store(false, Ordering::SeqCst);
-        return Err(format!("Administrator authorization was unavailable: {e:#}"));
+        return Err(ConnectError::Authorization(format!("{error:#}")));
     }
     Ok(Connected::Started)
 }

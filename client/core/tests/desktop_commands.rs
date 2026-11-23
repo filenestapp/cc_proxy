@@ -5,7 +5,7 @@
 
 use anyhow::{anyhow, Result};
 use ccproxy_core::api::Api;
-use ccproxy_core::commands::{self, Connected, Effects, LoggedOut, Tunnel};
+use ccproxy_core::commands::{self, ConnectError, Connected, Effects, LoggedOut, Tunnel};
 use ccproxy_core::session::{Paths, Session};
 use ccproxy_core::sync::{sync_once, SyncOutcome};
 use std::fs;
@@ -203,24 +203,24 @@ fn a_sign_in_during_the_launch_waits_until_the_launch_is_done() {
 }
 
 #[test]
-fn connect_errors_are_reported_as_before() {
+fn connect_errors_preserve_their_reason_and_diagnostics() {
     let paths = state("connect-errors");
     let tunnel = Tunnel::default();
     let mut fx = Fx::new();
-    assert_eq!(commands::connect(&paths, &tunnel, &fx), Err("Sign in first.".into()));
+    assert_eq!(commands::connect(&paths, &tunnel, &fx), Err(ConnectError::SignInRequired));
     signed_in(&paths, "http://127.0.0.1:9");
     fx.sync = Box::new(|_, _| Ok(SyncOutcome::SignedOut));
-    assert_eq!(commands::connect(&paths, &tunnel, &fx), Err("Your session expired. Sign in again.".into()));
+    assert_eq!(commands::connect(&paths, &tunnel, &fx), Err(ConnectError::SessionExpired));
     fx.sync = Box::new(|_, _| Ok(SyncOutcome::Unassigned("no exit".into())));
-    assert_eq!(commands::connect(&paths, &tunnel, &fx), Err("No egress IP is assigned: no exit".into()));
+    assert_eq!(commands::connect(&paths, &tunnel, &fx), Err(ConnectError::Unassigned("no exit".into())));
     fx.sync = Box::new(|_, _| Err(anyhow!("offline")));
-    assert_eq!(commands::connect(&paths, &tunnel, &fx), Err("Could not load the configuration: offline".into()));
+    assert_eq!(commands::connect(&paths, &tunnel, &fx), Err(ConnectError::Configuration("offline".into())));
     assert_untouched_by_connect(&paths, &tunnel, &fx);
 
     fx.sync = Box::new(|_, _| Ok(SyncOutcome::Unchanged));
     fx.launch = Box::new(|_| Err(anyhow!("refused")));
     assert_eq!(commands::connect(&paths, &tunnel, &fx),
-               Err("Administrator authorization was unavailable: refused".into()));
+               Err(ConnectError::Authorization("refused".into())));
     assert!(!tunnel.wants_connection(), "a refused launch leaves the tunnel off");
     fs::remove_dir_all(&paths.dir).unwrap();
 }
