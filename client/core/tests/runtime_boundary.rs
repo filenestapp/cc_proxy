@@ -1,7 +1,7 @@
 //! CC-01: what crosses the privilege boundary. The supervisor must accept exactly what the control plane's
 //! gen.py produces for mode=app (fixtures from tests/fixtures/regen.py) and refuse anything else.
 
-use ccproxy_core::runtime::{accept, extract, prepare_protected_dir, read_client_config, render};
+use ccproxy_core::runtime::{accept, extract, read_client_config, render};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -107,6 +107,7 @@ fn protected_dir_rejects_links_and_unprivileged_ownership() {
     fs::create_dir(&target).unwrap();
     let link = d.join("link");
     std::os::unix::fs::symlink(&target, &link).unwrap();
+    use ccproxy_core::runtime::prepare_protected_dir;
     assert!(prepare_protected_dir(&link, false).is_err(), "a symlinked runtime dir is refused");
     let fresh = d.join("fresh");
     prepare_protected_dir(&fresh, false).unwrap();
