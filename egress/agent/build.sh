@@ -1,7 +1,11 @@
 #!/bin/sh
 # Reproducible build of ccproxy-exit-agent for every supported exit-node platform.
 #
-#   egress/agent/build.sh [VERSION]       default VERSION: git describe of this checkout
+#   egress/agent/build.sh [--verify] [VERSION]
+#
+# Default VERSION: "agent-" and the git tree hash of egress/agent, so the binaries depend only on the agent source
+# and not on which commit (or rebase of the control plane) it sits in. A tree with uncommitted agent changes gets
+# "-dirty" appended.
 #
 # Output: egress/agent/dist/ccproxy-exit-agent-<os>-<arch>[.exe] and dist/SHA256SUMS. The control plane serves
 # these files to the installers (GET /install/agent/<os>-<arch>) and embeds their SHA-256 in the install scripts,
@@ -14,7 +18,13 @@ here=$(cd "$(dirname "$0")" && pwd)
 cd "$here"
 verify=
 if [ "${1:-}" = --verify ]; then verify=1; shift; fi
-version=${1:-$(git describe --always --tags --dirty 2>/dev/null || echo dev)}
+if [ -n "${1:-}" ]; then
+  version=$1
+else
+  tree=$(git rev-parse --short=12 HEAD:egress/agent 2>/dev/null || echo unknown)
+  version=agent-$tree
+  if [ -n "$(git status --porcelain -- . 2>/dev/null)" ]; then version=$version-dirty; fi
+fi
 toolchain=$(sed -n 's/^toolchain //p' go.mod)
 targets="darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64"
 

@@ -19,7 +19,7 @@ egress/agent/build.sh --verify          # builds 6 targets twice and fails unles
 ```
 
 Output: `egress/agent/dist/ccproxy-exit-agent-{darwin,linux}-{arm64,amd64}`, `...-windows-{amd64,arm64}.exe`,
-`SHA256SUMS` and `VERSION`. The build pins the Go toolchain (`go.mod`), disables cgo, and uses `-trimpath`, no VCS
+`SHA256SUMS` and `VERSION` (`agent-` plus the git tree hash of `egress/agent`, so a rebase or merge that leaves the agent source alone gives the same files). The build pins the Go toolchain (`go.mod`), disables cgo, and uses `-trimpath`, no VCS
 stamp and an empty build ID, so the same commit and version give byte-identical files. The control plane serves
 the directory set by `CP_AGENT_DIST` (default `egress/agent/dist`). It hashes each binary against `SHA256SUMS`
 before embedding digests in a script or serving a file. If a binary is missing or changed, `/install/*` answers 503
