@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"regexp"
 	"strings"
 	"unicode/utf16"
 
@@ -162,13 +164,45 @@ type clientPolicy struct {
 	DirectDNS    string   `json:"direct_dns"`
 }
 
+var proxiedDomainLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func normalizeProxiedDomains(rules []string) ([]string, error) {
+	if len(rules) == 0 {
+		return rules, nil
+	}
+	domains := make([]string, 0, len(rules))
+	for i, rule := range rules {
+		domain := strings.TrimSpace(rule)
+		if strings.Contains(domain, "://") {
+			parsed, err := url.Parse(domain)
+			if err != nil || parsed.User != nil ||
+				(!strings.EqualFold(parsed.Scheme, "https") && !strings.EqualFold(parsed.Scheme, "http")) {
+				return nil, failure(400, "proxied rule %d must be a domain or an HTTP(S) URL", i+1)
+			}
+			domain = parsed.Hostname()
+		}
+		domain = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(domain, "."), "."))
+		labels := strings.Split(domain, ".")
+		if len(domain) > 253 || len(labels) < 2 {
+			return nil, failure(400, "proxied rule %d must contain a valid domain", i+1)
+		}
+		for _, label := range labels {
+			if !proxiedDomainLabel.MatchString(label) {
+				return nil, failure(400, "proxied rule %d must contain a valid domain", i+1)
+			}
+		}
+		domains = append(domains, domain)
+	}
+	return domains, nil
+}
+
 func clientConfig(ctx context.Context, db database, identity deviceIdentity, mode string) (renderedConfig, error) {
 	var u boundUser
 	var h host
 	var d credential
 	var port *int
 	var publicHost, serverName, publicKey, shortID *string
-	err := db.QueryRow(ctx, `SELECT u.name, u.port, h.public_host, h.server_name, h.reality_public, h.short_id, d.uuid::text
+	err := db.QueryRow(ctx, `SELECT u.name, u.port, `+publicEntryHostSQL+`, h.server_name, h.reality_public, h.short_id, d.uuid::text
 		FROM devices d JOIN users u ON u.name = d.user_name LEFT JOIN hosts h ON h.name = u.host
 		WHERE d.token_hash = $1 AND d.revoked_at IS NULL`, identity.TokenHash).
 		Scan(&u.Name, &port, &publicHost, &serverName, &publicKey, &shortID, &d.UUID)
@@ -181,6 +215,9 @@ func clientConfig(ctx context.Context, db database, identity deviceIdentity, mod
 	if port == nil {
 		return renderedConfig{}, failure(409, "no exit IP is assigned to %s yet; ask the admin", u.Name)
 	}
+	if *publicHost == "" {
+		return renderedConfig{}, failure(409, "the exit host is waiting for a public IPv4 from its Agent")
+	}
 	u.Port = *port
 	h.PublicHost, h.ServerName, h.RealityPublic, h.ShortID = *publicHost, *serverName, *publicKey, *shortID
 	policy := clientPolicy{BlockQUIC: true, DirectDNS: "dhcp"}
@@ -191,6 +228,10 @@ func clientConfig(ctx context.Context, db database, identity deviceIdentity, mod
 		}
 		if err := json.Unmarshal(cfg.ClientPolicy, &policy); err != nil {
 			return renderedConfig{}, failure(409, "invalid client_policy: %s", err)
+		}
+		policy.DomainSuffix, err = normalizeProxiedDomains(policy.DomainSuffix)
+		if err != nil {
+			return renderedConfig{}, err
 		}
 	}
 	cfg, err := buildClientConfig(h, u, d, policy, mode)

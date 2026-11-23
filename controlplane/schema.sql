@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS hosts (
     name text COLLATE "C" PRIMARY KEY,
     public_host text NOT NULL,
+    observed_public_ipv4 inet CHECK (family(observed_public_ipv4) = 4 AND masklen(observed_public_ipv4) = 32),
     port_min integer NOT NULL,
     port_max integer NOT NULL,
     reality_private text NOT NULL,

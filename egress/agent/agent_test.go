@@ -391,6 +391,33 @@ func TestControlPlaneURLMustBeHTTPS(t *testing.T) {
 	}
 }
 
+func TestControlPlaneDialKeepsIPv6Fallback(t *testing.T) {
+	for _, address := range []struct{ network, host string }{
+		{"tcp4", "127.0.0.1"},
+		{"tcp6", "::1"},
+	} {
+		t.Run(address.network, func(t *testing.T) {
+			listener, err := net.Listen(address.network, net.JoinHostPort(address.host, "0"))
+			if err != nil && address.network == "tcp6" {
+				t.Skipf("IPv6 loopback is unavailable: %v", err)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+
+			conn, err := dialControlPlane(t.Context(), "tcp", listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if !conn.RemoteAddr().(*net.TCPAddr).IP.Equal(net.ParseIP(address.host)) {
+				t.Fatalf("unexpected peer %s", conn.RemoteAddr())
+			}
+		})
+	}
+}
+
 func TestLoopbackAPI(t *testing.T) {
 	for in, want := range map[string]string{"127.0.0.1:9095": "127.0.0.1:9095", "[::1]:1": "[::1]:1",
 		"localhost:9095": "", "10.0.0.1:9095": "", "127.0.0.1:0": "", "127.0.0.1": ""} {

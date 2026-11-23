@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"slices"
 	"strings"
 
@@ -29,8 +30,9 @@ type monitorSettings struct {
 }
 
 func listEntries(ctx context.Context, db database, monitor monitorSettings) ([]probeEntry, error) {
-	out, err := rowsOf[probeEntry](ctx, db, `SELECT h.name, h.public_host AS host, min(u.port) AS port, 'host' AS kind
-		FROM hosts h JOIN users u ON u.host = h.name GROUP BY h.name ORDER BY h.name`)
+	out, err := rowsOf[probeEntry](ctx, db, `SELECT h.name, `+publicEntryHostSQL+` AS host, min(u.port) AS port, 'host' AS kind
+		FROM hosts h JOIN users u ON u.host = h.name
+		WHERE h.public_host <> '' OR h.observed_public_ipv4 IS NOT NULL GROUP BY h.name ORDER BY h.name`)
 	if err != nil {
 		return nil, err
 	}
@@ -50,17 +52,45 @@ type probeInput struct {
 }
 
 type heartbeat struct {
-	ConfigETag     string  `json:"config_etag"`
-	SingboxRunning *bool   `json:"singbox_running"`
-	ApplyError     *string `json:"apply_error"`
-	ApplyState     string  `json:"apply_state"`
+	ConfigETag      string  `json:"config_etag"`
+	SingboxRunning  *bool   `json:"singbox_running"`
+	ApplyError      *string `json:"apply_error"`
+	ApplyState      string  `json:"apply_state"`
+	LocalEgressIPv4 string  `json:"local_egress_ipv4"`
 }
 
-func (s *store) reportAgent(ctx context.Context, name, token string, hb heartbeat, probes []probeInput) error {
-	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+// IsGlobalUnicast also includes locally scoped and special-purpose IPv4 ranges.
+var nonPublicIPv4Blocks = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+}
+
+func isPublicIPv4(addr netip.Addr) bool {
+	if !addr.Is4() || !addr.IsGlobalUnicast() || addr.IsPrivate() {
+		return false
+	}
+	for _, block := range nonPublicIPv4Blocks {
+		if block.Contains(addr) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *store) reportAgent(ctx context.Context, name, token string, address netip.Addr, hb heartbeat, probes []probeInput) error {
+	localAddress, _ := netip.ParseAddr(hb.LocalEgressIPv4)
+	canSeedPool := localAddress.Is4() && localAddress.IsGlobalUnicast()
+	save := func(tx pgx.Tx) error {
 		var agent string
+		tokenHash := hashToken(token)
 		err := tx.QueryRow(ctx, "SELECT name FROM hosts WHERE name = $1 AND agent_token_hash = $2 FOR KEY SHARE",
-			name, hashToken(token)).Scan(&agent)
+			name, tokenHash).Scan(&agent)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return failure(401, "unauthorized")
 		}
@@ -97,8 +127,39 @@ func (s *store) reportAgent(ctx context.Context, name, token string, hb heartbea
 			last_seen = excluded.last_seen, config_etag = excluded.config_etag,
 			singbox_running = excluded.singbox_running, apply_error = excluded.apply_error, apply_state = excluded.apply_state`,
 			name, s.now(), strings.Trim(hb.ConfigETag, `"`), hb.SingboxRunning, applied, state)
-		return err
-	})
+		if err != nil {
+			return err
+		}
+		changed := false
+		if isPublicIPv4(address) {
+			tag, err := tx.Exec(ctx, `UPDATE hosts SET observed_public_ipv4 = $3::text::inet
+				WHERE name = $1 AND agent_token_hash = $2 AND public_host = ''
+				AND observed_public_ipv4 IS DISTINCT FROM $3::text::inet`, name, tokenHash, address.String())
+			if err != nil {
+				return err
+			}
+			changed = tag.RowsAffected() != 0
+		}
+		if canSeedPool {
+			tag, err := tx.Exec(ctx, `INSERT INTO egress_ips(ip, host, note)
+				SELECT $2::text::inet, $1, 'Detected by macOS Agent'
+				WHERE NOT EXISTS (SELECT 1 FROM egress_ips WHERE host = $1)
+				ON CONFLICT (ip) DO NOTHING`, name, localAddress.String())
+			if err != nil {
+				return err
+			}
+			changed = changed || tag.RowsAffected() != 0
+		}
+		if changed {
+			return bumpVersion(ctx, tx)
+		}
+		return nil
+	}
+	if canSeedPool {
+		// Serialize the empty-pool check with other heartbeats and manual inventory edits.
+		return s.write(ctx, save)
+	}
+	return pgx.BeginFunc(ctx, s.pool, save)
 }
 
 func (s *store) recordProbes(ctx context.Context, tx pgx.Tx, kind, source string, probes []probeInput) error {

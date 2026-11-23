@@ -65,7 +65,19 @@ func (s *store) initializeSchema(ctx context.Context) error {
 		if version != schemaVersion {
 			return fmt.Errorf("unsupported PostgreSQL schema version %d", version)
 		}
-		return nil
+		// This additive change lets the previous binary still serve the database on rollback.
+		var hasObservedIPv4 bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = 'hosts'
+			AND column_name = 'observed_public_ipv4')`).Scan(&hasObservedIPv4); err != nil {
+			return err
+		}
+		if hasObservedIPv4 {
+			return nil
+		}
+		_, err := tx.Exec(ctx, `ALTER TABLE hosts ADD COLUMN IF NOT EXISTS observed_public_ipv4 inet
+			CHECK (family(observed_public_ipv4) = 4 AND masklen(observed_public_ipv4) = 32)`)
+		return err
 	})
 }
 
@@ -178,9 +190,25 @@ func settingsPatch(body fields) (map[string]any, error) {
 			values[key] = int(seconds)
 			continue
 		case "client_policy":
-			var policy object
+			var policy fields
 			if err := json.Unmarshal(raw, &policy); err != nil {
 				return nil, failure(409, "client_policy must be an object")
+			}
+			if suffixes, ok := policy["domain_suffix"]; ok {
+				var domains []string
+				if err := json.Unmarshal(suffixes, &domains); err != nil {
+					return nil, failure(400, "proxied domains must be a list of domains or HTTP(S) URLs")
+				}
+				domains, err := normalizeProxiedDomains(domains)
+				if err != nil {
+					return nil, err
+				}
+				policy["domain_suffix"], err = json.Marshal(domains)
+				if err != nil {
+					return nil, err
+				}
+				values[key] = policy
+				continue
 			}
 		case "monitor":
 			var monitor monitorSettings
