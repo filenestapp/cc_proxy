@@ -871,7 +871,29 @@
   // Install / uninstall commands for an exit host. The token is never part of a command: the installer asks for it
   // with hidden input. Commands come from /admin/install-commands, which accepts only an https control plane URL.
   const INSTALL_OS = [["macos", "macOS"], ["linux", "Linux"], ["windows", "Windows"]];
-  function installPanel(root) {
+  // transport: the host's /admin/hosts/{name}/xtcp view ({transport: "public"} for a new host). reuseToken: the host
+  // may already have an installed token (the Install command dialog; not after a rotation, where it no longer works).
+  function installHelp(transport, reuseToken) {
+    const token = reuseToken
+      ? "then the installer asks for the agent token (hidden; press Enter to reuse the token already installed on this host)"
+      : "then the installer asks for the agent token (hidden)";
+    if (transport && transport.transport === "xtcp") {
+      const x = transport;
+      const frpc = `This host uses XTCP: the installer also downloads the pinned frpc and starts it at boot. frpc registers proxy ${x.proxy_name} with frps ${x.server_addr}:${x.server_port} (TLS verified) and forwards it to sing-box on 127.0.0.1:${x.local_port}. Clients connect directly through their XTCP visitor, so no inbound port forwarding is needed.`;
+      return {
+        macos: `Run in Terminal on the Mac. sudo asks for the Mac password, ${token}. ${frpc} The Mac Agent registers its default interface's IPv4 when the egress pool is empty.`,
+        linux: `Run on the host. sudo asks for your password, ${token}. ${frpc} Name an interface only when the provider routes extra egress IPs to this host.`,
+        windows: `Run in PowerShell started with "Run as administrator"; ${token.replace("then the installer", "the installer")}. ${frpc} frpc runs as the CCProxyExitFrpc task, with a firewall rule for its UDP hole punching.`,
+      };
+    }
+    return {
+      macos: `Run in Terminal on the Mac. sudo asks for the Mac password, ${token}. The Mac Agent registers its default interface's IPv4 when the egress pool is empty. Forward the TCP entry port range to the Mac.`,
+      linux: `Run on the host. sudo asks for your password, ${token}. Name an interface only when the provider routes extra egress IPs to this host; otherwise its existing address is the egress IP.`,
+      windows: `Run in PowerShell started with "Run as administrator"; ${token.replace("then the installer", "the installer")}.`,
+    };
+  }
+
+  function installPanel(root, transport = { transport: "public" }, reuseToken = false) {
     let os = "macos";
     root.innerHTML = `
       <div class="install-row">
@@ -887,11 +909,7 @@
       <p class="small muted" style="margin:10px 0 0">Uninstall (stops the services and removes the files and the stored token):</p>
       <div class="install-cmd"><pre class="snippet" id="inst-uninstall"></pre><button type="button" data-copy-cmd="inst-uninstall">Copy</button></div>
       <p class="small muted" id="inst-note"></p>`;
-    const how = {
-      macos: "Run in Terminal on the Mac. sudo asks for the Mac password, then the installer asks for the agent token (hidden). The Mac Agent registers its default interface's IPv4 when the egress pool is empty. Forward the TCP entry port range to the Mac.",
-      linux: "Run on the host. sudo asks for your password, then the installer asks for the agent token (hidden). Name an interface only when the provider routes extra egress IPs to this host; otherwise its existing address is the egress IP.",
-      windows: "Run in PowerShell started with \"Run as administrator\". The installer asks for the agent token (hidden).",
-    };
+    const how = installHelp(transport, reuseToken);
     let timer;
     let seq = 0;  // only the response to the latest request may fill the commands
     // Any change makes the shown commands stale at once: clear them and disable Copy until the new ones arrive, so a
@@ -935,14 +953,14 @@
     root.addEventListener("input", () => { invalidate(); clearTimeout(timer); timer = setTimeout(refresh, 300); });
     refresh();
   }
-  function showAgentToken(host, token) {
+  function showAgentToken(host, token, transport) {
     const ov = reveal("Host " + host + " agent token", "Paste this token when the installer asks for it.", token,
       '<h4 style="margin:16px 0 0">Install on the exit host</h4><div id="install-panel"></div>');
-    installPanel($("#install-panel", ov));
+    installPanel($("#install-panel", ov), transport);
   }
-  function showInstall(host) {
+  function showInstall(host, transport) {
     const { ov, close } = overlay("<h3>Install or update the agent on " + esc(host) + '</h3><p class="small muted">The installer asks for the host\'s agent token. Lost it? Rotate the token; the old one stops working at once.</p><div id="install-panel"></div><div class="buttons"><button type="button" class="primary" data-ok>Done</button></div>');
-    installPanel($("#install-panel", ov));
+    installPanel($("#install-panel", ov), transport, true);
     $("[data-ok]", ov).onclick = close;
   }
   function publicEntryLabel(host, port) {
@@ -1064,7 +1082,7 @@
     $("#edit").onclick = async () => {
       if (await form("Edit host " + name, hostFields(h), (v) => api("PUT", "/admin/hosts/" + enc(name), hostBody(v)))) { toast("Saved. The agent will apply the change on its next sync."); route(); }
     };
-    $("#install").onclick = () => showInstall(name);
+    $("#install").onclick = () => showInstall(name, xtcp);
     $("#xtcp-edit").onclick = () => editXtcp(name, h, xtcp);
     if ($("#xtcp-off")) $("#xtcp-off").onclick = async () => {
       if (!(await confirmBox("Use the public entry for " + name, "frps credentials for this host are deleted. Run the install command again on the host: it stops and removes frpc.", "Use public entry"))) return;
@@ -1073,7 +1091,7 @@
     $("#rotate").onclick = async () => {
       if (!(await confirmBox("Rotate agent token", "The previous token expires immediately. Then run the install command again on the host and paste the new token: the rerun keeps the configuration and restarts the agent.", "Rotate"))) return;
       const r = await act(() => api("POST", "/admin/hosts/" + enc(name) + "/rotate-token"));
-      if (r) showAgentToken(name, r.agent_token);
+      if (r) showAgentToken(name, r.agent_token, xtcp);
     };
     $("#del").onclick = async () => {
       if (!(await confirmBox("Delete host " + name, "This removes the host and its egress IPs. Release all user assignments first.", "Delete"))) return;
