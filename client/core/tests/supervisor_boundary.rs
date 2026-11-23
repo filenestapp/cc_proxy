@@ -131,6 +131,33 @@ fn supervisor_runs_only_the_protected_copy_and_refuses_tampering() {
 }
 
 #[test]
+fn runtime_dir_is_rechecked_before_each_privileged_write() {
+    let env = Env::new("swap");
+    let good = fixture();
+    env.write_client(&good);
+    let opts = env.options(None);
+    let handle = std::thread::spawn(move || supervisor::run(opts));
+    env.wait("running", |e| e.status().map(|s| s.state == "running").unwrap_or(false));
+
+    // The runtime directory is replaced by a link to somewhere else; a reload must not write through it.
+    let elsewhere = env.root.join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    fs::rename(&env.runtime, env.root.join("runtime.old")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &env.runtime).unwrap();
+    let mut spec = ccproxy_core::runtime::extract(&good).unwrap();
+    spec.domains.push("new.example.net".into());
+    env.write_client(&ccproxy_core::runtime::render(&spec, None));
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0, "nothing written through the link");
+    assert!(!env.calls().contains("HUP"), "no reload");
+
+    // Stop still works.
+    fs::write(env.user.join("stop"), b"").unwrap();
+    handle.join().unwrap().unwrap();
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+}
+
+#[test]
 fn stale_heartbeat_stops_the_supervisor() {
     let env = Env::new("hb");
     env.write_client(&fixture());
@@ -150,4 +177,55 @@ fn a_tampered_config_never_starts() {
     assert!(supervisor::run(env.options(None)).is_err());
     assert_eq!(env.status().unwrap().state, "failed");
     assert!(env.calls().is_empty(), "sing-box was never started");
+}
+
+#[test]
+fn entries_left_in_the_runtime_dir_are_replaced_not_followed() {
+    use std::os::unix::fs::{symlink, MetadataExt};
+    let env = Env::new("upgrade");
+    let outside = env.root.join("outside");
+    fs::write(&outside, b"keep").unwrap();
+    // What an older version's runtime directory may hold, each pointing at a file outside it.
+    fs::create_dir_all(env.runtime.join("work")).unwrap();
+    symlink(&outside, env.runtime.join("tunnel.log")).unwrap();
+    symlink(&outside, env.runtime.join("candidate.tmp")).unwrap();
+    symlink(&outside, env.runtime.join("config.json")).unwrap();
+    symlink(&outside, env.runtime.join("work/cache.db")).unwrap();
+    fs::hard_link(&outside, env.runtime.join("status.json")).unwrap();
+
+    let good = fixture();
+    env.write_client(&good);
+    let opts = env.options(None);
+    let handle = std::thread::spawn(move || supervisor::run(opts));
+    env.wait("running", |e| e.status().map(|s| s.state == "running").unwrap_or(false));
+    env.wait("sing-box started", |e| e.calls().contains("run "));
+
+    let mut spec = ccproxy_core::runtime::extract(&good).unwrap();
+    spec.domains.push("new.example.net".into());
+    env.write_client(&ccproxy_core::runtime::render(&spec, None));
+    env.wait("reload", |e| e.calls().contains("HUP"));
+    fs::write(env.user.join("stop"), b"").unwrap();
+    handle.join().unwrap().unwrap();
+
+    assert_eq!(fs::read(&outside).unwrap(), b"keep", "nothing written through the old entries");
+    assert_eq!(fs::metadata(&outside).unwrap().nlink(), 1);
+    for name in ["tunnel.log", "config.json", "status.json"] {
+        let m = fs::symlink_metadata(env.runtime.join(name)).unwrap();
+        assert!(m.file_type().is_file() && m.nlink() == 1, "{name} is a plain file now");
+    }
+    assert!(fs::symlink_metadata(env.runtime.join("work/cache.db")).is_err(), "unsafe cache removed");
+    assert_eq!(env.status().unwrap().message, "stopped by the app");
+}
+
+#[test]
+fn a_linked_work_dir_fails_closed() {
+    let env = Env::new("workdir");
+    let elsewhere = env.root.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::create_dir_all(&env.runtime).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, env.runtime.join("work")).unwrap();
+    env.write_client(&fixture());
+    assert!(supervisor::run(env.options(None)).is_err());
+    assert!(env.calls().is_empty(), "sing-box was never started");
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
 }

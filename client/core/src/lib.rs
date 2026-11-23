@@ -12,6 +12,7 @@
 
 pub mod api;
 pub mod elevate;
+pub mod fsguard;
 pub mod runtime;
 pub mod session;
 pub mod supervisor;
