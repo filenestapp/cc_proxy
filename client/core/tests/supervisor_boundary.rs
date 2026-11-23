@@ -2,6 +2,7 @@
 //! config is refused without touching what runs; legitimate changes reload; stop and heartbeat still work.
 #![cfg(unix)]
 
+use ccproxy_core::runtime;
 use ccproxy_core::supervisor::{self, Options, Status};
 use serde_json::Value;
 use std::fs;
@@ -98,6 +99,10 @@ fn supervisor_runs_only_the_protected_copy_and_refuses_tampering() {
 
     env.wait("running", |e| e.status().map(|s| s.state == "running").unwrap_or(false));
     env.wait("sing-box started", |e| e.calls().contains("run "));
+    let original_exit = env.status().unwrap().egress_fingerprint.unwrap();
+    let probe = runtime::render_exit_probe(&serde_json::to_vec(&good).unwrap(), &original_exit).unwrap();
+    assert_eq!(probe["outbounds"], serde_json::json!([good["outbounds"][0]]));
+    assert!(probe.get("inbounds").is_none());
     let protected_cfg = env.runtime.join("config.json");
     assert!(env.calls().contains(&format!("-c {}", protected_cfg.display())), "{}", env.calls());
     assert!(!env.calls().contains("user/sing-box.json"), "sing-box never reads the user's file");
@@ -114,20 +119,29 @@ fn supervisor_runs_only_the_protected_copy_and_refuses_tampering() {
     assert_eq!(env.protected(), before);
     assert!(!env.calls().contains("HUP"));
     assert!(!Path::new("/tmp/owned-by-root").exists());
+    assert_eq!(env.status().unwrap().egress_fingerprint.as_deref(), Some(original_exit.as_str()));
 
-    // A legitimate change (another rule domain) is validated, installed into the protected copy and reloaded.
+    // A valid policy and exit change is applied before probes can use the new exit.
     let mut spec = ccproxy_core::runtime::extract(&good).unwrap();
     spec.domains.push("new.example.net".into());
+    spec.server_port += 1;
     let changed = ccproxy_core::runtime::render(&spec, None);
+    assert!(runtime::render_exit_probe(&serde_json::to_vec(&changed).unwrap(), &original_exit).is_err());
     env.write_client(&changed);
     env.wait("reload", |e| e.calls().contains("HUP"));
     assert!(env.protected()["dns"]["rules"][1]["domain_suffix"].to_string().contains("new.example.net"));
+    env.wait("active exit updated", |e| e.status().is_some_and(|s| s.message == "config reloaded"));
+    let new_exit = env.status().unwrap().egress_fingerprint.unwrap();
+    assert_ne!(new_exit, original_exit);
+    assert!(runtime::render_exit_probe(&serde_json::to_vec(&good).unwrap(), &new_exit).is_err());
+    assert!(runtime::render_exit_probe(&serde_json::to_vec(&changed).unwrap(), &new_exit).is_ok());
 
     // Stop file: the app's off switch.
     fs::write(env.user.join("stop"), b"").unwrap();
     handle.join().unwrap().unwrap();
     let st = env.status().unwrap();
     assert_eq!((st.state.as_str(), st.message.as_str()), ("stopped", "stopped by the app"));
+    assert!(st.egress_fingerprint.is_none());
 }
 
 #[test]

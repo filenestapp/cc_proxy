@@ -58,7 +58,7 @@
   .app-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-height: 66px; padding: 8px 0; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
   .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 680; }
   .brand svg { color: var(--accent); flex: none; }
-  h1, h2, p, dl, ol { margin: 0; }
+  h1, h2, p, dl { margin: 0; }
   h1 { font-size: 25px; line-height: 1.15; letter-spacing: -.025em; }
   h2 { font-size: 15px; letter-spacing: -.01em; }
   input, button, select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
@@ -91,14 +91,9 @@
   .status[data-state=connecting] .status-icon { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
   .status[data-state=failed] .status-icon { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
   .status .detail { margin-top: 4px; }
-  .connection-path { margin-top: 21px; padding: 14px 0 15px; border-block: 1px solid var(--line); }
-  .route { --route-color: var(--muted); list-style: none; position: relative; display: grid; gap: 13px; margin-top: 11px; padding: 0; }
-  .route[data-connected=true] { --route-color: var(--accent); }
-  .route::before { content: ""; position: absolute; top: 10px; bottom: 13px; left: 4px; width: 1px; background: var(--route-color); }
-  .route li { display: grid; position: relative; gap: 0 8px; grid-template-columns: minmax(5.2em, auto) minmax(0, 1fr); padding-left: 21px; align-items: start; }
-  .route li::before { content: ""; position: absolute; top: 6px; left: 0; width: 9px; height: 9px; border: 2px solid var(--route-color); border-radius: 50%; background: var(--bg); box-sizing: border-box; }
-  .route code { font: 12px/1.6 var(--mono); overflow-wrap: anywhere; justify-self: end; text-align: right; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
-  .route small { grid-column: 1 / -1; }
+  .exit-ip { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 21px; padding: 14px 0; border-block: 1px solid var(--line); }
+  .exit-ip output { color: var(--muted); font-size: 13px; text-align: right; overflow-wrap: anywhere; }
+  .exit-ip output[data-verified=true] { color: var(--accent); font: 13px/1.6 var(--mono); background: var(--accent-soft); border-radius: 6px; padding: 2px 7px; }
   .account { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 5px 8px; margin: 13px 0; }
   .account dt, .footer { color: var(--muted); font-size: 12px; }
   .account dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
@@ -190,12 +185,9 @@
       <summary data-i18n="technical_details">Technical details</summary>
       <p id="home-details-text"></p>
     </details>
-    <section class="connection-path" aria-labelledby="path-heading">
-      <h2 id="path-heading" data-i18n="connection_path">Connection path</h2>
-      <ol class="route" id="route">
-        <li><strong data-i18n="entry">Entry</strong><code id="v-entry">—</code><small id="v-host" class="detail"></small></li>
-        <li><strong data-i18n="egress_ip">Egress IP</strong><code id="v-egress">Unassigned</code></li>
-      </ol>
+    <section class="exit-ip" aria-labelledby="exit-ip-heading">
+      <h2 id="exit-ip-heading" data-i18n="public_exit_ip">Public exit IP</h2>
+      <output id="v-public-exit">—</output>
     </section>
     <dl class="account">
       <dt data-i18n="account">Account</dt><dd id="v-user">—</dd>
@@ -300,22 +292,25 @@ import { messages, resolveLanguage } from "./locale.mjs";
     $("connection-status").dataset.state = connecting ? "connecting" : state;
     text("state-title", t(connecting ? "connecting" : disconnecting ? "disconnecting" : title));
     text("state-sub", t(connecting ? "connect_wait" : disconnecting ? "disconnect_wait" : sub));
-    $("route").dataset.connected = String(state === "running" && !disconnecting);
     $("toggle").classList.toggle("on", on || disconnecting);
     text("toggle", t(connecting ? "connecting" : disconnecting ? "disconnecting" : on ? "disconnect" : "connect"));
-    $("toggle").disabled = Boolean(pending || stopping || (!v.entry && !on));
+    $("toggle").disabled = Boolean(pending || stopping || (!v.has_assignment && !on));
     $("logout").disabled = Boolean(pending);
     text("logout", t(pending === "logout" ? "signing_out" : "sign_out"));
 
     text("v-user", v.user || "—");
     text("v-device", v.device || "—");
-    text("v-egress", v.egress_ip || t("unassigned"));
-    const host = v.entry?.host;
-    text("v-entry", host ? (host.includes(":") ? "[" + host + "]" : host) + ":" + v.entry.port : "—");
-    text("v-host", v.host || "");
+    const exit = disconnecting || pending === "logout" ? null : v.public_exit;
+    $("v-public-exit").dataset.verified = String(exit?.state === "verified");
+    const exitText = {
+      verified: exit?.ip,
+      checking: t("exit_ip_checking"),
+      unavailable: t("exit_ip_unavailable"),
+    };
+    text("v-public-exit", exitText[exit?.state] ?? "—");
     text("v-server", v.server || "");
     if (v.server) $("server").value = v.server;
-    const notice = operationError || v.message || (!v.entry ? { key: "no_egress_assigned" } : null);
+    const notice = operationError || v.message || (!v.has_assignment ? { key: "no_egress_assigned" } : null);
     showNotice("msg", "home-details", notice, connecting || disconnecting ? "" : v.tunnel_message);
     $("msg").classList.toggle("bad", Boolean(operationError));
   }

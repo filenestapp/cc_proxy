@@ -60,6 +60,9 @@ pub struct Status {
     pub pid: Option<u32>,
     pub message: String,
     pub updated: u64,
+    /// Identifies the loaded exit without exposing its connection credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress_fingerprint: Option<String>,
 }
 
 impl Status {
@@ -109,11 +112,16 @@ struct Supervisor {
 
 impl Supervisor {
     fn status(&self, state: &str, message: &str) {
+        let egress_fingerprint = self.running.as_ref()
+            .filter(|_| state == "running")
+            .and_then(|config| config.pointer("/outbounds/0"))
+            .map(runtime::egress_fingerprint);
         let s = Status {
             state: state.into(),
             pid: self.child.as_ref().map(|c| c.id()),
             message: message.into(),
             updated: now(),
+            egress_fingerprint,
         };
         if self.guard().is_err() {
             return;

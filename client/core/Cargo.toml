@@ -9,6 +9,7 @@ description = "Sign-in, config sync and sing-box supervision shared by the cc_pr
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 ureq.workspace = true
 dirs.workspace = true
 gethostname.workspace = true

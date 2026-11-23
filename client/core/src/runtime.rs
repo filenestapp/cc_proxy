@@ -22,6 +22,7 @@ use crate::fsguard::{self, Trust};
 use crate::sysdns::valid_domain;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
@@ -263,13 +264,45 @@ fn with(mut base: Value, extra: Value) -> Value {
     base
 }
 
-/// The sing-box config for a spec. `cache_path` is set only for the protected copy the supervisor runs.
-pub fn render(spec: &TunnelSpec, cache_path: Option<&Path>) -> Value {
-    let direct_dns = match &spec.direct_dns {
+fn direct_dns(spec: &TunnelSpec) -> Value {
+    match &spec.direct_dns {
         DirectDns::Dhcp => json!({"type": "dhcp", "tag": "direct-dns"}),
         DirectDns::Local => json!({"type": "local", "tag": "direct-dns"}),
         DirectDns::Udp(ip) => json!({"type": "udp", "tag": "direct-dns", "server": ip.to_string()}),
-    };
+    }
+}
+
+fn egress_outbound(spec: &TunnelSpec) -> Value {
+    json!({
+        "type": "vless", "tag": "egress", "server": spec.server, "server_port": spec.server_port,
+        "uuid": spec.uuid, "flow": FLOW,
+        "tls": {"enabled": true, "server_name": spec.server_name,
+                "utls": {"enabled": true, "fingerprint": spec.fingerprint},
+                "reality": {"enabled": true, "public_key": spec.public_key, "short_id": spec.short_id}}
+    })
+}
+
+pub(crate) fn egress_fingerprint(outbound: &Value) -> String {
+    format!("{:x}", Sha256::digest(outbound.to_string().as_bytes()))
+}
+
+/// An unprivileged fetch config whose only outbound matches the supervisor's active exit.
+pub fn render_exit_probe(client_config: &[u8], active_egress: &str) -> Result<Value> {
+    let spec = extract(&serde_json::from_slice(client_config).context("config is not JSON")?)?;
+    let outbound = egress_outbound(&spec);
+    if egress_fingerprint(&outbound) != active_egress {
+        bail!("the client config does not match the active exit");
+    }
+    Ok(json!({
+        "log": {"disabled": true},
+        "outbounds": [outbound],
+        "dns": {"servers": [direct_dns(&spec)], "final": "direct-dns"},
+        "route": {"final": "egress", "auto_detect_interface": true, "default_domain_resolver": "direct-dns"}
+    }))
+}
+
+/// The sing-box config for a spec. `cache_path` is set only for the protected copy the supervisor runs.
+pub fn render(spec: &TunnelSpec, cache_path: Option<&Path>) -> Value {
     let mut dns_rules = Vec::new();
     if !spec.domains.is_empty() {
         dns_rules.push(json!({"domain_suffix": spec.domains, "query_type": ["AAAA"], "action": "predefined",
@@ -305,16 +338,12 @@ pub fn render(spec: &TunnelSpec, cache_path: Option<&Path>) -> Value {
         "inbounds": [{"type": "tun", "tag": "tun-in", "address": [TUN_ADDRESS], "auto_route": true, "stack": "mixed",
                       "strict_route": true}],
         "outbounds": [
-            {"type": "vless", "tag": "egress", "server": spec.server, "server_port": spec.server_port,
-             "uuid": spec.uuid, "flow": FLOW,
-             "tls": {"enabled": true, "server_name": spec.server_name,
-                     "utls": {"enabled": true, "fingerprint": spec.fingerprint},
-                     "reality": {"enabled": true, "public_key": spec.public_key, "short_id": spec.short_id}}},
+            egress_outbound(spec),
             {"type": "direct", "tag": "direct"}
         ],
         "route": {"rules": route_rules, "final": "direct", "auto_detect_interface": true,
                   "default_domain_resolver": "direct-dns", "find_process": true},
-        "dns": {"servers": [{"type": "fakeip", "tag": "fakeip", "inet4_range": FAKEIP_RANGE}, direct_dns],
+        "dns": {"servers": [{"type": "fakeip", "tag": "fakeip", "inet4_range": FAKEIP_RANGE}, direct_dns(spec)],
                 "rules": dns_rules, "final": "direct-dns"},
         "experimental": {"cache_file": cache}
     })
