@@ -26,6 +26,10 @@
 #   /var/lib/ccproxy-exit/                                config.json sing-box runs, agent and sing-box state (0700)
 #   Linux: systemd units ccproxy-exit-singbox, ccproxy-exit-agent and, with --iface, ccproxy-exit-ips
 #   macOS: launchd daemons com.ccproxy.exit.singbox and com.ccproxy.exit.agent; logs in /var/log/ccproxy-exit
+#   XTCP hosts (set in the console): /opt/ccproxy-exit/bin/frpc (pinned official frp release, SHA-256 checked),
+#   /etc/ccproxy-exit/frpc.toml (0600: frps token and XTCP secret key) and frp-ca.pem, run by systemd unit
+#   ccproxy-exit-frpc or launchd daemon com.ccproxy.exit.frpc. frpc registers an xtcp proxy for sing-box with frps
+#   (TLS on TCP 7003, verified against that CA); visitors connect directly, with no relay fallback.
 # Both start at boot without anyone logging in. sing-box starts from the last confirmed config even when the
 # control plane is unreachable; the agent keeps it in step once it can reach the control plane.
 #
@@ -56,6 +60,10 @@ TOKEN_FILE=$ETC/agent.token
 CONF_FILE=$ETC/install.conf
 MAC_SINGBOX=com.ccproxy.exit.singbox
 MAC_AGENT=com.ccproxy.exit.agent
+MAC_FRPC=com.ccproxy.exit.frpc
+FRPC=$PREFIX/bin/frpc
+FRPC_CONF=$ETC/frpc.toml
+FRP_CA=$ETC/frp-ca.pem
 NL='
 '
 
@@ -195,6 +203,41 @@ main() {
     singbox_new=$work/sb/$dir/sing-box
   fi
 
+  # Transport: the control plane answers 200 with this host's frpc configuration when it uses XTCP, 204 when it uses
+  # the public entry. The request carries the host token, like the agent download.
+  xtcp='' frpc_new='' frpc_sha=''
+  code=$(cp_curl -o "$work/frpc.toml" -w '%{http_code}' "$cp_url/install/xtcp/frpc.toml?ca_file=$(urlencode "$FRP_CA")") ||
+    die "cannot read the host's transport settings; nothing was changed"
+  case $code in
+    204) say "transport: public entry (no frpc)" ;;
+    200)
+      xtcp=1
+      cp_curl -f -o "$work/frp-ca.pem" "$cp_url/install/xtcp/ca.pem" && [ -s "$work/frp-ca.pem" ] ||
+        die "cannot read the CA for frps; nothing was changed"
+      frpc_file=$(frpc_asset_file "$platform")
+      frpc_sha=$(frpc_asset_sha256 "$platform")
+      [ -n "$frpc_file" ] && [ -n "$frpc_sha" ] || die "no pinned frpc build for $platform"
+      if [ -x "$FRPC" ] && [ "$(cat "$PREFIX/frpc.sha256" 2>/dev/null || true)" = "$frpc_sha" ]; then
+        say "frpc $FRPC_VERSION already installed"
+      else
+        say "downloading frpc $FRPC_VERSION ($platform)"
+        base=${CCPROXY_EXIT_FRPC_BASE_URL:-$FRPC_BASE_URL}   # a mirror must still match the pinned digest
+        valid '^https://' "$base" || die "frpc must be downloaded over https"
+        curl -q --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o "$work/$frpc_file" "$base/$frpc_file" </dev/null ||
+          die "frpc download failed; nothing was changed"
+        check_sha "$work/$frpc_file" "$frpc_sha" ||
+          die "frpc SHA-256 does not match the pinned digest; nothing was changed"
+        mkdir -p "$work/frp"
+        tar -xzf "$work/$frpc_file" -C "$work/frp"
+        dir=${frpc_file%.tar.gz}
+        [ -f "$work/frp/$dir/frpc" ] || die "frpc binary missing from $frpc_file"
+        frpc_new=$work/frp/$dir/frpc
+      fi
+      say "transport: XTCP (frpc proxy for sing-box; direct connections only, no relay)"
+      ;;
+    *) die "the control plane answered HTTP $code for the transport settings; nothing was changed" ;;
+  esac
+
   install_files
   write_token
   write_conf
@@ -204,9 +247,9 @@ main() {
 
   say "installed. The host shows a fresh heartbeat in the console within a minute."
   if [ "$os" = linux ]; then
-    say "logs: journalctl -u ccproxy-exit-agent -u ccproxy-exit-singbox -f"
+    say "logs: journalctl -u ccproxy-exit-agent -u ccproxy-exit-singbox${xtcp:+ -u ccproxy-exit-frpc} -f"
   else
-    say "logs: tail -f $LOGDIR/agent.log $LOGDIR/sing-box.log"
+    say "logs: tail -f $LOGDIR/agent.log $LOGDIR/sing-box.log${xtcp:+ $LOGDIR/frpc.log}"
     mac_warnings
   fi
   say "uninstall: copy the uninstall command from the console, or run this script again with --uninstall"
@@ -219,6 +262,8 @@ cp_curl() {
   printf 'header = "Authorization: Bearer %s"\n' "$token" |
     curl -q --config - --proto '=https' --tlsv1.2 -sS --max-time 120 ${cafile:+--cacert "$cafile"} "$@"
 }
+
+urlencode() { printf '%s' "$1" | sed 's/%/%25/g; s/ /%20/g; s/+/%2B/g; s/@/%40/g'; }
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi
@@ -307,7 +352,7 @@ trusted() { # the path as given and as resolved
 }
 
 verify_installed() {
-  for f in "$AGENT" "$SINGBOX" "$CTL" "$TOKEN_FILE" "$VAR"; do
+  for f in "$AGENT" "$SINGBOX" "$CTL" "$TOKEN_FILE" "$VAR" ${xtcp:+"$FRPC" "$FRPC_CONF" "$FRP_CA"}; do
     trusted "$f" || die "$f is changeable by a non-root user; fix the ownership of its directories and run again"
   done
 }
@@ -333,6 +378,18 @@ install_files() {
   fi
   write_ctl > "$work/singbox-ctl"
   put "$work/singbox-ctl" "$CTL" 0755
+  if [ -n "$xtcp" ]; then
+    if [ -n "$frpc_new" ]; then
+      put "$frpc_new" "$FRPC" 0755
+      printf '%s\n' "$frpc_sha" > "$PREFIX/frpc.sha256"
+    fi
+    put "$work/frp-ca.pem" "$FRP_CA" 0644
+    # frpc checks the configuration (it names the CA just written) before it replaces the running one.
+    if ! out=$("$FRPC" verify -c "$work/frpc.toml" 2>&1); then
+      die "frpc rejected the XTCP configuration from the control plane: $out"
+    fi
+    put "$work/frpc.toml" "$FRPC_CONF" 0600     # frps token and XTCP secret key: root only
+  fi
 }
 
 write_token() {
@@ -353,6 +410,7 @@ write_conf() {
     echo "AGENT_NAME='$name'"
     echo "AGENT_VERSION='$AGENT_VERSION'"
     echo "SINGBOX_VERSION='$SINGBOX_VERSION'"
+    if [ -n "$xtcp" ]; then echo "TRANSPORT='xtcp'"; else echo "TRANSPORT='public'"; fi
   } > "$CONF_FILE.new.$$"
   chmod 0644 "$CONF_FILE.new.$$"
   mv -f "$CONF_FILE.new.$$" "$CONF_FILE"
@@ -478,15 +536,54 @@ EOF
     systemctl disable --now ccproxy-exit-ips.service >/dev/null 2>&1 || true
     rm -f "$SYSTEMD_DIR/ccproxy-exit-ips.service"
   fi
+  if [ -n "$xtcp" ]; then
+    cat > "$work/ccproxy-exit-frpc.service" <<EOF
+# CC Proxy exit node: frpc registers the XTCP proxy for sing-box with frps. Generated by the installer.
+[Unit]
+Description=CC Proxy exit node frpc (XTCP, direct only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=$FRPC -c $FRPC_CONF
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    put "$work/ccproxy-exit-frpc.service" "$SYSTEMD_DIR/ccproxy-exit-frpc.service" 0644
+  elif [ -f "$SYSTEMD_DIR/ccproxy-exit-frpc.service" ]; then
+    remove_frpc_files   # the host moved back to the public entry
+  fi
   systemctl daemon-reload
   units="ccproxy-exit-singbox.service ccproxy-exit-agent.service"
   [ -z "$iface" ] || units="ccproxy-exit-ips.service $units"
+  [ -z "$xtcp" ] || units="$units ccproxy-exit-frpc.service"
   # shellcheck disable=SC2086
   systemctl enable $units >/dev/null
   if [ -n "$singbox_new" ]; then
     systemctl try-restart ccproxy-exit-singbox.service   # new binary; no-op until a config exists
   fi
   systemctl restart ccproxy-exit-agent.service
+  [ -z "$xtcp" ] || systemctl restart ccproxy-exit-frpc.service   # picks up a changed configuration
+}
+
+# A host that left the XTCP transport: stop frpc and remove its service, binary and credentials.
+remove_frpc_files() {
+  if [ "$os" = linux ]; then
+    systemctl disable --now ccproxy-exit-frpc.service >/dev/null 2>&1 || true
+    rm -f "$SYSTEMD_DIR/ccproxy-exit-frpc.service"
+  else
+    launchctl bootout "system/$MAC_FRPC" >/dev/null 2>&1 || true
+    rm -f "$LAUNCHD_DIR/$MAC_FRPC.plist"
+  fi
+  rm -f "$FRPC" "$PREFIX/frpc.sha256" "$FRPC_CONF" "$FRP_CA"
+  say "removed frpc: this host uses the public entry"
 }
 
 # -- macOS / launchd ----------------------------------------------------------------------------------------
@@ -539,12 +636,35 @@ $(agent_args | plist_array)
 </dict>
 </plist>
 EOF
+  if [ -n "$xtcp" ]; then
+    cat > "$work/$MAC_FRPC.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- CC Proxy exit node: frpc registers the XTCP proxy for sing-box with frps. Generated by the installer. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$MAC_FRPC</string>
+  <key>ProgramArguments</key>
+  <array>
+$(printf '%s\n' "$FRPC" -c "$FRPC_CONF" | plist_array)
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$LOGDIR/frpc.log</string>
+  <key>StandardErrorPath</key><string>$LOGDIR/frpc.log</string>
+</dict>
+</plist>
+EOF
+  fi
   if command -v plutil >/dev/null 2>&1; then
-    plutil -lint "$work/$MAC_SINGBOX.plist" "$work/$MAC_AGENT.plist" >/dev/null || die "generated plist is invalid"
+    plutil -lint "$work/$MAC_SINGBOX.plist" "$work/$MAC_AGENT.plist" ${xtcp:+"$work/$MAC_FRPC.plist"} >/dev/null ||
+      die "generated plist is invalid"
   fi
   mkdir -p "$NEWSYSLOG_DIR"
   printf '%s\n' "# CC Proxy exit node logs: keep 5 x 10 MB. Generated by the installer." \
-    "$LOGDIR/agent.log 644 5 10240 * J" "$LOGDIR/sing-box.log 644 5 10240 * J" > "$work/newsyslog.conf"
+    "$LOGDIR/agent.log 644 5 10240 * J" "$LOGDIR/sing-box.log 644 5 10240 * J" \
+    ${xtcp:+"$LOGDIR/frpc.log 644 5 10240 * J"} > "$work/newsyslog.conf"
   put "$work/newsyslog.conf" "$NEWSYSLOG_DIR/ccproxy-exit.conf" 0644
 
   restart_singbox=
@@ -563,6 +683,14 @@ EOF
     launchctl enable "system/$label"
     launchctl bootstrap system "$LAUNCHD_DIR/$label.plist"
   done
+  if [ -n "$xtcp" ]; then   # restarted on every run: the configuration may have changed
+    launchctl bootout "system/$MAC_FRPC" >/dev/null 2>&1 || true
+    put "$work/$MAC_FRPC.plist" "$LAUNCHD_DIR/$MAC_FRPC.plist" 0644
+    launchctl enable "system/$MAC_FRPC"
+    launchctl bootstrap system "$LAUNCHD_DIR/$MAC_FRPC.plist"
+  elif [ -f "$LAUNCHD_DIR/$MAC_FRPC.plist" ]; then
+    remove_frpc_files
+  fi
 }
 
 mac_warnings() {
@@ -583,13 +711,13 @@ do_uninstall() {
     if command -v systemctl >/dev/null 2>&1; then
       # Stopping ccproxy-exit-ips takes the egress IPs off the interface again.
       systemctl disable --now ccproxy-exit-agent.service ccproxy-exit-singbox.service ccproxy-exit-ips.service \
-        >/dev/null 2>&1 || true
+        ccproxy-exit-frpc.service >/dev/null 2>&1 || true
       rm -f "$SYSTEMD_DIR/ccproxy-exit-agent.service" "$SYSTEMD_DIR/ccproxy-exit-singbox.service" \
-        "$SYSTEMD_DIR/ccproxy-exit-ips.service"
+        "$SYSTEMD_DIR/ccproxy-exit-ips.service" "$SYSTEMD_DIR/ccproxy-exit-frpc.service"
       systemctl daemon-reload || true
     fi
   else
-    for label in $MAC_AGENT $MAC_SINGBOX; do
+    for label in $MAC_AGENT $MAC_SINGBOX $MAC_FRPC; do
       launchctl bootout "system/$label" >/dev/null 2>&1 || true
       rm -f "$LAUNCHD_DIR/$label.plist"
     done
@@ -597,7 +725,7 @@ do_uninstall() {
     rm -rf "$LOGDIR"
   fi
   rm -rf "$PREFIX" "$ETC" "$VAR"
-  say "removed the services, $PREFIX, $ETC (including the agent token) and $VAR."
+  say "removed the services, $PREFIX, $ETC (including the agent token and any frpc credentials) and $VAR."
   say "the host still exists in the control plane: rotate its token or delete it in the console."
 }
 

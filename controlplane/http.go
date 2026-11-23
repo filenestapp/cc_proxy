@@ -137,6 +137,7 @@ func newAPI(s *store, adminToken, probeToken string, proxies []netip.Prefix) htt
 	}
 	a.adminRoutes()
 	a.installRoutes()
+	a.xtcpRoutes()
 	a.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		sendResponse(w, response{status: 404, body: object{"error": "no route"}})
 	})

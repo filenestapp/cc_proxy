@@ -40,6 +40,7 @@ REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 BUILD = os.path.join(REPO, "egress", "agent", "build.sh")
 DEFAULT_DIST = os.path.join(REPO, "egress", "agent", "dist")
 PINS = os.path.join(REPO, "controlplane", "install", "sing-box.json")
+FRPC_PINS = os.path.join(REPO, "controlplane", "install", "frpc.json")
 TEMPLATE = os.path.join(REPO, "controlplane", "install", "exit.sh")
 PLATFORMS = ("darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64", "windows-amd64", "windows-arm64")
 ARCH = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}.get(platform.machine().lower())
@@ -225,12 +226,14 @@ class Recorder(BaseHTTPRequestHandler):
         pass
 
 
-def fake_singbox_archive(directory, filename):
+def fake_singbox_archive(directory, filename, binary="sing-box"):
     """A release-shaped archive whose binary only prints a version (its digest cannot match the pin)."""
+    if not filename.endswith(".tar.gz"):
+        return   # Windows zips are not used by exit.sh
     name = filename[:-len(".tar.gz")]
-    data = b"#!/bin/sh\necho 'sing-box version fake'\n"
+    data = b"#!/bin/sh\necho 'fake version'\n"
     with tarfile.open(os.path.join(directory, filename), "w:gz") as tar:
-        info = tarfile.TarInfo(name + "/sing-box")
+        info = tarfile.TarInfo(name + "/" + binary)
         info.size, info.mode = len(data), 0o755
         tar.addfile(info, io.BytesIO(data))
 
@@ -253,6 +256,11 @@ class InstallScriptTest(GoControlPlaneFixture):
             os.mkdir(self.archives)
             for asset in self.pins["assets"].values():
                 fake_singbox_archive(self.archives, asset["file"])
+        with open(FRPC_PINS) as f:
+            self.frpc_pins = json.load(f)
+        if not REAL_ARCHIVES:
+            for asset in self.frpc_pins["assets"].values():
+                fake_singbox_archive(self.archives, asset["file"], "frpc")
         self.releases = TLSServer(SimpleHTTPRequestHandler, self.archives)
         self.addCleanup(self.releases.close)
         # Service manager stubs.
@@ -290,9 +298,45 @@ class InstallScriptTest(GoControlPlaneFixture):
         with open(self.p("opt", "ccproxy-exit", "sing-box.sha256"), "w") as f:
             f.write(self.pins["assets"]["%s-%s" % (os_name, ARCH)]["sha256"] + "\n")
 
+    def seed_frpc(self, os_name, verify_ok=True):
+        """An installed frpc with the pinned digest's marker. Its `verify` accepts a configuration with an xtcp proxy
+        and a CA file that exists, the parts this installer relies on (the real frpc is tested elsewhere)."""
+        if REAL_ARCHIVES:
+            return
+        bin_dir = self.p("opt", "ccproxy-exit", "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        path = os.path.join(bin_dir, "frpc")
+        with open(path, "w") as f:
+            f.write("#!/bin/sh\n[ \"$1\" = verify ] || exit 2\n"
+                    "ca=$(sed -n \"s/^transport.tls.trustedCaFile = '\\(.*\\)'$/\\1/p\" \"$3\")\n"
+                    "grep -q '^type = \"xtcp\"$' \"$3\" && [ -s \"$ca\" ] && %s && "
+                    "echo \"frpc: the configuration file $3 syntax is ok\"\n" % ("true" if verify_ok else "false"))
+        os.chmod(path, 0o755)
+        with open(self.p("opt", "ccproxy-exit", "frpc.sha256"), "w") as f:
+            f.write(self.frpc_pins["assets"]["%s-%s" % (os_name, ARCH)]["sha256"] + "\n")
+
+    XTCP = {"server_addr": "203.0.113.10", "server_port": 7003, "tls_server_name": "frps.example",
+            "auth_token": "frps-token-0123456789abcdef", "secret_key": "xtcp-secret-0123456789abcdef",
+            "proxy_name": "ccproxy-hk-1-direct", "local_port": 20001}
+
+    def enable_xtcp(self):
+        status, out = self.admin("PUT", "/admin/hosts/hk-1/xtcp", dict(self.XTCP, ca_pem=read_text(TLS.cert)))
+        self.assertEqual(status, 200, out)
+
+    def assert_secret_only_in(self, secret, allowed, result):
+        self.assertNotIn(secret, result.stdout + result.stderr)
+        self.assertNotIn(secret, self.calls_text())
+        for d, _, files in os.walk(self.root):
+            for name in files:
+                path = os.path.join(d, name)
+                if path not in allowed:
+                    with open(path, "rb") as f:
+                        self.assertNotIn(secret.encode(), f.read(), path)
+
     def run_script(self, *args, os_name=None, env=None):
         e = dict(os.environ, CCPROXY_EXIT_TEST_ROOT=self.root, CCPROXY_EXIT_TEST_TRUSTED_UID=str(os.getuid()),
-                 CCPROXY_EXIT_SINGBOX_BASE_URL=self.releases.url, CURL_CA_BUNDLE=TLS.cert,
+                 CCPROXY_EXIT_SINGBOX_BASE_URL=self.releases.url, CCPROXY_EXIT_FRPC_BASE_URL=self.releases.url,
+                 CURL_CA_BUNDLE=TLS.cert,
                  PATH=self.bin + os.pathsep + os.environ["PATH"])
         if os_name:
             e["CCPROXY_EXIT_TEST_OS"] = os_name
@@ -471,6 +515,163 @@ class InstallScriptTest(GoControlPlaneFixture):
         self.assertIn("changeable by a non-root user", r.stderr)
         self.assertFalse(os.path.exists(self.p("Library", "LaunchDaemons")))
         self.assertNotIn("bootstrap", self.calls_text())
+
+    def assert_xtcp_files(self):
+        conf = self.p("etc", "ccproxy-exit", "frpc.toml")
+        self.assertEqual(stat.S_IMODE(os.stat(conf).st_mode), 0o600)
+        text = read_text(conf)
+        for want in ('serverAddr = "203.0.113.10"', "serverPort = 7003", 'type = "xtcp"', 'name = "ccproxy-hk-1-direct"',
+                     "localPort = 20001", "transport.tls.enable = true", 'transport.tls.serverName = "frps.example"',
+                     "transport.tls.trustedCaFile = '%s'" % self.p("etc", "ccproxy-exit", "frp-ca.pem")):
+            self.assertIn(want, text)
+        self.assertEqual(read_text(self.p("etc", "ccproxy-exit", "frp-ca.pem")).strip(), read_text(TLS.cert).strip())
+        self.assertIn("TRANSPORT='xtcp'", read_text(self.p("etc", "ccproxy-exit", "install.conf")))
+
+    @unittest.skipUnless(sys.platform == "darwin", "native macOS path (launchd plists, plutil, BSD tools)")
+    def test_macos_xtcp_install_upgrade_and_back_to_public(self):
+        # An already-installed public-entry host is upgraded in place once XTCP is configured for it.
+        self.seed_singbox("darwin")
+        r = self.run_script("--cp", self.cp.url, "--cafile", self.ca, "--token-file", self.token_file)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("transport: public entry", r.stderr)
+        self.assertFalse(os.path.exists(self.p("Library", "LaunchDaemons", "com.ccproxy.exit.frpc.plist")))
+
+        self.enable_xtcp()
+        self.seed_frpc("darwin")
+        open(self.calls, "w").close()
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("transport: XTCP", r.stderr)
+        self.assert_xtcp_files()
+        conf = self.p("etc", "ccproxy-exit", "frpc.toml")
+        for secret in (self.XTCP["auth_token"], self.XTCP["secret_key"]):
+            self.assert_secret_only_in(secret, {conf}, r)
+        self.assert_token_only_in_token_file(r)
+        plist = self.p("Library", "LaunchDaemons", "com.ccproxy.exit.frpc.plist")
+        self.assertEqual(subprocess.run(["plutil", "-lint", plist], capture_output=True).returncode, 0)
+        args = json.loads(subprocess.run(["plutil", "-extract", "ProgramArguments", "json", "-o", "-", plist],
+                                         capture_output=True, text=True).stdout)
+        self.assertEqual(args, [self.p("opt", "ccproxy-exit", "bin", "frpc"), "-c", conf])
+        calls = self.calls_text()
+        self.assertIn("launchctl bootstrap system %s" % plist, calls)
+        self.assertIn("frpc.log", read_text(self.p("etc", "newsyslog.d", "ccproxy-exit.conf")))
+
+        # The host goes back to the public entry: a rerun removes frpc and its credentials.
+        self.assertEqual(self.admin("DELETE", "/admin/hosts/hk-1/xtcp")[0], 200)
+        open(self.calls, "w").close()
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("removed frpc", r.stderr)
+        for gone in (plist, conf, self.p("etc", "ccproxy-exit", "frp-ca.pem"), self.p("opt", "ccproxy-exit", "bin", "frpc")):
+            self.assertFalse(os.path.exists(gone), gone)
+        self.assertIn("launchctl bootout system/com.ccproxy.exit.frpc", self.calls_text())
+
+    def test_linux_xtcp_install_and_uninstall(self):
+        if REAL_ARCHIVES and not sys.platform.startswith("linux"):
+            self.skipTest("the genuine Linux frpc only runs on Linux (the systemd container test covers it)")
+        self.enable_xtcp()
+        self.seed_singbox("linux")
+        self.seed_frpc("linux")
+        r = self.run_script("--cp", self.cp.url, "--cafile", self.ca, "--token-file", self.token_file, os_name="Linux")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assert_xtcp_files()
+        unit = read_text(self.p("etc", "systemd", "system", "ccproxy-exit-frpc.service"))
+        self.assertIn("ExecStart=%s -c %s" % (self.p("opt", "ccproxy-exit", "bin", "frpc"), self.p("etc", "ccproxy-exit", "frpc.toml")), unit)
+        self.assertIn("Restart=always", unit)
+        self.assertIn("WantedBy=multi-user.target", unit)
+        calls = self.calls_text()
+        self.assertIn("systemctl enable ccproxy-exit-singbox.service ccproxy-exit-agent.service ccproxy-exit-frpc.service", calls)
+        self.assertIn("systemctl restart ccproxy-exit-frpc.service", calls)
+        r = self.run_script("--uninstall", os_name="Linux")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ccproxy-exit-frpc.service", self.calls_text().split("disable --now")[-1])
+        self.assertFalse(os.path.exists(self.p("etc", "systemd", "system", "ccproxy-exit-frpc.service")))
+        self.assertFalse(os.path.exists(self.p("etc", "ccproxy-exit")))
+
+    def test_unverified_frpc_changes_nothing(self):
+        if REAL_ARCHIVES:
+            self.skipTest("uses fake archives")
+        self.enable_xtcp()
+        self.seed_singbox("linux")   # sing-box is in place; the fake frpc archive cannot match its pin
+        r = self.run_script("--cp", self.cp.url, "--cafile", self.ca, "--token-file", self.token_file, os_name="Linux")
+        self.assert_nothing_installed(r, "frpc SHA-256 does not match the pinned digest")
+        self.assertNotIn(self.XTCP["auth_token"], r.stdout + r.stderr)
+
+    def test_configuration_rejected_by_frpc_is_not_installed(self):
+        if REAL_ARCHIVES:
+            self.skipTest("uses a fake frpc that rejects every configuration")
+        self.enable_xtcp()
+        self.seed_singbox("linux")
+        self.seed_frpc("linux", verify_ok=False)
+        r = self.run_script("--cp", self.cp.url, "--cafile", self.ca, "--token-file", self.token_file, os_name="Linux")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("frpc rejected the XTCP configuration", r.stderr)
+        self.assertFalse(os.path.exists(self.p("etc", "ccproxy-exit", "frpc.toml")))
+        self.assertFalse(os.path.exists(self.p("etc", "systemd", "system", "ccproxy-exit-frpc.service")))
+
+
+class XTCPApiTest(GoControlPlaneFixture):
+    """Per-host XTCP settings: admin-only, secrets write-only, and each host reads only its own frpc configuration."""
+
+    BODY = {"server_addr": "203.0.113.10", "auth_token": "frps-token-0123456789abcdef",
+            "secret_key": "xtcp-secret-0123456789abcdef", "local_port": 20003}
+
+    def put(self, body, host="hk-1"):
+        return self.admin("PUT", "/admin/hosts/%s/xtcp" % host, body)
+
+    def test_settings_are_validated_and_secrets_never_shown(self):
+        ca = read_text(TLS.cert)   # self-signed: a CA certificate as far as x509 is concerned
+        self.assertEqual(self.admin("GET", "/admin/hosts/hk-1/xtcp"), (200, {"transport": "public"}))
+        for bad, field in ((dict(self.BODY), "ca_pem"), (dict(self.BODY, ca_pem="junk"), "ca_pem"),
+                           (dict(self.BODY, ca_pem=ca, local_port=40000), "local_port"),
+                           (dict(self.BODY, ca_pem=ca, auth_token="short"), "auth_token"),
+                           (dict(self.BODY, ca_pem=ca, server_addr="bad host\nx"), "server_addr"),
+                           (dict(self.BODY, ca_pem=ca, proxy_name='x"y'), "proxy_name")):
+            status, out = self.put(bad)
+            self.assertEqual(status, 400, bad)
+            self.assertIn(field, out["error"])
+        status, view = self.put(dict(self.BODY, ca_pem=ca))
+        self.assertEqual(status, 200, view)
+        self.assertEqual((view["transport"], view["server_port"], view["tls_server_name"], view["proxy_name"]),
+                         ("xtcp", 7003, "203.0.113.10", "ccproxy-hk-1-direct"))
+        self.assertTrue(view["has_auth_token"] and view["has_secret_key"])
+        self.assertEqual(len(view["ca_sha256"]), 64)
+        text = json.dumps(self.admin("GET", "/admin/hosts/hk-1/xtcp")[1]) + json.dumps(view)
+        for secret in (self.BODY["auth_token"], self.BODY["secret_key"]):
+            self.assertNotIn(secret, text)
+        # A change without credentials keeps them; another host cannot take the same proxy name.
+        self.assertEqual(self.put({"local_port": 20004})[0], 200)
+        self.assertEqual(self.put(dict(self.BODY, ca_pem=ca, local_port=30004, proxy_name="ccproxy-hk-1-direct"), "jp-1")[0], 409)
+        status, _, conf = self.get("/install/xtcp/frpc.toml?ca_file=/etc/ccproxy-exit/frp-ca.pem", self.hk)
+        self.assertEqual(status, 200)
+        self.assertIn('auth.token = "%s"' % self.BODY["auth_token"], conf.decode())
+        self.assertIn("localPort = 20004", conf.decode())
+        # The audit log records the change with the secrets scrubbed.
+        status, audit = self.admin("GET", "/admin/audit?limit=20")
+        self.assertEqual(status, 200)
+        self.assertIn("xtcp_update", json.dumps(audit))
+        for secret in (self.BODY["auth_token"], self.BODY["secret_key"]):
+            self.assertNotIn(secret, json.dumps(audit))
+
+    def test_generated_secret_key_is_returned_once(self):
+        status, view = self.put({k: v for k, v in dict(self.BODY, ca_pem=read_text(TLS.cert)).items() if k != "secret_key"})
+        self.assertEqual(status, 200, view)
+        self.assertRegex(view["secret_key"], r"^[A-Za-z0-9_-]{43}$")
+        self.assertNotIn("secret_key", self.admin("GET", "/admin/hosts/hk-1/xtcp")[1])
+
+    def test_agent_routes_are_scoped_to_the_calling_host(self):
+        self.assertEqual(self.put(dict(self.BODY, ca_pem=read_text(TLS.cert)))[0], 200)
+        q = "/install/xtcp/frpc.toml?ca_file=/etc/ccproxy-exit/frp-ca.pem"
+        self.assertEqual(self.get(q)[0], 401)
+        self.assertEqual(self.get(q, ADMIN)[0], 401)
+        self.assertEqual(self.get(q, self.jp)[:1], (204,))           # jp-1 uses the public entry
+        self.assertEqual(self.get("/install/xtcp/ca.pem", self.jp)[0], 204)
+        status, headers, ca = self.get("/install/xtcp/ca.pem", self.hk)
+        self.assertEqual((status, ca.decode().strip()), (200, read_text(TLS.cert).strip()))
+        for bad in ("relative.pem", "/etc/x%27%0Aauth.token=%22x%22", ""):
+            self.assertEqual(self.get("/install/xtcp/frpc.toml?ca_file=" + bad, self.hk)[0], 400, bad)
+        self.assertEqual(self.admin("DELETE", "/admin/hosts/hk-1/xtcp")[0], 200)
+        self.assertEqual(self.get(q, self.hk)[0], 204)
 
 
 if __name__ == "__main__":

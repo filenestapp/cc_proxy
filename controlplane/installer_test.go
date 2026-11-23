@@ -205,7 +205,21 @@ func TestConsoleOffersTheThreeCommands(t *testing.T) {
 			t.Errorf("console lacks %q", want)
 		}
 	}
-	if strings.Count(page, `installPanel($("#install-panel", ov))`) != 2 {
-		t.Error("the token dialog and the Install command dialog must both show the commands")
+	if !strings.Contains(page, `installPanel($("#install-panel", ov), transport)`) ||
+		!strings.Contains(page, `installPanel($("#install-panel", ov), transport, true)`) {
+		t.Error("the token dialog and the Install command dialog must both show the commands for the host's transport")
+	}
+	// XTCP hosts: the help names frpc instead of port forwarding; the Install command offers Enter to reuse a token.
+	for _, want := range []string{
+		`if (transport && transport.transport === "xtcp")`,
+		"the installer also downloads the pinned frpc and starts it at boot",
+		"so no inbound port forwarding is needed",
+		"press Enter to reuse the token already installed on this host",
+		`$("#install").onclick = () => showInstall(name, xtcp);`,
+		`showAgentToken(name, r.agent_token, xtcp)`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("console lacks %q", want)
+		}
 	}
 }
