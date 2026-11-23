@@ -1,0 +1,51 @@
+#!/bin/sh
+# Reproducible build of ccproxy-exit-agent for every supported exit-node platform.
+#
+#   egress/agent/build.sh [VERSION]       default VERSION: git describe of this checkout
+#
+# Output: egress/agent/dist/ccproxy-exit-agent-<os>-<arch>[.exe] and dist/SHA256SUMS. The control plane serves
+# these files to the installers (GET /install/agent/<os>-<arch>) and embeds their SHA-256 in the install scripts,
+# so a node verifies the binary it downloads. Same source + same VERSION gives byte-identical binaries: pinned Go
+# toolchain (go.mod), no cgo, -trimpath, no VCS stamping, empty build ID. Check with: build.sh twice and compare
+# SHA256SUMS, or `build.sh --verify` which does exactly that.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+cd "$here"
+verify=
+if [ "${1:-}" = --verify ]; then verify=1; shift; fi
+version=${1:-$(git describe --always --tags --dirty 2>/dev/null || echo dev)}
+toolchain=$(sed -n 's/^toolchain //p' go.mod)
+targets="darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64"
+
+build() { # build OUTDIR
+  out=$1
+  rm -rf "$out"
+  mkdir -p "$out"
+  for t in $targets; do
+    os=${t%/*} arch=${t#*/} ext=
+    [ "$os" = windows ] && ext=.exe
+    GOTOOLCHAIN=$toolchain CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOFLAGS=-mod=readonly \
+      go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X main.version=$version" \
+      -o "$out/ccproxy-exit-agent-$os-$arch$ext" .
+  done
+  (cd "$out" && if command -v sha256sum >/dev/null 2>&1; then sha256sum ccproxy-exit-agent-*; else shasum -a 256 ccproxy-exit-agent-*; fi) > "$out/SHA256SUMS.tmp"
+  mv "$out/SHA256SUMS.tmp" "$out/SHA256SUMS"
+  printf '%s\n' "$version" > "$out/VERSION"
+}
+
+build dist
+if [ -n "$verify" ]; then
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  build "$tmp/again"
+  if cmp -s dist/SHA256SUMS "$tmp/again/SHA256SUMS"; then
+    echo "reproducible: a second build gave identical binaries"
+  else
+    diff dist/SHA256SUMS "$tmp/again/SHA256SUMS" >&2
+    echo "NOT reproducible" >&2
+    exit 1
+  fi
+fi
+echo "ccproxy-exit-agent $version ($toolchain):"
+cat dist/SHA256SUMS

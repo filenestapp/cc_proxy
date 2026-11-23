@@ -17,3 +17,4 @@ client/target/
 client/desktop/src-tauri/binaries/
 client/desktop/src-tauri/gen/
 client/test/local-demo/out/
+egress/agent/dist/

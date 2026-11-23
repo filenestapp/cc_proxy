@@ -1,0 +1,40 @@
+# Test the Go exit agent and publish its reproducible build (the files the control plane serves to installers).
+name: exit-agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["egress/agent/**", "egress/install/**", "controlplane/installer.py", ".github/workflows/exit-agent.yml"]
+  pull_request:
+    paths: ["egress/agent/**", "egress/install/**", "controlplane/installer.py", ".github/workflows/exit-agent.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: egress/agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: egress/agent/go.mod
+      - name: Vet (all targets) and test
+        run: |
+          for t in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go vet ./...
+          done
+          go test ./...
+      - name: Reproducible build
+        run: ./build.sh --verify "${GITHUB_SHA::12}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccproxy-exit-agent
+          path: egress/agent/dist/
+          if-no-files-found: error
+          retention-days: 30

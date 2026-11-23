@@ -51,7 +51,7 @@ Routes (all JSON):
     POST   /probe/report                        {"vantage", "results"}
   Exit-node installer (see installer.py)
     GET    /install/exit.sh, /install/exit.ps1, /install/manifest.json   public, no secrets
-    GET    /install/files/{agent.py|probes.py|ips.sh}                  (host agent token)
+    GET    /install/agent/{darwin|linux|windows}-{amd64|arm64}       compiled exit agent (host agent token)
   GET /healthz, GET /dashboard
 
 Serve behind TLS (a reverse proxy, or --tls-cert/--tls-key) whenever it is reachable beyond localhost:
@@ -648,20 +648,35 @@ def install_commands(h, store, _p, _b, query):
 
 @route("GET", r"/install/(exit\.sh|exit\.ps1)", None)
 def install_script(h, store, _p, _b, _q, name):
-    h._send(200, installer.render(name), "text/plain; charset=utf-8")
+    try:
+        h._send(200, installer.render(name), "text/plain; charset=utf-8")
+    except installer.NotBuilt as e:
+        raise HTTPError(503, str(e))
 
 
 @route("GET", "/install/manifest.json", None)
 def install_manifest(h, store, _p, _b, _q):
-    h._json(200, installer.manifest())
+    try:
+        h._json(200, installer.manifest())
+    except installer.NotBuilt as e:
+        raise HTTPError(503, str(e))
 
 
-@route("GET", "/install/files/([^/]+)", "agent")
-def install_file(h, store, _host, _b, _q, name):
-    """Agent files for the installer. Only a valid host agent token may download them."""
-    if name not in installer.FILES:
-        raise HTTPError(404, "no such installer file")
-    h._send(200, installer.read_file(name), "application/octet-stream")
+@route("GET", "/install/agent/([^/]+)", "agent")
+def install_agent(h, store, _host, _b, _q, platform):
+    """The compiled exit agent for one platform. Only a valid host agent token may download it, and only a file that
+    still matches SHA256SUMS is served (the installer checks the same digest again)."""
+    if platform not in installer.PLATFORMS:
+        raise HTTPError(404, "no agent build for %s" % platform)
+    try:
+        want = installer.agent_release()["digests"][platform]
+        with open(installer.agent_path(platform), "rb") as f:
+            data = f.read()
+    except (installer.NotBuilt, OSError) as e:
+        raise HTTPError(503, str(e))
+    if installer.hashlib.sha256(data).hexdigest() != want:
+        raise HTTPError(503, "agent binary changed while being read; try again")
+    h._send(200, data, "application/octet-stream")
 
 
 @route("GET", "/healthz", None)

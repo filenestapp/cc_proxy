@@ -3,40 +3,38 @@
 # the digests below filled in; copy the command from the console (Egress hosts -> host -> Install command). It
 # downloads over HTTPS only (no redirect may downgrade it) into a file first, so a failed download never reaches sudo:
 #
-#   f=$(mktemp) && curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL 'https://cp.example/install/exit.sh' \
-#     -o "$f" && sudo sh "$f" --cp 'https://cp.example' [--iface eth0]; rm -f "$f"
-#   (same with --uninstall instead of --cp ...)
+#   (f=$(mktemp) || exit; curl -q --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+#     'https://cp.example/install/exit.sh' -o "$f" && sudo sh "$f" --cp 'https://cp.example' [--iface eth0];
+#     s=$?; rm -f "$f"; exit $s)
+#   The subshell removes the temporary file and exits with the status of curl or this script.
+#   (the same with --uninstall instead of --cp ...)
 #
-# The agent runs as root, so it only runs a trusted system Python: every path component of the interpreter, its
-# standard library and the installed files must be owned by root and writable by nobody else. The defaults are
-# Apple's Command Line Tools Python on macOS (install it first with `xcode-select --install`) and /usr/bin/python3 on
-# Linux. The agent starts with -E -s -S, so environment variables and site-packages never load code into it.
+# Nothing has to be installed first: the node needs only curl and, on Linux, systemd. The installer downloads the
+# compiled exit agent from the control plane (with the host's token) and the pinned official sing-box release from
+# GitHub, and checks both against the SHA-256 digests below before anything runs.
 #
-# The host's agent token is read from the terminal without echo (or from --token-file), so it never appears in the
-# command line, shell history, process list, service definitions or logs. It is stored in
-# /etc/ccproxy-exit/agent.token (root, 0600). Running the installer again is safe: it upgrades the files, keeps the
-# last configuration and, when you press Enter at the token prompt, the existing token. Enter a new token there after
-# rotating it in the console.
+# The host's agent token is read from the terminal without echo (or from --token-file). It never appears in a
+# command line, shell history, process list, service definition or log: curl reads it from stdin, the agent from
+# /etc/ccproxy-exit/agent.token (root, 0600). Requests that carry the token never follow redirects. Running the
+# installer again is safe: it upgrades the files, keeps the last configuration and, when you press Enter at the
+# prompt, the existing token. Enter a new token there after rotating it in the console.
 #
-# What it installs:
-#   /opt/ccproxy-exit/lib/{agent.py,probes.py,ips.sh}   agent from the control plane (SHA-256 checked)
-#   /opt/ccproxy-exit/bin/sing-box                        pinned official release (SHA-256 checked)
+# Installed (all root-owned and writable by root only; checked, with every directory above, before start):
+#   /opt/ccproxy-exit/bin/{ccproxy-exit-agent,sing-box}   agent and pinned sing-box
 #   /opt/ccproxy-exit/libexec/singbox-ctl                 reload / status helper the agent calls
 #   /etc/ccproxy-exit/{agent.token,install.conf}          token (0600) and the options of this installation
-#   /var/lib/ccproxy-exit/                                sing-box config written by the agent, state (0700)
+#   /var/lib/ccproxy-exit/                                config.json sing-box runs, agent and sing-box state (0700)
 #   Linux: systemd units ccproxy-exit-singbox, ccproxy-exit-agent and, with --iface, ccproxy-exit-ips
 #   macOS: launchd daemons com.ccproxy.exit.singbox and com.ccproxy.exit.agent; logs in /var/log/ccproxy-exit
-# Both start at boot without anyone logging in. sing-box starts from the last applied config even when the control
-# plane is unreachable; the agent keeps it in step once it can reach the control plane.
+# Both start at boot without anyone logging in. sing-box starts from the last confirmed config even when the
+# control plane is unreachable; the agent keeps it in step once it can reach the control plane.
 #
 # Options:
 #   --cp URL           control plane base URL (https). Remembered for reruns.
-#   --iface IFACE      Linux only: add the host's routed egress IPs to IFACE (ips.sh). Remembered; --no-iface drops it.
+#   --iface IFACE      Linux only: add the host's routed egress IPs to IFACE. Remembered; --no-iface drops it.
 #   --token-file FILE  read the agent token from FILE instead of prompting (for automation)
 #   --cafile FILE      CA bundle when the control plane uses a private certificate. Remembered.
 #   --name NAME        agent name in its logs (default: the hostname). Remembered.
-#   --python PATH      root-owned Python 3.8+ for the agent (default: /Library/Developer/CommandLineTools/usr/bin/
-#                      python3 on macOS, /usr/bin/python3 on Linux). Remembered.
 #   --uninstall        stop and remove everything this installer created (including the token)
 set -eu
 
@@ -51,6 +49,9 @@ LOGDIR=$ROOT/var/log/ccproxy-exit
 SYSTEMD_DIR=$ROOT/etc/systemd/system
 LAUNCHD_DIR=$ROOT/Library/LaunchDaemons
 NEWSYSLOG_DIR=$ROOT/etc/newsyslog.d
+AGENT=$PREFIX/bin/ccproxy-exit-agent
+SINGBOX=$PREFIX/bin/sing-box
+CTL=$PREFIX/libexec/singbox-ctl
 TOKEN_FILE=$ETC/agent.token
 CONF_FILE=$ETC/install.conf
 MAC_SINGBOX=com.ccproxy.exit.singbox
@@ -61,7 +62,8 @@ NL='
 say() { printf '%s\n' "$PROG: $*" >&2; }
 die() { say "error: $*"; exit 1; }
 
-# valid REGEX VALUE: VALUE is a single line that matches the extended regex.
+# valid REGEX VALUE: VALUE is a single line that matches the extended regex. The patterns stay within what BSD
+# grep accepts (repetition counts up to 255).
 valid() {
   case $2 in *"$NL"*) return 1 ;; esac
   printf '%s\n' "$2" | grep -Eq "$1"
@@ -76,8 +78,7 @@ conf_get() { [ -f "$CONF_FILE" ] && sed -n "s/^$1='\\(.*\\)'\$/\\1/p" "$CONF_FIL
 
 usage() {
   cat >&2 <<'EOF'
-usage: sudo sh exit.sh --cp https://<cp> [--iface IFACE | --no-iface] [--token-file FILE] [--cafile FILE]
-                        [--name NAME] [--python PATH]
+usage: sudo sh exit.sh --cp https://<cp> [--iface IFACE | --no-iface] [--token-file FILE] [--cafile FILE] [--name NAME]
        sudo sh exit.sh --uninstall
 Copy the complete command (download, then run) from the console: Egress hosts -> host -> Install command.
 EOF
@@ -94,7 +95,7 @@ trap cleanup EXIT
 trap 'cleanup; exit 130' INT TERM
 
 main() {
-  cp_url='' iface='' token_src='' cafile='' name='' python='' uninstall='' no_iface=''
+  cp_url='' iface='' token_src='' cafile='' name='' uninstall='' no_iface=''
   while [ $# -gt 0 ]; do
     case $1 in
       --cp) [ $# -ge 2 ] || usage; cp_url=$2; shift 2 ;;
@@ -103,7 +104,6 @@ main() {
       --token-file) [ $# -ge 2 ] || usage; token_src=$2; shift 2 ;;
       --cafile) [ $# -ge 2 ] || usage; cafile=$2; shift 2 ;;
       --name) [ $# -ge 2 ] || usage; name=$2; shift 2 ;;
-      --python) [ $# -ge 2 ] || usage; python=$2; shift 2 ;;
       --uninstall) uninstall=1; shift ;;
       -h|--help) usage ;;
       *) say "unknown option $1"; usage ;;
@@ -117,7 +117,7 @@ main() {
   case $os in
     Darwin) os=darwin ;;
     Linux) os=linux ;;
-    *) die "unsupported system $os (macOS and Linux only; use exit.ps1 on Windows)" ;;
+    *) die "unsupported system $os (macOS and Linux only; use the Windows command on Windows)" ;;
   esac
 
   if [ -n "$uninstall" ]; then
@@ -130,15 +130,11 @@ main() {
   [ -n "$iface" ] || [ -n "$no_iface" ] || iface=$(conf_get IFACE)
   [ -n "$cafile" ] || cafile=$(conf_get CAFILE)
   [ -n "$name" ] || name=$(conf_get AGENT_NAME)
-  [ -n "$python" ] || python=$(conf_get PYTHON)
 
   [ -n "$cp_url" ] || die "pass --cp https://<control plane>"
   cp_url=${cp_url%/}
-  valid "$RE_URL" "$cp_url" || die "--cp must be a plain URL such as https://cp.example:8443"
-  case $cp_url in
-    https://*) ;;
-    *) die "--cp must use https: the agent token must not cross the network in clear text" ;;
-  esac
+  valid "$RE_URL" "$cp_url" ||
+    die "--cp must be the https URL of the control plane, such as https://cp.example:8443 (plain http is refused)"
   if [ -n "$iface" ]; then
     [ "$os" = linux ] || die "--iface is Linux-only. On macOS the Mac's existing local IPv4 is the egress IP; add that address to the host in the console."
     valid "$RE_IFACE" "$iface" || die "--iface: invalid interface name"
@@ -146,45 +142,52 @@ main() {
   [ -z "$name" ] || valid "$RE_NAME" "$name" || die "--name: use letters, digits, '.', '_' or '-'"
   if [ -n "$cafile" ]; then
     valid "$RE_PATH" "$cafile" && [ -f "$cafile" ] || die "--cafile must be an existing absolute path"
+    trusted "$cafile" || die "--cafile $cafile is changeable by a non-root user; a root service must not trust it"
   fi
+  command -v curl >/dev/null 2>&1 || die "curl is required"
 
   case ${CCPROXY_EXIT_TEST_ARCH:-$(uname -m)} in
     arm64|aarch64) arch=arm64 ;;
     x86_64|amd64) arch=amd64 ;;
     *) die "unsupported CPU $(uname -m)" ;;
   esac
-  asset_key=$os-$arch
-  asset_file=$(singbox_asset_file "$asset_key")
-  asset_sha=$(singbox_asset_sha256 "$asset_key")
-  [ -n "$asset_file" ] && [ -n "$asset_sha" ] || die "no pinned sing-box build for $asset_key"
+  platform=$os-$arch
+  agent_sha=$(agent_sha256 "$platform")
+  asset_file=$(singbox_asset_file "$platform")
+  asset_sha=$(singbox_asset_sha256 "$platform")
+  [ -n "$agent_sha" ] && [ -n "$asset_file" ] && [ -n "$asset_sha" ] || die "no build for $platform"
 
-  find_python
   # In sticky /tmp, not the caller's $TMPDIR: an unprivileged owner of the parent could swap a root-owned work dir.
   mkdir -p "$ROOT/tmp"
   work=$(mktemp -d "$ROOT/tmp/ccproxy-exit.XXXXXX")
-  write_helper
 
   read_token
   say "checking the control plane and the token"
-  if ! printf '%s\n' "$token" | "$python" -I -S "$work/helper.py" check "$cp_url" "${cafile:--}"; then
-    die "nothing was changed"
-  fi
+  code=$(cp_curl -o /dev/null -w '%{http_code}' "$cp_url/agent/probe-targets") ||
+    die "cannot reach $cp_url (private certificate? pass --cafile); nothing was changed"
+  case $code in
+    200) ;;
+    401) die "the control plane rejected the token (rotated, or for another control plane?); nothing was changed" ;;
+    *) die "the control plane answered HTTP $code; nothing was changed" ;;
+  esac
 
-  say "downloading the agent"
-  mkdir -p "$work/lib"
-  for f in agent.py probes.py ips.sh; do
-    printf '%s\n' "$token" | "$python" -I -S "$work/helper.py" get "$cp_url/install/files/$f" "$work/lib/$f" "${cafile:--}" \
-      "$(file_sha256 "$f")" token || die "download of $f failed; nothing was changed"
-  done
+  say "downloading ccproxy-exit-agent $AGENT_VERSION ($platform)"
+  cp_curl -f -o "$work/ccproxy-exit-agent" "$cp_url/install/agent/$platform" ||
+    die "agent download failed; nothing was changed"
+  check_sha "$work/ccproxy-exit-agent" "$agent_sha" || die "agent SHA-256 mismatch; nothing was changed"
 
   singbox_new=
-  if [ -x "$PREFIX/bin/sing-box" ] && [ "$(cat "$PREFIX/sing-box.sha256" 2>/dev/null || true)" = "$asset_sha" ]; then
+  if [ -x "$SINGBOX" ] && [ "$(cat "$PREFIX/sing-box.sha256" 2>/dev/null || true)" = "$asset_sha" ]; then
     say "sing-box $SINGBOX_VERSION already installed"
   else
-    say "downloading sing-box $SINGBOX_VERSION ($asset_key)"
-    base=${CCPROXY_EXIT_SINGBOX_BASE_URL:-$SINGBOX_BASE_URL}   # a mirror still has to match the pinned digest
-    "$python" -I -S "$work/helper.py" get "$base/$asset_file" "$work/$asset_file" - "$asset_sha" none </dev/null ||
-      die "sing-box download failed or its SHA-256 did not match the pinned digest; nothing was changed"
+    say "downloading sing-box $SINGBOX_VERSION ($platform)"
+    base=${CCPROXY_EXIT_SINGBOX_BASE_URL:-$SINGBOX_BASE_URL}   # a mirror must still match the pinned digest
+    valid '^https://' "$base" || die "sing-box must be downloaded over https"
+    # GitHub redirects release downloads to its CDN: follow, but https only. No token is sent here.
+    curl -q --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o "$work/$asset_file" "$base/$asset_file" </dev/null ||
+      die "sing-box download failed; nothing was changed"
+    check_sha "$work/$asset_file" "$asset_sha" ||
+      die "sing-box SHA-256 does not match the pinned digest; nothing was changed"
     mkdir -p "$work/sb"
     tar -xzf "$work/$asset_file" -C "$work/sb"
     dir=${asset_file%.tar.gz}
@@ -209,12 +212,54 @@ main() {
   say "uninstall: copy the uninstall command from the console, or run this script again with --uninstall"
 }
 
+# curl to the control plane with the token. -q comes first so no curlrc can add options (such as --location); the
+# header comes from a curl config on stdin, so the token is in no argument list; without -L no redirect is followed,
+# so it only goes to --cp.
+cp_curl() {
+  printf 'header = "Authorization: Bearer %s"\n' "$token" |
+    curl -q --config - --proto '=https' --tlsv1.2 -sS --max-time 120 ${cafile:+--cacert "$cafile"} "$@"
+}
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+
+check_sha() { [ "$(sha256_of "$1")" = "$2" ]; }
+
+read_token() {
+  token=
+  if [ -n "$token_src" ]; then
+    [ -r "$token_src" ] || die "cannot read --token-file $token_src"
+    token=$(head -n 1 "$token_src" | tr -d '\r\n ')
+  elif [ -r /dev/tty ] && { : < /dev/tty; } 2>/dev/null; then
+    hint="paste the host's agent token"
+    [ -s "$TOKEN_FILE" ] && hint="$hint, or press Enter to keep the installed token"
+    printf '%s (input hidden): ' "$hint" > /dev/tty
+    tty_saved=$(stty -g < /dev/tty)
+    stty -echo < /dev/tty
+    IFS= read -r token < /dev/tty || true
+    stty "$tty_saved" < /dev/tty
+    tty_saved=
+    printf '\n' > /dev/tty
+    token=$(printf '%s' "$token" | tr -d '\r\n ')
+  fi
+  if [ -z "$token" ] && [ -s "$TOKEN_FILE" ]; then
+    token=$(head -n 1 "$TOKEN_FILE" | tr -d '\r\n ')
+    say "keeping the installed token"
+  fi
+  [ -n "$token" ] || die "no agent token: run in a terminal to be prompted, or pass --token-file"
+  if ! valid "$RE_TOKEN" "$token" || [ "${#token}" -lt 16 ] || [ "${#token}" -gt 256 ]; then
+    die "that does not look like an agent token (copy it from the console)"
+  fi
+}
+
 # -- trusted paths ------------------------------------------------------------------------------------------
 # A root daemon must not run anything a normal user can change: each path component, up to /, must be owned by root
 # and not writable by group (unless group 0) or others, with no ACL. Symlinks are checked and then followed.
 
 TEST_TRUSTED_UID=${CCPROXY_EXIT_TEST_TRUSTED_UID:-}   # tests only: also trust this uid, for paths under $ROOT
 
+# shellcheck disable=SC2012  # ls -ldn is the portable owner/mode query on both macOS and Linux
 entry_ok() {
   meta=$(ls -ldn "$1" 2>/dev/null) || return 1
   perms=$(printf '%s\n' "$meta" | awk '{print $1}')
@@ -230,7 +275,7 @@ entry_ok() {
   [ "$(printf '%s' "$perms" | cut -c6)" != w ] || [ "$gid" = 0 ] || return 1
 }
 
-# shellcheck disable=SC2012  # ls -ldn is the portable owner/mode query on both macOS and Linux
+# shellcheck disable=SC2012
 chain_ok() { # PATH and every directory above it
   p=$1
   while :; do
@@ -261,138 +306,13 @@ trusted() { # the path as given and as resolved
   [ "$real" = "$1" ] || chain_ok "$real"
 }
 
-find_python() {
-  if [ -z "$python" ]; then
-    if [ "$os" = darwin ]; then python=/Library/Developer/CommandLineTools/usr/bin/python3; else python=/usr/bin/python3; fi
-  fi
-  case $python in /*) ;; *) die "--python must be an absolute path" ;; esac
-  valid "$RE_PATH" "$python" || die "--python: unsupported characters in the path"
-  if [ ! -x "$python" ]; then
-    if [ "$os" = darwin ]; then
-      die "the agent needs Apple's Command Line Tools Python ($python). Install the Command Line Tools with
-  xcode-select --install
-(or 'Command Line Tools for Xcode' from developer.apple.com), then run the install command again."
-    fi
-    die "the agent needs the system Python 3.8+ at $python (e.g. apt install python3 or dnf install python3)"
-  fi
-  if [ "$os" = darwin ] && [ "$(resolve "$python")" = /usr/bin/python3 ]; then
-    die "/usr/bin/python3 only forwards to the developer tools xcode-select picks; use --python /Library/Developer/CommandLineTools/usr/bin/python3"
-  fi
-  # Check before running it even once as root: the interpreter, and the prefix that holds its standard library.
-  trusted "$python" || die "$python is changeable by a non-root user; a root daemon must not run it. Use the system Python (see --python)."
-  prefix=$(dirname "$(dirname "$(resolve "$python")")")
-  for d in "$prefix" "$prefix/lib"; do
-    [ ! -e "$d" ] || trusted "$d" || die "$d is changeable by a non-root user; use the system Python (see --python)"
-  done
-  # -I -S: no environment variables, current directory, user site or site-packages hooks.
-  info=$("$python" -I -S -c 'import sys, sysconfig
-if sys.version_info < (3, 8): sys.exit(3)
-paths = sysconfig.get_paths()
-print(sys.executable); print(paths["stdlib"]); print(paths["platstdlib"])') || die "$python is not Python 3.8 or newer"
-  while IFS= read -r d; do
-    [ -z "$d" ] || [ ! -e "$d" ] || trusted "$d" ||
-      die "$d (used by $python) is changeable by a non-root user; use the system Python (see --python)"
-  done <<EOF
-$info
-EOF
-}
-
 verify_installed() {
-  for f in "$PREFIX/bin/sing-box" "$PREFIX/lib/agent.py" "$PREFIX/lib/probes.py" "$PREFIX/lib/ips.sh" \
-    "$PREFIX/libexec/singbox-ctl" "$TOKEN_FILE" "$VAR"; do
+  for f in "$AGENT" "$SINGBOX" "$CTL" "$TOKEN_FILE" "$VAR"; do
     trusted "$f" || die "$f is changeable by a non-root user; fix the ownership of its directories and run again"
   done
 }
 
-read_token() {
-  token=
-  if [ -n "$token_src" ]; then
-    [ -r "$token_src" ] || die "cannot read --token-file $token_src"
-    token=$(head -n 1 "$token_src" | tr -d '\r\n ')
-  elif [ -r /dev/tty ] && { : < /dev/tty; } 2>/dev/null; then
-    hint="paste the host's agent token"
-    [ -s "$TOKEN_FILE" ] && hint="$hint, or press Enter to keep the installed token"
-    printf '%s (input hidden): ' "$hint" > /dev/tty
-    tty_saved=$(stty -g < /dev/tty)
-    stty -echo < /dev/tty
-    IFS= read -r token < /dev/tty || true
-    stty "$tty_saved" < /dev/tty
-    tty_saved=
-    printf '\n' > /dev/tty
-    token=$(printf '%s' "$token" | tr -d '\r\n ')
-  fi
-  if [ -z "$token" ] && [ -s "$TOKEN_FILE" ]; then
-    token=$(head -n 1 "$TOKEN_FILE" | tr -d '\r\n ')
-    say "keeping the installed token"
-  fi
-  [ -n "$token" ] || die "no agent token: run in a terminal to be prompted, or pass --token-file"
-  if ! valid "$RE_TOKEN" "$token" || [ "${#token}" -lt 16 ] || [ "${#token}" -gt 256 ]; then
-    die "that does not look like an agent token (copy it from the console)"
-  fi
-}
-
-# Python helper: TLS, downloads and SHA-256 with the interpreter the agent uses, so certificate problems surface
-# here and not in the service. Tokens arrive on stdin, never in argv.
-write_helper() {
-  cat > "$work/helper.py" <<'PY'
-import hashlib, os, ssl, sys, urllib.error, urllib.request
-
-def context(cafile):
-    return ssl.create_default_context(cafile=None if cafile == "-" else cafile)
-
-class Redirects(urllib.request.HTTPRedirectHandler):
-    """The token never follows a redirect, and nothing is fetched over plain http."""
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if req.has_header("Authorization"):
-            raise urllib.error.URLError("refused redirect to %s: the agent token is sent to the control plane URL only" % newurl)
-        if not newurl.lower().startswith("https://"):
-            raise urllib.error.URLError("refused redirect to %s: not https" % newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-def request(url, cafile, token):
-    if not url.lower().startswith("https://"):
-        raise ValueError("refusing a non-https URL")
-    req = urllib.request.Request(url, headers={"User-Agent": "ccproxy-exit-installer"})
-    if token:
-        req.add_header("Authorization", "Bearer " + token)
-    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context(cafile)), Redirects())
-    return opener.open(req, timeout=60)
-
-def token_from_stdin():
-    return sys.stdin.readline().strip()
-
-def main(cmd, *args):
-    if cmd == "check":
-        url, cafile = args
-        try:
-            with request(url + "/agent/probe-targets", cafile, token_from_stdin()) as resp:
-                resp.read()
-        except urllib.error.HTTPError as e:
-            if e.code == 401:
-                sys.exit("ccproxy-exit: the control plane rejected the token (rotated or for another control plane?)")
-            sys.exit("ccproxy-exit: control plane answered HTTP %d for %s" % (e.code, url))
-        except (OSError, ValueError) as e:
-            sys.exit("ccproxy-exit: cannot reach %s: %s (private certificate? pass --cafile)" % (url, e))
-    elif cmd == "get":
-        url, out, cafile, want, auth = args
-        token = token_from_stdin() if auth == "token" else None
-        digest = hashlib.sha256()
-        try:
-            with request(url, cafile, token) as resp, open(out, "wb") as f:
-                for chunk in iter(lambda: resp.read(1 << 16), b""):
-                    digest.update(chunk)
-                    f.write(chunk)
-        except (OSError, ValueError) as e:
-            sys.exit("ccproxy-exit: download of %s failed: %s" % (url, e))
-        if digest.hexdigest() != want:
-            os.unlink(out)
-            sys.exit("ccproxy-exit: SHA-256 mismatch for %s: want %s, got %s" % (url, want, digest.hexdigest()))
-    else:
-        sys.exit("unknown helper command")
-
-main(*sys.argv[1:])
-PY
-}
+# -- files --------------------------------------------------------------------------------------------------
 
 # Atomic replace: a running binary or script is never written in place.
 put() { # put SRC DST MODE
@@ -403,18 +323,16 @@ put() { # put SRC DST MODE
 
 install_files() {
   umask 022
-  mkdir -p "$PREFIX/bin" "$PREFIX/lib" "$PREFIX/libexec" "$ETC" "$VAR"
-  chmod 0755 "$PREFIX" "$PREFIX/bin" "$PREFIX/lib" "$PREFIX/libexec"
+  mkdir -p "$PREFIX/bin" "$PREFIX/libexec" "$ETC" "$VAR/agent" "$VAR/sing-box"
+  chmod 0755 "$PREFIX" "$PREFIX/bin" "$PREFIX/libexec"
   chmod 0700 "$ETC" "$VAR"
-  put "$work/lib/agent.py" "$PREFIX/lib/agent.py" 0644
-  put "$work/lib/probes.py" "$PREFIX/lib/probes.py" 0644
-  put "$work/lib/ips.sh" "$PREFIX/lib/ips.sh" 0755
+  put "$work/ccproxy-exit-agent" "$AGENT" 0755
   if [ -n "$singbox_new" ]; then
-    put "$singbox_new" "$PREFIX/bin/sing-box" 0755
+    put "$singbox_new" "$SINGBOX" 0755
     printf '%s\n' "$asset_sha" > "$PREFIX/sing-box.sha256"
   fi
   write_ctl > "$work/singbox-ctl"
-  put "$work/singbox-ctl" "$PREFIX/libexec/singbox-ctl" 0755
+  put "$work/singbox-ctl" "$CTL" 0755
 }
 
 write_token() {
@@ -433,19 +351,19 @@ write_conf() {
     echo "IFACE='$iface'"
     echo "CAFILE='$cafile'"
     echo "AGENT_NAME='$name'"
-    echo "PYTHON='$python'"
+    echo "AGENT_VERSION='$AGENT_VERSION'"
     echo "SINGBOX_VERSION='$SINGBOX_VERSION'"
   } > "$CONF_FILE.new.$$"
   chmod 0644 "$CONF_FILE.new.$$"
   mv -f "$CONF_FILE.new.$$" "$CONF_FILE"
 }
 
-# Arguments for agent.py (one per line), shared by the systemd unit and the launchd plist.
+# Agent command line (one argument per line), shared by the systemd unit and the launchd plist.
 agent_args() {
-  printf '%s\n' "$PREFIX/lib/agent.py" --cp "$cp_url" --token-file "$TOKEN_FILE" \
-    --config "$VAR/config.json" --state-dir "$VAR" --singbox "$PREFIX/bin/sing-box" \
-    --reload-cmd "$PREFIX/libexec/singbox-ctl reload" --status-cmd "$PREFIX/libexec/singbox-ctl status"
-  if [ -n "$iface" ]; then printf '%s\n' --iface "$iface" --ips-script "$PREFIX/lib/ips.sh"; fi
+  printf '%s\n' "$AGENT" --cp "$cp_url" --token-file "$TOKEN_FILE" \
+    --config "$VAR/config.json" --state-dir "$VAR/agent" --singbox "$SINGBOX" \
+    --reload-cmd "$CTL reload" --status-cmd "$CTL status"
+  if [ -n "$iface" ]; then printf '%s\n' --iface "$iface"; fi
   if [ -n "$cafile" ]; then printf '%s\n' --cafile "$cafile"; fi
   if [ -n "$name" ]; then printf '%s\n' --name "$name"; fi
 }
@@ -485,10 +403,10 @@ install_linux() {
     say "warning: sing-box.service (another installation) is running; it may hold the same ports"
   fi
   mkdir -p "$SYSTEMD_DIR"
-  exec_start="$(systemd_quote "$python") -E -s -S"
+  exec_start=''
   args=$(agent_args)
   while IFS= read -r a; do
-    exec_start="$exec_start $(systemd_quote "$a")"
+    exec_start="$exec_start${exec_start:+ }$(systemd_quote "$a")"
   done <<EOF
 $args
 EOF
@@ -503,13 +421,13 @@ Description=CC Proxy exit node egress IP addresses
 After=network-online.target
 Wants=network-online.target
 Before=ccproxy-exit-singbox.service
-ConditionPathExists=$VAR/ips.txt
+ConditionPathExists=$VAR/agent/ips.txt
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh $PREFIX/lib/ips.sh up $iface $VAR/ips.txt
-ExecStop=/bin/sh $PREFIX/lib/ips.sh down $iface $VAR/ips.txt
+ExecStart=$AGENT ips up $iface $VAR/agent/ips.txt
+ExecStop=$AGENT ips down $iface $VAR/agent/ips.txt
 
 [Install]
 WantedBy=multi-user.target
@@ -517,7 +435,7 @@ EOF
     put "$work/ccproxy-exit-ips.service" "$SYSTEMD_DIR/ccproxy-exit-ips.service" 0644
   fi
   cat > "$work/ccproxy-exit-singbox.service" <<EOF
-# CC Proxy exit node: sing-box with the last config the agent applied. Generated by the installer.
+# CC Proxy exit node: sing-box with the last config the agent put in place. Generated by the installer.
 [Unit]
 Description=CC Proxy exit node sing-box
 After=network-online.target$ips_after
@@ -526,7 +444,7 @@ $ips_wants
 ConditionPathExists=$VAR/config.json
 
 [Service]
-ExecStart=$PREFIX/bin/sing-box run -c $VAR/config.json -D $VAR
+ExecStart=$SINGBOX run -c $VAR/config.json -D $VAR/sing-box
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
@@ -540,7 +458,7 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 EOF
   cat > "$work/ccproxy-exit-agent.service" <<EOF
-# CC Proxy exit node: control-plane agent. The token is read from $TOKEN_FILE. Generated by the installer.
+# CC Proxy exit node agent. The token is read from $TOKEN_FILE. Generated by the installer.
 [Unit]
 Description=CC Proxy exit node agent
 After=network-online.target
@@ -583,13 +501,13 @@ install_macos() {
   cat > "$work/$MAC_SINGBOX.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- CC Proxy exit node: sing-box with the last config the agent applied. Generated by the installer. -->
+<!-- CC Proxy exit node: sing-box with the last config the agent put in place. Generated by the installer. -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>$MAC_SINGBOX</string>
   <key>ProgramArguments</key>
   <array>
-$(printf '%s\n' "$PREFIX/bin/sing-box" run -c "$VAR/config.json" -D "$VAR" | plist_array)
+$(printf '%s\n' "$SINGBOX" run -c "$VAR/config.json" -D "$VAR/sing-box" | plist_array)
   </array>
   <key>KeepAlive</key>
   <dict><key>PathState</key><dict><key>$VAR/config.json</key><true/></dict></dict>
@@ -609,7 +527,7 @@ EOF
   <key>Label</key><string>$MAC_AGENT</string>
   <key>ProgramArguments</key>
   <array>
-$({ printf '%s\n' "$python" -E -s -S; agent_args; } | plist_array)
+$(agent_args | plist_array)
   </array>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
@@ -651,7 +569,7 @@ mac_warnings() {
   fw=/usr/libexec/ApplicationFirewall/socketfilterfw
   if [ -x "$fw" ] && "$fw" --getglobalstate 2>/dev/null | grep -q enabled; then
     say "note: the macOS application firewall is on; allow sing-box to accept connections:"
-    say "  sudo $fw --add $PREFIX/bin/sing-box && sudo $fw --unblockapp $PREFIX/bin/sing-box"
+    say "  sudo $fw --add $SINGBOX && sudo $fw --unblockapp $SINGBOX"
   fi
   if command -v pmset >/dev/null 2>&1 && pmset -g 2>/dev/null | grep -Eq '^[[:space:]]*sleep[[:space:]]+[1-9]'; then
     say "note: this Mac goes to sleep when idle, which stops the exit node; consider: sudo pmset -a sleep 0"
