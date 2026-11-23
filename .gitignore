@@ -10,6 +10,7 @@ egress/inventory.json
 egress/test/out/
 __pycache__/
 controlplane/test/out/
+/controlplane/cc-controlplane
 *.db
 *.db-wal
 *.db-shm

@@ -1,0 +1,9 @@
+*
+!*.go
+!go.mod
+!go.sum
+!schema.sql
+!console.html
+!sqlite_export.py
+!Dockerfile
+*_test.go

@@ -1,6 +1,6 @@
 # cc_proxy
 
-`cc_proxy` routes selected traffic through assigned IPv4 exits. It includes a Rust desktop and CLI client, a Python and SQLite control plane, and Linux exit nodes that run sing-box.
+`cc_proxy` routes selected traffic through assigned IPv4 exits. It includes a Rust desktop and CLI client, a Go control plane backed by PostgreSQL, and Linux exit nodes that run sing-box.
 
 | Component | Documentation |
 | --- | --- |
