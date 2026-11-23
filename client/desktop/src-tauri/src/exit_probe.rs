@@ -8,8 +8,8 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const IP_CHECK_URL: &str = "https://api.ipify.org";
-const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
+const IP_CHECK_URLS: [&str; 2] = ["https://v4.ident.me/", "https://api.ipify.org"];
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[derive(Serialize)]
 #[serde(tag = "state", content = "ip", rename_all = "snake_case")]
@@ -110,17 +110,15 @@ pub(super) fn monitor(app: Arc<App>) {
 fn lookup(binary: &Path, config_path: &Path, fingerprint: &str) -> Option<Ipv4Addr> {
     let config = runtime::read_client_config(config_path).ok()?;
     let probe = runtime::render_exit_probe(&config, fingerprint).ok()?;
+    IP_CHECK_URLS
+        .iter()
+        .find_map(|url| fetch(binary, &probe, url))
+}
+
+fn fetch(binary: &Path, probe: &serde_json::Value, url: &str) -> Option<Ipv4Addr> {
     let mut command = Command::new(binary);
     command
-        .args([
-            "-c",
-            "stdin",
-            "tools",
-            "fetch",
-            "--outbound",
-            "egress",
-            IP_CHECK_URL,
-        ])
+        .args(["-c", "stdin", "tools", "fetch", "--outbound", "egress", url])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -132,7 +130,7 @@ fn lookup(binary: &Path, config_path: &Path, fingerprint: &str) -> Option<Ipv4Ad
     }
     let mut child = command.spawn().ok()?;
     let input = child.stdin.take().expect("piped stdin");
-    if serde_json::to_writer(input, &probe).is_ok() {
+    if serde_json::to_writer(input, probe).is_ok() {
         let start = Instant::now();
         loop {
             match child.try_wait() {
