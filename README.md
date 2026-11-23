@@ -7,6 +7,7 @@
 | Desktop and CLI | [Client setup and tests](client/README.md) |
 | Control plane | [API, administration, and monitoring](controlplane/README.md) |
 | Exit host | [IP binding and deployment](egress/README.md) |
+| Exit-node installer | [Go agent, one-command install for macOS, Linux and Windows](egress/install/README.md) |
 | Design | [Multi-IP architecture](docs/multi-ip-egress-proxy-design.md) |
 
 ## Development with GitHub Issues

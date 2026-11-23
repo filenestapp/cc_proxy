@@ -92,6 +92,17 @@ On a definite reload failure the agent restores the last confirmed configuration
 
 The agent reports the last confirmed configuration ETag, an `apply_state` of `confirmed`, `pending`, `failed`, or `unknown`, and the latest apply error. The console shows a host as synchronized when the ETag matches and the state is confirmed. Legacy agents that omit the state are evaluated by ETag.
 
+### One-command install (Go agent)
+
+New exit hosts use the compiled Go agent (`egress/agent`) and a one-command installer instead of a checkout and Python. **Add host**, **Rotate agent token** and a host's **Install command** button show copy-ready commands for macOS, Linux and Windows. The installer prompts for the agent token with hidden input, then downloads the agent and the pinned sing-box and verifies their SHA-256 digests. It installs boot services (launchd, systemd, or a SYSTEM startup task). The server embeds the install scripts and pins from `install/`, and serves agent binaries from the reproducible build named by `CP_AGENT_DIST`:
+
+```bash
+egress/agent/build.sh --verify                      # six OS/architecture binaries, SHA256SUMS, VERSION
+CP_AGENT_DIST=$PWD/egress/agent/dist cc-controlplane serve ...
+```
+
+`GET /install/exit.sh`, `/install/exit.ps1` and `/install/manifest.json` are public. `GET /install/agent/{os}-{arch}` requires a host agent token, and `GET /admin/install-commands?cp=https://...` requires an administrator. The installer details and the Mac mini acceptance steps are in [the installer guide](../egress/install/README.md).
+
 ## Monitoring and topology
 
 | Source | Results | Default frequency |

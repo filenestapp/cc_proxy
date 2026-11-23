@@ -3,6 +3,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY *.go schema.sql console.html sqlite_export.py ./
+COPY install ./install
 RUN CGO_ENABLED=0 go build -trimpath -o /out/cc-controlplane .
 
 FROM alpine:3.22

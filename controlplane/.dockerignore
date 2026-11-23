@@ -4,6 +4,8 @@
 !go.sum
 !schema.sql
 !console.html
+!install/
+!install/**
 !sqlite_export.py
 !Dockerfile
 *_test.go
