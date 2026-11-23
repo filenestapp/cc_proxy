@@ -36,6 +36,7 @@ CREATE INDEX IF NOT EXISTS probes_lookup ON probes(kind, subject, source, target
 RETENTION = 7 * 24 * 3600
 HISTORY = 20          # results per (subject, source, target) kept for the success-rate bar
 MAX_RESULTS = 2000    # per report, to bound a misbehaving reporter
+APPLY_STATES = ("confirmed", "pending", "failed", "unknown")
 
 
 class Monitor:
@@ -47,6 +48,8 @@ class Monitor:
             cols = [r[1] for r in store.db.execute("PRAGMA table_info(agents)")]
             if "apply_error" not in cols:  # added after the first v2 databases
                 store.db.execute("ALTER TABLE agents ADD COLUMN apply_error TEXT")
+            if "apply_state" not in cols:
+                store.db.execute("ALTER TABLE agents ADD COLUMN apply_state TEXT")
 
     # -- settings ----------------------------------------------------------------------------------------
 
@@ -67,16 +70,21 @@ class Monitor:
 
     # -- reports -----------------------------------------------------------------------------------------
 
-    def heartbeat(self, agent, config_etag_value, singbox_running, apply_error=None):
-        """config_etag_value is the version the agent confirmed running; apply_error says why a newer one is not."""
+    def heartbeat(self, agent, config_etag_value, singbox_running, apply_error=None, apply_state=None):
+        """config_etag_value is the version sing-box confirmed running; apply_state is the state of the version the
+        agent installed after it (confirmed, pending, failed, unknown); apply_error says why it is not running."""
+        if apply_state not in APPLY_STATES:
+            apply_state = None
         with self.store.lock:
             self.store.db.execute(
-                "INSERT INTO agents(name, last_seen, config_etag, singbox_running, apply_error) VALUES(?, ?, ?, ?, ?) "
+                "INSERT INTO agents(name, last_seen, config_etag, singbox_running, apply_error, apply_state) "
+                "VALUES(?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(name) DO UPDATE SET last_seen = excluded.last_seen, config_etag = excluded.config_etag, "
-                "singbox_running = excluded.singbox_running, apply_error = excluded.apply_error",
+                "singbox_running = excluded.singbox_running, apply_error = excluded.apply_error, "
+                "apply_state = excluded.apply_state",
                 (agent, self.clock(), (config_etag_value or "").strip('"') or None,
                  None if singbox_running is None else int(bool(singbox_running)),
-                 str(apply_error)[:300] if apply_error else None))
+                 str(apply_error)[:300] if apply_error else None, apply_state))
 
     def record(self, kind, source, results):
         """results: [{"subject", "target", "ok", "latency_ms"?, "detail"?}]"""
@@ -137,7 +145,7 @@ class Monitor:
                 "name": a["name"], "last_seen": a["last_seen"], "age": now - a["last_seen"],
                 "config_etag": a["config_etag"], "in_sync": a["config_etag"] == current.get(a["name"]),
                 "singbox_running": None if a["singbox_running"] is None else bool(a["singbox_running"]),
-                "apply_error": a["apply_error"],
+                "apply_error": a["apply_error"], "apply_state": a["apply_state"],
             } for a in store.db.execute("SELECT * FROM agents WHERE name IN (SELECT name FROM hosts) ORDER BY name")]
             entries = []
             for e in self.entries():

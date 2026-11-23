@@ -1,7 +1,8 @@
-"""Regression tests for review findings CC-02 (confirm reload before reporting a version applied) and CC-03 (probe
+"""Regression tests for review findings CC-02 / issue #2 (the running sing-box confirms a version before it is reported applied) and CC-03 (probe
 rounds never block heartbeats or config updates)."""
 import json
 import os
+import signal
 import stat
 import sys
 import threading
@@ -23,14 +24,16 @@ def topology_agent(test, name="hk-1"):
 
 
 class ReloadCmdTest(tc.AgentFixture):
-    """--reload-cmd: the command (and --status-cmd) must succeed before a version counts as applied."""
+    """--reload-cmd (systemd): a version counts as applied only when the running sing-box answers the confirmation
+    API with that version's secret. The fixture's fake service plays `systemctl reload sing-box`."""
 
     def setUp(self):
         super().setUp()
         self.fail_flag = os.path.join(self.tmp, "fail-reload")
         script = os.path.join(self.tmp, "reload.sh")
         with open(script, "w") as f:
-            f.write('#!/bin/sh\necho x >> "%s"\n[ -f "%s" ] && exit 1\nexit 0\n' % (self.reloads, self.fail_flag))
+            f.write('#!/bin/sh\necho x >> "%s"\n[ -f "%s" ] && exit 1\nkill -HUP %d\n'
+                    % (self.reloads, self.fail_flag, self.service.pid))
         os.chmod(script, os.stat(script).st_mode | stat.S_IEXEC)
         self.script = script
 
@@ -39,12 +42,16 @@ class ReloadCmdTest(tc.AgentFixture):
         a.args.reload_cmd = self.script
         return a
 
-    def test_failed_reload_keeps_previous_version_and_is_retried_after_304(self):
+    def start_confirmed(self):
         self.setup_user()
         a = self.agent()
         a.loop()
-        first = a.applied
-        self.assertIsNotNone(first)
+        self.assertIsNotNone(a.applied)
+        self.assertEqual(topology_agent(self)["apply_state"], "confirmed")
+        return a, a.applied
+
+    def test_failed_reload_keeps_previous_version_and_is_retried_after_304(self):
+        a, first = self.start_confirmed()
         self.assertTrue(topology_agent(self)["in_sync"])
 
         open(self.fail_flag, "w").close()
@@ -55,6 +62,7 @@ class ReloadCmdTest(tc.AgentFixture):
         agent_view = topology_agent(self)
         self.assertEqual(agent_view["config_etag"], first.strip('"'))  # dashboard still shows the old version
         self.assertFalse(agent_view["in_sync"])
+        self.assertEqual(agent_view["apply_state"], "failed")
         self.assertIn("reload failed", agent_view["apply_error"])
 
         a.loop()                                  # 304 for the written candidate, still failing: retried
@@ -62,22 +70,94 @@ class ReloadCmdTest(tc.AgentFixture):
         self.assertEqual(a.applied, first)
 
         os.unlink(self.fail_flag)
-        a.loop()                                  # 304 again, retry succeeds
+        a.loop()                                  # 304 again, retry succeeds and sing-box confirms it
         self.assertEqual(a.applied, a.installed)
         agent_view = topology_agent(self)
         self.assertTrue(agent_view["in_sync"])
+        self.assertEqual(agent_view["apply_state"], "confirmed")
         self.assertIsNone(agent_view["apply_error"])
 
-    def test_status_cmd_failure_counts_as_failed_reload(self):
+    def test_old_service_that_stays_alive_is_not_confirmed(self):
+        """systemctl reload and is-active both succeed, but sing-box keeps serving the old revision."""
+        a, first = self.start_confirmed()
+        a.args.status_cmd = "true"
+        self.flag("stubborn")
+        self.login(device="alice-win")
+        a.loop()
+        self.assertEqual(self.reload_count(), 2)
+        self.assertEqual(a.applied, first)
+        agent_view = topology_agent(self)
+        self.assertEqual((agent_view["apply_state"], agent_view["singbox_running"]), ("failed", True))
+        self.assertIn("still serves another configuration", agent_view["apply_error"])
+        self.assertFalse(agent_view["in_sync"])
+
+        a.loop()                                  # 304: retried, still the old revision
+        self.assertEqual((self.reload_count(), a.applied), (3, first))
+
+        self.flag("stubborn", False)
+        a.loop()                                  # 304: retried, now loaded
+        self.assertEqual(self.reload_count(), 4)
+        self.assertEqual(a.applied, a.installed)
+        self.assertTrue(topology_agent(self)["in_sync"])
+
+    def test_silent_service_is_reported_unknown_not_applied(self):
+        a, first = self.start_confirmed()
+        self.flag("silent")
+        self.login(device="alice-win")
+        a.loop()
+        self.assertEqual(a.applied, first)
+        agent_view = topology_agent(self)
+        self.assertEqual(agent_view["apply_state"], "unknown")
+        self.assertIn("not confirmed", agent_view["apply_error"])
+        self.assertFalse(agent_view["in_sync"])
+
+        a.loop()                                  # unknown: re-checked, but not reloaded again right away
+        self.assertEqual((self.reload_count(), a.applied), (2, first))
+
+        # The service starts answering (e.g. an operator reloaded it): confirmed without another reload.
+        self.flag("silent", False)
+        self.service.send_signal(signal.SIGHUP)
+        time.sleep(0.3)
+        a.loop()
+        self.assertEqual(self.reload_count(), 2)
+        self.assertEqual(a.applied, a.installed)
+        self.assertEqual(topology_agent(self)["apply_state"], "confirmed")
+
+    def test_unknown_is_reloaded_again_after_the_retry_interval(self):
+        a, first = self.start_confirmed()
+        self.flag("silent")
+        self.login(device="alice-win")
+        a.loop()
+        self.assertEqual(a.state(), "unknown")
+        self.flag("silent", False)
+        a.last_reload -= agentmod.UNKNOWN_RETRY_SECONDS
+        a.loop()
+        self.assertEqual(self.reload_count(), 3)
+        self.assertEqual(a.applied, a.installed)
+
+    def test_each_candidate_carries_its_own_confirmation_secret(self):
+        a, _ = self.start_confirmed()
+        api = self.installed()["experimental"]["clash_api"]
+        self.assertEqual(api["external_controller"], self.confirm_api)
+        self.login(device="alice-win")
+        a.loop()
+        api2 = self.installed()["experimental"]["clash_api"]
+        self.assertNotEqual(api["secret"], api2["secret"])
+        self.assertEqual(self.installed()["inbounds"][0]["users"][-1]["name"], "alice/alice-win")  # rest kept
+        # A clash_api block sent by the control plane is replaced, never trusted.
+        body = json.dumps({"experimental": {"clash_api": {"external_controller": "0.0.0.0:9090", "secret": "x"}}})
+        a.install('"forged"', body.encode())
+        api3 = self.installed()["experimental"]["clash_api"]
+        self.assertEqual(api3["external_controller"], self.confirm_api)
+        self.assertNotEqual(api3["secret"], "x")
+
+    def test_status_cmd_failure_is_reported_but_does_not_decide(self):
         self.setup_user()
         a = self.agent()
         a.args.status_cmd = "false"
         a.loop()
-        self.assertIsNone(a.applied)
-        self.assertIn("not running", a.apply_error)
-        a.args.status_cmd = "true"
-        a.loop()
-        self.assertEqual(a.applied, a.installed)
+        self.assertEqual(a.applied, a.installed)  # confirmed by sing-box itself
+        self.assertIs(topology_agent(self)["singbox_running"], False)
 
     def test_invalid_candidate_leaves_the_working_config(self):
         self.setup_user()
@@ -88,6 +168,7 @@ class ReloadCmdTest(tc.AgentFixture):
         a.loop()
         self.assertEqual(tc.read(os.path.join(self.tmp, "config.json")), before)
         self.assertEqual((a.applied, a.installed), (applied, applied))
+        self.assertEqual(topology_agent(self)["apply_state"], "confirmed")
 
     def test_burst_still_coalesces_into_one_successful_reload(self):
         self.setup_user()
@@ -107,17 +188,8 @@ class ReloadCmdTest(tc.AgentFixture):
 
 
 class RunModeTest(tc.AgentFixture):
-    """--run: sing-box must survive start / SIGHUP before a version counts as applied."""
-
-    def setUp(self):
-        super().setUp()
-        self.crash_flag = os.path.join(self.tmp, "crash-on-hup")
-        # Fake sing-box: `check` as in the fixture; `run` idles, and on SIGHUP exits if the crash flag exists.
-        with open(self.fake, "w") as f:
-            f.write('#!/bin/sh\n'
-                    'if [ "$1" = check ]; then grep -q REJECT_ME "$3" && exit 1; exit 0; fi\n'
-                    'trap \'[ -f "%s" ] && exit 3\' HUP\n'
-                    'while :; do sleep 0.1; done\n' % self.crash_flag)
+    """--run: the agent's own sing-box child must confirm the candidate; a live PID or a delivered SIGHUP is not
+    enough."""
 
     def tearDown(self):
         if self.agent_obj and self.agent_obj.child and self.agent_obj.child.poll() is None:
@@ -127,23 +199,46 @@ class RunModeTest(tc.AgentFixture):
 
     agent_obj = None
 
-    def test_crash_on_reload_is_not_reported_applied_and_recovers(self):
+    def start_confirmed(self):
         self.setup_user()
         a = self.agent_obj = self._agent()
         a.args.run, a.args.reload_cmd = True, None
         a.loop()
-        first = a.applied
-        self.assertIsNotNone(first)
-        open(self.crash_flag, "w").close()
+        self.assertIsNotNone(a.applied)
+        return a, a.applied
+
+    def test_crash_on_reload_is_not_reported_applied_and_recovers(self):
+        a, first = self.start_confirmed()
+        self.flag("crash")
         self.login(device="alice-win")
-        a.loop()                                  # SIGHUP -> fake sing-box exits -> not applied
+        a.loop()                                  # SIGHUP -> exits; restart with it exits too -> not applied
         self.assertEqual(a.applied, first)
         self.assertIn("exited", a.apply_error)
+        self.assertIsNotNone(a.child.poll())
+        self.assertEqual(topology_agent(self)["apply_state"], "failed")
         self.assertFalse(topology_agent(self)["in_sync"])
-        os.unlink(self.crash_flag)
-        a.loop()                                  # retried: restarted with the written config
+        self.flag("crash", False)
+        a.loop()                                  # retried: restarted with the written config, confirmed
         self.assertEqual(a.applied, a.installed)
         self.assertTrue(topology_agent(self)["in_sync"])
+
+    def test_child_that_stays_alive_on_the_old_revision_is_not_confirmed(self):
+        a, first = self.start_confirmed()
+        pid = a.child.pid
+        self.flag("stubborn")
+        self.login(device="alice-win")
+        a.loop()                                  # SIGHUP delivered, child alive, old revision served
+        self.assertEqual(a.child.pid, pid)
+        self.assertIsNone(a.child.poll())
+        self.assertEqual(a.applied, first)
+        self.assertEqual(topology_agent(self)["apply_state"], "failed")
+        a.loop()                                  # 304: retried, still old
+        self.assertEqual(a.applied, first)
+        self.flag("stubborn", False)
+        a.loop()                                  # 304: retried, loaded
+        self.assertEqual(a.child.pid, pid)
+        self.assertEqual(a.applied, a.installed)
+        self.assertEqual(topology_agent(self)["apply_state"], "confirmed")
 
 
 class ProbeIsolationTest(tc.AgentFixture):

@@ -6,10 +6,13 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -431,22 +434,43 @@ class ApiTest(ServerFixture):
 
 
 class AgentFixture(ServerFixture):
-    """API server plus a fake sing-box; _agent() builds a real Agent for host hk-1 that syncs once per loop()."""
+    """API server plus a fake sing-box (tests/fake_singbox.py); _agent() builds a real Agent for host hk-1 that syncs
+    once per loop(). By default the agent uses --reload-cmd against a fake sing-box service started here, which
+    answers the confirmation API like the real one (see fake_singbox.py for its flag files)."""
 
     def setUp(self):
         super().setUp()
         self.tmp = tempfile.mkdtemp()
         self.fake = os.path.join(self.tmp, "sing-box")
-        # Fake sing-box: `check` fails when the config contains "REJECT_ME"; other commands do nothing.
+        fake_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_singbox.py")
         with open(self.fake, "w") as f:
-            f.write('#!/bin/sh\nif [ "$1" = check ] && grep -q REJECT_ME "$3"; then echo bad >&2; exit 1; fi\n')
+            f.write('#!/bin/sh\nexec "%s" "%s" "$@"\n' % (sys.executable, fake_py))
         os.chmod(self.fake, os.stat(self.fake).st_mode | stat.S_IEXEC)
         self.reloads = os.path.join(self.tmp, "reloads")
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            self.confirm_api = "127.0.0.1:%d" % s.getsockname()[1]
+        # The "systemd" service: reloaded by --reload-cmd with SIGHUP, like `systemctl reload sing-box`.
+        self.service = subprocess.Popen([self.fake, "run", "-c", os.path.join(self.tmp, "config.json")])
+        deadline = time.time() + 10
+        while not os.path.exists(os.path.join(self.tmp, "fake.ready")):
+            self.assertLess(time.time(), deadline, "fake sing-box service did not start")
+            time.sleep(0.02)
         os.environ["CP_AGENT_TOKEN"] = self.hk
 
     def tearDown(self):
+        self.service.kill()
+        self.service.wait()
         super().tearDown()
         shutil.rmtree(self.tmp)
+
+    def flag(self, name, on=True):
+        """Set or clear a fake_singbox.py flag file (stubborn, crash, silent)."""
+        path = os.path.join(self.tmp, name)
+        if on:
+            open(path, "w").close()
+        elif os.path.exists(path):
+            os.unlink(path)
 
     def reload_count(self):
         return len(read(self.reloads).splitlines()) if os.path.exists(self.reloads) else 0
@@ -460,7 +484,8 @@ class AgentFixture(ServerFixture):
             config=os.path.join(self.tmp, "config.json"), state_dir=self.tmp, singbox=self.fake,
             interval=0, settle=settle, max_delay=max_delay, once=True, run=False,
             name="hk-1", probe_interval=60, probe_timeout=5, status_cmd=None,
-            reload_cmd="sh -c 'echo x >> %s'" % self.reloads)
+            confirm_api=self.confirm_api, confirm_timeout=1.5,
+            reload_cmd="sh -c 'echo x >> %s; kill -HUP %d'" % (self.reloads, self.service.pid))
         return agentmod.Agent(args)
 
 
