@@ -502,7 +502,12 @@ func (a *api) agentReport(r *apiRequest) (response, error) {
 	if string(r.Body["probes"]) == "null" {
 		return response{}, failure(400, "probes must be a list")
 	}
-	err := a.store.reportAgent(r.Context(), r.Agent, r.Token, body.heartbeat, body.Probes)
+	address, _ := netip.ParseAddr(r.Address)
+	if a.trusted(address) {
+		// With no usable forwarding chain, clientIP falls back to the proxy itself.
+		address = netip.Addr{}
+	}
+	err := a.store.reportAgent(r.Context(), r.Agent, r.Token, address, body.heartbeat, body.Probes)
 	return ok(object{"recorded": len(body.Probes)}, err)
 }
 

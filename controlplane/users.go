@@ -37,12 +37,14 @@ func userInfo(ctx context.Context, db database, name string) (userSummary, error
 	var u userSummary
 	var host, publicHost *string
 	var port *int
-	err := db.QueryRow(ctx, `SELECT u.name, host(u.egress_ip), u.host, h.public_host, u.port
+	err := db.QueryRow(ctx, `SELECT u.name, host(u.egress_ip), u.host, `+publicEntryHostSQL+`, u.port
 		FROM users u LEFT JOIN hosts h ON h.name = u.host WHERE u.name = $1`, name).
 		Scan(&u.User, &u.EgressIP, &host, &publicHost, &port)
 	if err == nil && host != nil {
 		u.Host = *host
-		u.Entry = &entryAddress{Host: *publicHost, Port: *port}
+		if *publicHost != "" {
+			u.Entry = &entryAddress{Host: *publicHost, Port: *port}
+		}
 	}
 	return u, missing(err, "user "+name)
 }

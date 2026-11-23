@@ -13,8 +13,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const defaultRealityServerName = "google.com"
+
 type host struct {
 	Name, PublicHost, ServerName, HandshakeServer string
+	ObservedPublicIPv4                            string
 	PortMin, PortMax, HandshakePort               int
 	BlockPrivate                                  bool
 	BlockCIDRs                                    []string
@@ -34,9 +37,12 @@ type hostOptions struct {
 
 func (o hostOptions) apply(h *host) error {
 	if o.PublicHost != nil {
-		h.PublicHost = *o.PublicHost
+		h.PublicHost = strings.TrimSpace(*o.PublicHost)
 	}
 	if o.ServerName != nil {
+		if h.HandshakeServer == h.ServerName {
+			h.HandshakeServer = *o.ServerName
+		}
 		h.ServerName = *o.ServerName
 	}
 	if o.HandshakeServer != nil {
@@ -61,8 +67,6 @@ func (o hostOptions) apply(h *host) error {
 		h.BlockCIDRs = *o.BlockCIDRs
 	}
 	switch {
-	case h.PublicHost == "":
-		return failure(409, "public_host is required")
 	case h.ServerName == "":
 		return failure(409, "server_name (the Reality camouflage SNI) is required")
 	case h.PortMin < 1 || h.PortMax < h.PortMin || h.PortMax > 65535:
@@ -75,7 +79,8 @@ func (o hostOptions) apply(h *host) error {
 
 func getHost(ctx context.Context, db database, name string) (host, error) {
 	h, err := rowOf[host](ctx, db, `SELECT name, public_host, port_min, port_max, reality_private,
-		reality_public, short_id, server_name, handshake_server, handshake_port, block_private, block_cidrs
+		reality_public, short_id, server_name, handshake_server, handshake_port, block_private, block_cidrs,
+		COALESCE(host(observed_public_ipv4), '') AS observed_public_ipv4
 		FROM hosts WHERE name = $1`, name)
 	return h, missing(err, "host "+name)
 }
@@ -84,7 +89,10 @@ func (s *store) addHost(ctx context.Context, name string, options hostOptions) (
 	if err := checkName("host", name); err != nil {
 		return "", err
 	}
-	h := host{PortMin: 20000, PortMax: 29999, HandshakePort: 443, BlockPrivate: true, BlockCIDRs: []string{"169.254.169.254/32"}}
+	h := host{
+		ServerName: defaultRealityServerName, PortMin: 20000, PortMax: 29999, HandshakePort: 443,
+		BlockPrivate: true, BlockCIDRs: []string{"169.254.169.254/32"},
+	}
 	if err := options.apply(&h); err != nil {
 		return "", err
 	}
@@ -130,7 +138,8 @@ func (s *store) updateHost(ctx context.Context, name string, options hostOptions
 			return failure(409, "users outside the new port range: %s", strings.Join(bindings, ", "))
 		}
 		_, err = tx.Exec(ctx, `UPDATE hosts SET public_host=$2, port_min=$3, port_max=$4, server_name=$5,
-			handshake_server=$6, handshake_port=$7, block_private=$8, block_cidrs=$9 WHERE name=$1`,
+			handshake_server=$6, handshake_port=$7, block_private=$8, block_cidrs=$9,
+			observed_public_ipv4=CASE WHEN $2 = '' THEN observed_public_ipv4 ELSE NULL END WHERE name=$1`,
 			name, h.PublicHost, h.PortMin, h.PortMax, h.ServerName, h.HandshakeServer, h.HandshakePort, h.BlockPrivate, h.BlockCIDRs)
 		return err
 	})
@@ -162,18 +171,24 @@ func (s *store) deleteHost(ctx context.Context, name string) error {
 }
 
 type hostView struct {
-	Name          string `json:"name"`
-	PublicHost    string `json:"public_host"`
-	PortRange     []int  `json:"port_range"`
-	ServerName    string `json:"server_name"`
-	RealityPublic string `json:"reality_public_key"`
-	IPs           int    `json:"ips"`
-	Users         int    `json:"users"`
+	Name            string `json:"name"`
+	PublicHost      string `json:"public_host"`
+	AutoPublicHost  bool   `json:"auto_public_host"`
+	PortRange       []int  `json:"port_range"`
+	ServerName      string `json:"server_name"`
+	HandshakeServer string `json:"handshake_server"`
+	RealityPublic   string `json:"reality_public_key"`
+	IPs             int    `json:"ips"`
+	Users           int    `json:"users"`
 }
 
+// Queries using the hosts alias h prefer the manual entry and then the address learned from its Agent.
+const publicEntryHostSQL = `COALESCE(NULLIF(h.public_host, ''), host(h.observed_public_ipv4), '')`
+
 func listHosts(ctx context.Context, db database) ([]hostView, error) {
-	return rowsOf[hostView](ctx, db, `SELECT h.name, h.public_host, ARRAY[h.port_min, h.port_max] AS port_range,
-		h.server_name, h.reality_public, (SELECT count(*) FROM egress_ips e WHERE e.host = h.name) AS ips,
+	return rowsOf[hostView](ctx, db, `SELECT h.name, `+publicEntryHostSQL+` AS public_host,
+		h.public_host = '' AS auto_public_host, ARRAY[h.port_min, h.port_max] AS port_range,
+		h.server_name, h.handshake_server, h.reality_public, (SELECT count(*) FROM egress_ips e WHERE e.host = h.name) AS ips,
 		(SELECT count(*) FROM users u WHERE u.host = h.name) AS users FROM hosts h ORDER BY h.name`)
 }
 
@@ -296,8 +311,13 @@ type assignment struct {
 	Host string   `json:"host"`
 }
 
-func (s *store) assign(ctx context.Context, name string, req assignment, moving bool) (userSummary, error) {
-	var summary userSummary
+type assignmentResult struct {
+	userSummary
+	Port int `json:"port"`
+}
+
+func (s *store) assign(ctx context.Context, name string, req assignment, moving bool) (assignmentResult, error) {
+	var summary assignmentResult
 	err := s.write(ctx, func(tx pgx.Tx) error {
 		user, err := getUser(ctx, tx, name)
 		if err != nil {
@@ -313,7 +333,14 @@ func (s *store) assign(ctx context.Context, name string, req assignment, moving 
 		if err != nil {
 			return err
 		}
-		summary = userSummary{User: name, EgressIP: &ip, Host: h.Name, Entry: &entryAddress{Host: h.PublicHost, Port: port}}
+		summary = assignmentResult{userSummary: userSummary{User: name, EgressIP: &ip, Host: h.Name}, Port: port}
+		publicHost := h.PublicHost
+		if publicHost == "" {
+			publicHost = h.ObservedPublicIPv4
+		}
+		if publicHost != "" {
+			summary.Entry = &entryAddress{Host: publicHost, Port: port}
+		}
 		if user.IP != nil && *user.IP == ip && *user.Port == port {
 			return nil
 		}

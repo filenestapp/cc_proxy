@@ -646,7 +646,7 @@
     return `<button class="map-node ${health.tone}" data-node="${esc(host.name)}" data-tone="${health.tone}"
       type="button" aria-controls="host-inspector" aria-expanded="${host.name === selected}">
       <span class="node-top"><b>${esc(host.name)}</b>${statusBadge(health)}</span>
-      <span class="node-address mono">${esc(endpoint(host.public_host, entry?.port))}</span>
+      <span class="node-address mono">${esc(publicEntryLabel(host, entry?.port))}</span>
       <span class="node-metric">${best ? '<strong>' + ms(best.latency_ms) + '</strong><span>' + esc(best.source) + '</span>' :
         '<span>No current latency</span>'}</span>
       <span class="node-footer"><span><b>${node.ips.length}</b> ${node.ips.length === 1 ? "IP" : "IPs"}</span>
@@ -888,7 +888,7 @@
       <div class="install-cmd"><pre class="snippet" id="inst-uninstall"></pre><button type="button" data-copy-cmd="inst-uninstall">Copy</button></div>
       <p class="small muted" id="inst-note"></p>`;
     const how = {
-      macos: "Run in Terminal on the Mac. sudo asks for the Mac password, then the installer asks for the agent token (hidden). Add the Mac's local IPv4 (for example 192.168.1.20) as this host's egress IP; set the public entry address to the router's public address or DNS name and forward the port range to the Mac.",
+      macos: "Run in Terminal on the Mac. sudo asks for the Mac password, then the installer asks for the agent token (hidden). The Mac Agent registers its default interface's IPv4 when the egress pool is empty. Forward the TCP entry port range to the Mac.",
       linux: "Run on the host. sudo asks for your password, then the installer asks for the agent token (hidden). Name an interface only when the provider routes extra egress IPs to this host; otherwise its existing address is the egress IP.",
       windows: "Run in PowerShell started with \"Run as administrator\". The installer asks for the agent token (hidden).",
     };
@@ -945,17 +945,20 @@
     installPanel($("#install-panel", ov));
     $("[data-ok]", ov).onclick = close;
   }
+  function publicEntryLabel(host, port) {
+    return host.public_host ? endpoint(host.public_host, port) : "Waiting for Agent IPv4";
+  }
+
   const hostFields = (h = {}) => [
-    { name: "public_host", label: "Public entry address", value: h.public_host, required: true, placeholder: "192.0.2.2 or hostname", hint: "Clients connect to this address." },
-    { name: "server_name", label: "Reality TLS server name (SNI)", value: h.server_name, required: true, placeholder: "www.example.com", hint: "A public site that supports TLS 1.3." },
-    { name: "handshake_server", label: "Handshake target (optional)", value: h.handshake_server || "", placeholder: "Defaults to the TLS server name." },
+    { name: "public_host", label: "Public entry address", value: h.auto_public_host ? "" : h.public_host, placeholder: "Automatic or IPv4/hostname", hint: "Leave blank to update from Agent heartbeats. Clients must reach the entry port." },
+    { name: "server_name", label: "Reality TLS server name (SNI)", value: h.server_name ?? "google.com", required: true, placeholder: "google.com", hint: "A public site reachable from the exit host over TLS 1.3." },
+    { name: "handshake_server", label: "Handshake target (optional)", value: h.handshake_server === h.server_name ? "" : h.handshake_server, placeholder: "Defaults to the TLS server name." },
     { name: "port_min", label: "First user entry port", type: "number", value: h.port_range ? h.port_range[0] : 20000, required: true },
     { name: "port_max", label: "Last user entry port", type: "number", value: h.port_range ? h.port_range[1] : 29999, required: true, hint: "Allow this port range through the host firewall." },
   ];
   function hostBody(v) {
-    const b = { public_host: v.public_host, server_name: v.server_name, port_min: Number(v.port_min), port_max: Number(v.port_max) };
-    if (v.handshake_server) b.handshake_server = v.handshake_server;
-    return b;
+    return { public_host: v.public_host, server_name: v.server_name, handshake_server: v.handshake_server,
+      port_min: Number(v.port_min), port_max: Number(v.port_max) };
   }
 
   PAGES.hosts = async (args, token) => {
@@ -967,7 +970,7 @@
     const agents = Object.fromEntries(topo.agents.map((a) => [a.name, a]));
     $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + hosts.length + ' hosts</span><span class="spacer"></span><button class="primary" id="add-host">Add host</button></div>' +
       '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Public entry</th><th>Port range</th><th>Egress IPs</th><th>Users</th><th>Agent</th><th>TLS server name</th></tr></thead><tbody>' +
-      (hosts.map((h) => "<tr><td><a href=\"#/hosts/" + enc(h.name) + '"><b>' + esc(h.name) + "</b></a></td><td class=\"mono\">" + esc(h.public_host) + '</td><td class="mono">' + h.port_range[0] + "–" + h.port_range[1] + "</td><td>" + h.ips + "</td><td>" + h.users + "</td><td>" + statusBadge(agentHealth(agents[h.name])) + '</td><td class="mono small">' + esc(h.server_name) + "</td></tr>").join("") ||
+      (hosts.map((h) => "<tr><td><a href=\"#/hosts/" + enc(h.name) + '"><b>' + esc(h.name) + "</b></a></td><td class=\"mono\">" + esc(publicEntryLabel(h)) + '</td><td class="mono">' + h.port_range[0] + "–" + h.port_range[1] + "</td><td>" + h.ips + "</td><td>" + h.users + "</td><td>" + statusBadge(agentHealth(agents[h.name])) + '</td><td class="mono small">' + esc(h.server_name) + "</td></tr>").join("") ||
         '<tr><td colspan="7" class="empty">No egress hosts yet.</td></tr>') + "</tbody></table></div>";
     $("#add-host").onclick = async () => {
       const r = await form("Add egress host", [{ name: "name", label: "Host name", required: true, placeholder: "hk-1" }, ...hostFields()],
@@ -997,7 +1000,8 @@
       </div>
       <div class="grid2 section">
         <section class="card"><h2>Public entry</h2><dl class="kv">
-          <dt>Address</dt><dd class="mono">${esc(h.public_host)}</dd>
+          <dt>Address</dt><dd class="mono">${esc(publicEntryLabel(h))}</dd>
+          <dt>Address mode</dt><dd>${h.auto_public_host ? "Automatic" : "Manual"}</dd>
           <dt>Port range</dt><dd class="mono">${h.port_range[0]}–${h.port_range[1]}</dd>
           <dt>TLS server name</dt><dd class="mono">${esc(h.server_name)}</dd>
           <dt>Reality public key</dt><dd class="mono small">${esc(h.reality_public_key)}</dd>
@@ -1222,7 +1226,7 @@
       '<div class="grid2 section"><div class="card"><h2>Egress assignment</h2><dl class="kv">' +
       "<dt>Egress host</dt><dd>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">Unassigned</span>') + "</dd>" +
       '<dt>Egress IP</dt><dd class="mono">' + esc(u.egress_ip || "—") + "</dd>" +
-      '<dt>Client entry</dt><dd class="mono">' + (entry ? esc(entry.public_host) + ":" + u.port : "—") + "</dd>" +
+      '<dt>Client entry</dt><dd class="mono">' + (entry ? esc(publicEntryLabel(entry, u.port)) : "—") + "</dd>" +
       "<dt>Mode</dt><dd>" + (u.mode === "shared" ? "Shared" : "Exclusive") + "</dd></dl>" +
       '<div class="toolbar" style="margin:14px 0 0">' + (u.egress_ip ? '<button id="reassign">Change egress</button><button class="danger" id="release">Release egress</button>' : '<button class="primary" id="assign">Assign egress</button>') + "</div></div>" +
       '<div class="card"><h2>Account</h2><dl class="kv"><dt>Username</dt><dd class="mono">' + esc(u.name) + "</dd><dt>Devices</dt><dd>" + live.length + " / " + u.max_devices + " active</dd></dl>" +
@@ -1237,7 +1241,7 @@
       if (!ips) return;
       const usable = ips.filter((e) => e.status === "available" || (e.status === "assigned" && u.mode === "shared" && e.users.every((x) => (users.find((y) => y.name === x) || {}).mode === "shared")));
       return form(title, [
-        { name: "host", label: "Egress host", type: "select", value: u.host || (hosts[0] || {}).name, options: hosts.map((h) => [h.name, h.name + " · " + h.public_host]) },
+        { name: "host", label: "Egress host", type: "select", value: u.host || (hosts[0] || {}).name, options: hosts.map((h) => [h.name, h.name + " · " + publicEntryLabel(h)]) },
         { name: "ip", label: "Egress IP", type: "select", value: "", options: [["", "Automatic: lowest available IP on the selected host"]].concat(usable.filter((e) => e.ip !== u.egress_ip).map((e) => [e.ip, e.ip + " · " + e.host + (e.users.filter((x) => x !== name).length ? "(shared with " + e.users.filter((x) => x !== name).join(", ") + ")" : "")])) },
         { name: "port", label: "Entry port (optional)", type: "number", placeholder: "Leave blank for automatic assignment", hint: "Choose an unused port within the host range." },
       ], async (v) => {
@@ -1248,7 +1252,12 @@
         return api("POST", "/admin/users/" + enc(name) + (u.egress_ip ? "/reassign" : "/assign"), body);
       }, "Assign");
     };
-    const afterAssign = (r) => { if (r) { toast("Assigned: " + r.egress_ip + ", entry " + r.entry.host + ":" + r.entry.port + ". The client will switch automatically."); route(); } };
+    const afterAssign = (r) => {
+      if (!r) return;
+      const entry = r.entry ? endpoint(r.entry.host, r.entry.port) : "waiting for Agent IPv4";
+      toast("Assigned " + r.egress_ip + " · " + entry);
+      route();
+    };
     if ($("#assign")) $("#assign").onclick = async () => afterAssign(await assignForm("Assign egress for " + name));
     if ($("#reassign")) $("#reassign").onclick = async () => afterAssign(await assignForm("Change egress for " + name));
     if ($("#release")) $("#release").onclick = async () => {
@@ -1319,7 +1328,7 @@
       (opts.hint ? '<div class="hint">' + opts.hint + "</div>" : "") + "</div>";
     $("#view").innerHTML = '<div class="grid2">' +
       '<form class="card" id="s-policy"><h2>Client routing policy</h2>' +
-      field("domains", "Proxied domains", (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: "One domain per line, including all of its subdomains. macOS rejects local resolution for .test domains." }) +
+      field("domains", "Proxied domains", (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: "Enter one domain or web URL per line. A URL adds its hostname and subdomains." }) +
       field("direct_dns", "DNS for other domains", cp.direct_dns || "dhcp", { hint: "Use dhcp for the DNS assigned by the local network, or enter an IP such as 223.5.5.5." }) +
       '<div class="form-row check"><label><input type="checkbox" id="block_quic"' + (cp.block_quic === false ? "" : " checked") + "> Block QUIC (UDP 443) for proxied domains so apps use TCP.</label></div>" +
       '<button class="primary" type="submit">Save routing policy</button><p class="small muted">Clients check for and apply updates every 30 seconds.</p></form>' +

@@ -321,14 +321,14 @@ func TestProbeHistoryAndAlertRetries(t *testing.T) {
 	for i := range results {
 		results[i] = probeInput{Subject: ptr("203.0.113.3"), Target: ptr("https://example.test/"), OK: ptr(i < 21)}
 	}
-	require(t, s.reportAgent(ctx, "hk", token, heartbeat{ConfigETag: current.ETag, SingboxRunning: ptr(true)}, results))
+	require(t, s.reportAgent(ctx, "hk", token, netip.Addr{}, heartbeat{ConfigETag: current.ETag, SingboxRunning: ptr(true)}, results))
 	series, err := loadSeries(ctx, s.pool, "egress", []string{"203.0.113.3"})
 	require(t, err)
 	p := series["203.0.113.3"][0]
 	if len(p.History) != probeHistory || p.OK || !p.History[16] || p.History[17] {
 		t.Fatalf("history was not bounded and ordered: %v", p.History)
 	}
-	err = s.reportAgent(ctx, "hk", token, heartbeat{}, []probeInput{
+	err = s.reportAgent(ctx, "hk", token, netip.Addr{}, heartbeat{}, []probeInput{
 		{Subject: ptr("203.0.113.3"), Target: ptr("t"), OK: ptr(true)}, {Subject: ptr("198.51.100.3"), Target: ptr("t"), OK: ptr(true)},
 	})
 	wantStatus(t, err, 400)
@@ -369,13 +369,13 @@ func TestProbeHistoryAndAlertRetries(t *testing.T) {
 		t.Fatal("missed a repeat notification")
 	}
 	result := probeInput{Subject: ptr("203.0.113.3"), Target: ptr("https://example.test/"), OK: ptr(true)}
-	require(t, s.reportAgent(ctx, "hk", token, heartbeat{ConfigETag: current.ETag}, []probeInput{result}))
+	require(t, s.reportAgent(ctx, "hk", token, netip.Addr{}, heartbeat{ConfigETag: current.ETag}, []probeInput{result}))
 	evaluate()
 	if len(delivery) != 4 || delivery[3]["status"] != "resolved" {
 		t.Fatal("missed the recovery notification")
 	}
 	now = now.Add((probeRetention + 1) * time.Second)
-	require(t, s.reportAgent(ctx, "hk", token, heartbeat{ConfigETag: current.ETag}, nil))
+	require(t, s.reportAgent(ctx, "hk", token, netip.Addr{}, heartbeat{ConfigETag: current.ETag}, nil))
 	require(t, s.pool.QueryRow(ctx, "SELECT count(*) FROM probes").Scan(&entries))
 	end, err := version(ctx, s.pool)
 	require(t, err)

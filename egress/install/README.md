@@ -93,7 +93,7 @@ After a definitive failure, the agent restores the last confirmed config.
 | Platform | Reload | Egress IPs |
 | --- | --- | --- |
 | Linux | `systemctl reload-or-restart ccproxy-exit-singbox` (SIGHUP) | With `--iface`, each routed IP the interface lacks is added as `/32` and recorded in `owned-ips.txt`. Addresses already present are left alone. `ips down` (uninstall, `--no-iface`) removes only recorded addresses. The boot unit runs `ccproxy-exit-agent ips up` before sing-box |
-| macOS | `launchctl kill SIGHUP` (or `kickstart` before the first config) | The Mac's existing local IPv4; no IP helper |
+| macOS | `launchctl kill SIGHUP` (or `kickstart` before the first config) | The Agent registers the IPv4 of the default `enN` interface when the egress pool is empty |
 | Windows | `--run --run-reload restart`: sing-box is stopped and started again (no SIGHUP), then confirmed like any reload | The host's existing address |
 
 ## Entry address and local bind IP
@@ -104,22 +104,33 @@ These are two different addresses. Keeping them apart is what makes a Mac behind
 | --- | --- | --- |
 | Host **public entry address** (`public_host`) | Where clients connect: sing-box listens on all interfaces at each user's entry port | The router's public IPv4 or a DNS name for it. Forward the host's TCP port range on the router to the Mac |
 | Host **egress IP** (IP inventory) | The local address sing-box binds outgoing connections to (`inet4_bind_address`), and the source of the egress probes | The Mac's own LAN IPv4, for example `192.168.1.20` (`ipconfig getifaddr en0`). Reserve it in the router's DHCP |
-| Observed public IPv4 | What websites see | The router's WAN address (or the ISP's CGNAT address). It is not configured anywhere |
+| Observed public IPv4 | The source address the control plane sees in an authenticated Agent heartbeat | Usually the router's WAN address or the ISP's CGNAT address |
+
+Leave **Public entry address** blank to learn and refresh the address from authenticated Agent heartbeats. The control
+plane uses the public IPv4 it sees on the request, including addresses forwarded by its configured trusted proxies.
+A manual entry is preserved. Before the first usable heartbeat, the host displays **Waiting for Agent IPv4**.
+The Agent prefers IPv4 for control-plane requests and can fall back to IPv6 for management traffic. The observed
+address still needs a reachable TCP entry port. Set a manual address if clients connect through a relay or a DNS name.
+
+On macOS, the Agent checks the IPv4 default route and reports the address of its `enN` network interface when its
+egress list is empty. The control plane registers one address for an empty pool and preserves every existing
+entry, including banned entries. Use **Add IPs** to choose a different address or configure a tunnel interface.
+
+New hosts start with `google.com` for the Reality TLS server name and the default handshake target. The exit host
+must be able to reach the chosen TLS 1.3 server. A manual handshake target can be set on the host form.
 
 ## macOS acceptance (Mac mini)
 
-1. In the console, open **Egress hosts → Add host**. Set **Public entry address** to the router's public IP or DNS
-   name. Use a port range that the router forwards (TCP) to the Mac. The dialog that follows shows the agent token
-   **once**. Copy the token into a password manager before you close the dialog, because adding the egress IP means
-   leaving it. The token cannot be shown again; if it is lost, rotate it.
-2. Close the dialog. On the host page, use **Add IPs** to add the Mac's LAN IPv4 (`ipconfig getifaddr en0` on the
-   Mac, reserved in the router's DHCP). Assign a test user to that IP. In **Settings → split rules**, make sure the
-   domains that go through the proxy include `api.ipify.org` (for example `"domain_suffix": [..., "api.ipify.org"]`).
-   Without it, the client's check in step 5 goes out directly and proves nothing.
-3. On the Mac mini, open **Install command → macOS** on the host page and copy the command. Paste it into Terminal
+1. In the console, open **Egress hosts → Add host**. Leave **Public entry address** blank to discover it when the
+   Agent connects, or enter the router's public IP or DNS name manually. Use a port range that the router forwards
+   (TCP) to the Mac. Copy the one-time Agent token into a password manager before you close the dialog.
+2. On the Mac mini, open **Install command → macOS** on the host page and copy the command. Paste it into Terminal
    and enter the Mac password for `sudo`. Then paste the saved token at the hidden prompt. The installer ends with
    `installed.`. If the macOS application firewall is on, run the two `socketfilterfw` commands it prints. To keep
    the node awake and powered back on after an outage, run `sudo pmset -a sleep 0 autorestart 1`.
+3. Refresh the host page after the first heartbeat. Confirm the Mac's LAN IPv4 appears under **Egress IPs**. Reserve
+   the address in the router's DHCP and assign a test user to it. Add `api.ipify.org` under **Settings → Proxied domains**
+   so the client routes the IPv4 test in step 5 through CC Proxy.
 4. Check the services:
    ```bash
    sudo launchctl print system/com.ccproxy.exit.agent | grep -E 'state|pid'

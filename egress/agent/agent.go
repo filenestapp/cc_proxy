@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -128,8 +129,10 @@ func NewAgent(opt Options, token string, logf func(string, ...any), output io.Wr
 		opt:   opt,
 		token: token,
 		cp: &http.Client{
-			Timeout:   10 * time.Second,
-			Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, TLSClientConfig: tlsConf},
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment, TLSClientConfig: tlsConf, DialContext: dialControlPlane,
+			},
 			// Every control-plane request carries the agent token: a redirect is refused, never followed.
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return fmt.Errorf("refused redirect to %s: the agent token is sent to --cp only", req.URL)
@@ -149,6 +152,21 @@ func NewAgent(opt Options, token string, logf func(string, ...any), output io.Wr
 	}
 	a.opt.CP = cpURL
 	return a, nil
+}
+
+// A dual-stack Agent prefers IPv4 so the control plane can learn its IPv4 from the heartbeat.
+// Keep the ordinary dial as a fallback for an IPv6-only control plane or network.
+func dialControlPlane(ctx context.Context, network, address string) (net.Conn, error) {
+	var dialer net.Dialer
+	if network == "tcp" {
+		ipv4Ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		conn, err := dialer.DialContext(ipv4Ctx, "tcp4", address)
+		cancel()
+		if err == nil {
+			return conn, nil
+		}
+	}
+	return dialer.DialContext(ctx, network, address)
 }
 
 // checkControlPlaneURL: https, or http to a loopback address (tests and a co-located control plane only).
@@ -386,11 +404,17 @@ func (a *Agent) report() error {
 	if probes == nil {
 		probes = []ProbeResult{}
 	}
-	err := a.post("/agent/report", map[string]any{
+	report := map[string]any{
 		"agent": a.opt.Name, "config_etag": nullable(a.applied), "apply_state": nullable(a.state()),
 		"apply_error": nullable(a.applyError), "candidate_etag": nullable(candidate),
 		"singbox_running": a.singboxRunning(), "probes": probes,
-	})
+	}
+	if a.ips != nil && strings.TrimSpace(*a.ips) == "" {
+		if address := detectMacEgressIPv4(); address != "" {
+			report["local_egress_ipv4"] = address
+		}
+	}
+	err := a.post("/agent/report", report)
 	if err != nil { // keep them for the next heartbeat (the buffer bound still applies)
 		a.probeMu.Lock()
 		a.probeBuf = append(probes, a.probeBuf...)

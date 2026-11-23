@@ -182,7 +182,7 @@ func (a *api) hostAdd(r *apiRequest) (response, error) {
 		Name string `json:"name"`
 		hostOptions
 	}
-	if err := r.decode(&body, "name", "public_host", "server_name"); err != nil {
+	if err := r.decode(&body, "name"); err != nil {
 		return response{}, err
 	}
 	token, err := a.store.addHost(r.Context(), body.Name, body.hostOptions)
@@ -326,10 +326,7 @@ func (a *api) bindUser(r *apiRequest, moving bool) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	return ok(struct {
-		userSummary
-		Port int `json:"port"`
-	}{u, u.Entry.Port}, nil)
+	return ok(u, nil)
 }
 
 func (a *api) userRelease(r *apiRequest) (response, error) {
