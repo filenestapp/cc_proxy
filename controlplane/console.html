@@ -553,6 +553,7 @@
     if (!agent) return { tone: "", label: "No heartbeat" };
     if (agent.age >= STALE) return { tone: "bad", label: "Agent offline" };
     if (agent.singbox_running === false) return { tone: "bad", label: "sing-box stopped" };
+    if (!agent.in_sync && agent.apply_state === "unknown") return { tone: "warn", label: "Apply unconfirmed" };
     if (agent.apply_error && !agent.in_sync) return { tone: "bad", label: "Apply failed" };
     return agent.in_sync ? { tone: "ok", label: "Synced" } : { tone: "warn", label: "Sync pending" };
   }
