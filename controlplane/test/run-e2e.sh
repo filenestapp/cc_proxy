@@ -99,16 +99,17 @@ for line in sys.stdin:
     print('%s %-10s -> %s:%d (user %s bound to %s:%s)' % ('PASS' if ok else 'FAIL', dev, host, port, u['name'], u['egress_ip'], u['port']))
 sys.exit(1 if bad else 0)" "$users_json" || status=1
 
-# The server-config ETag is a hash of its content; wait until each agent logs installing the current one.
+# The server-config ETag is a hash of its content; wait until each agent's sing-box has confirmed running the
+# current one (the agent logs this only after sing-box returned that version's marker, not when it wrote the file).
 # (No `grep -q` on `compose logs` anywhere: it exits early, compose dies of SIGPIPE and pipefail fails the check.)
 wait_for_agent() {  # SERVICE TOKEN
   local want
   want=$(curl -s -D - -o /dev/null -H "Authorization: Bearer $2" "$CP/agent/server-config" | awk -F': ' 'tolower($1)=="etag"{print $2}' | tr -d '\r')
   for _ in $(seq 1 40); do
-    compose logs "$1" 2>/dev/null | grep -F "installed config version $want" >/dev/null && { echo "$1 at version $want"; return 0; }
+    compose logs "$1" 2>/dev/null | grep -F "sing-box confirmed running config version $want" >/dev/null && { echo "$1 confirmed version $want"; return 0; }
     sleep 1
   done
-  echo "FAIL $1 did not reach version $want"; compose logs --tail 20 "$1"; return 1
+  echo "FAIL $1 did not confirm version $want"; compose logs --tail 20 "$1"; return 1
 }
 reloads() { compose logs "$1" 2>/dev/null | grep -c 'sent SIGHUP' || true; }
 wait_for_agent egress-hk "$HK_TOKEN" || status=1

@@ -612,9 +612,10 @@ def agent_probe_targets(h, store, host, _b, _q):
 
 @route("POST", "/agent/report", "agent")
 def agent_report(h, store, host, body, _q):
-    """Heartbeat plus egress probe results: {config_etag, singbox_running, probes: [...]}.
+    """Heartbeat plus egress probe results: {config_etag, apply_state, apply_error, singbox_running, probes: [...]}.
     The agent is identified by its token; any "agent" field in the body is ignored."""
-    h.mon.heartbeat(host, body.get("config_etag"), body.get("singbox_running"), body.get("apply_error"))
+    h.mon.heartbeat(host, body.get("config_etag"), body.get("singbox_running"), body.get("apply_error"),
+                    body.get("apply_state"))
     own = {e["ip"] for e in store.list_ips(host)}
     probes = body.get("probes", [])
     if not isinstance(probes, list) or any(not isinstance(p, dict) or p.get("subject") not in own for p in probes):
