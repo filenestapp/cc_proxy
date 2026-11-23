@@ -21,6 +21,7 @@ def call(args, ctx, token, method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(args.cp.rstrip("/") + path, data=data, method=method)
     req.add_header("Authorization", "Bearer " + token)
+    req.add_header("User-Agent", "CCProxy-Prober")
     if data is not None:
         req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
