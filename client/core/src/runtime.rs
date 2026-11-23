@@ -18,11 +18,11 @@
 //! The rendering must match what the control plane's `egress/gen.py` produces for `mode=app`; the fixtures in
 //! `tests/fixtures` (regenerate with `tests/fixtures/regen.py`) pin that contract.
 
+use crate::fsguard::{self, Trust};
 use crate::sysdns::valid_domain;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::fs;
-use std::io::Read;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
@@ -75,49 +75,21 @@ pub fn status_path() -> PathBuf {
     protected_dir().join("status.json")
 }
 
-/// Create (if needed) and verify the protected directory: a real directory, owned by root, writable only by its
-/// owner, under a parent with the same properties (Unix). On Windows, reset its ACL to SYSTEM + Administrators
-/// full control and Users read-only. `require_privileged` is false only in unit tests.
+fn trust(require_privileged: bool) -> Trust {
+    if require_privileged { Trust::Privileged } else { Trust::Unchecked }
+}
+
+/// Create (if needed) and verify the protected directory with [`fsguard::prepare_dir`]: only root (Unix) or
+/// SYSTEM / Administrators (Windows) may write to it or to any directory above it, judged from owner, mode bits
+/// and ACLs, including grants that existed before. A pre-existing directory that fails is moved aside and
+/// recreated. `require_privileged` is false only in tests.
 pub fn prepare_protected_dir(dir: &Path, require_privileged: bool) -> Result<()> {
-    match fs::symlink_metadata(dir) {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(dir).with_context(|| format!("creating {}", dir.display()))?;
-        }
-        Err(e) => return Err(e).with_context(|| format!("inspecting {}", dir.display())),
-    }
-    let meta = fs::symlink_metadata(dir)?;
-    if meta.file_type().is_symlink() || !meta.is_dir() {
-        bail!("{} must be a directory, not a link", dir.display());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o755))?;
-        if require_privileged {
-            for d in [Some(dir), dir.parent()].into_iter().flatten() {
-                let m = fs::symlink_metadata(d)?;
-                if m.uid() != 0 || m.mode() & 0o022 != 0 || m.file_type().is_symlink() {
-                    bail!("{} must be owned by root and not writable by group or others", d.display());
-                }
-            }
-        }
-    }
-    #[cfg(windows)]
-    if require_privileged {
-        let p = dir.display().to_string();
-        let ok = std::process::Command::new("icacls")
-            .args([&p, "/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
-                   "*S-1-5-32-545:(OI)(CI)RX"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !ok {
-            bail!("could not restrict access to {p}");
-        }
-    }
-    let _ = require_privileged;
-    Ok(())
+    fsguard::prepare_dir(dir, trust(require_privileged))
+}
+
+/// Re-check the protected directory without changing it. The supervisor calls this before each write there.
+pub fn verify_protected_dir(dir: &Path, require_privileged: bool) -> Result<()> {
+    fsguard::verify_dir(dir, trust(require_privileged))
 }
 
 /// Write a file inside the protected directory (temp + rename in the same directory). `private`: 0600.
@@ -133,18 +105,10 @@ pub fn write_protected(path: &Path, data: &[u8], private: bool) -> Result<()> {
 
 // ---- reading the client's config ------------------------------------------------------------------------
 
-/// Read the client's config: a regular file (not a link), at most 1 MiB.
+/// Read the client's config: opened without following a link or reparse point, then checked on that same handle
+/// to be a regular file with a single link and at most 1 MiB.
 pub fn read_client_config(path: &Path) -> Result<Vec<u8>> {
-    let meta = fs::symlink_metadata(path).with_context(|| format!("reading {}", path.display()))?;
-    if !meta.file_type().is_file() {
-        bail!("{} is not a regular file", path.display());
-    }
-    if meta.len() > MAX_CONFIG_BYTES {
-        bail!("{} is larger than 1 MiB", path.display());
-    }
-    let mut data = Vec::new();
-    fs::File::open(path)?.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut data)?;
-    Ok(data)
+    fsguard::read_regular_file(path, MAX_CONFIG_BYTES)
 }
 
 /// Accept a client config: extract and validate the spec, require the file to be exactly its rendering, and return
@@ -202,7 +166,7 @@ pub fn extract(v: &Value) -> Result<TunnelSpec> {
     let short_id = s(out, "/tls/reality/short_id")?.to_string();
 
     if !valid_host(&server) {
-        bail!("config: server {server:?} is not a host name or IP address");
+        bail!("config: server is not a host name or IP address");
     }
     if !(1..=65535).contains(&port) {
         bail!("config: server_port out of range");
@@ -211,10 +175,10 @@ pub fn extract(v: &Value) -> Result<TunnelSpec> {
         bail!("config: uuid is malformed");
     }
     if !valid_domain(&server_name) {
-        bail!("config: server_name {server_name:?} is not a domain name");
+        bail!("config: server_name is not a domain name");
     }
     if !FINGERPRINTS.contains(&fingerprint.as_str()) {
-        bail!("config: unknown TLS fingerprint {fingerprint:?}");
+        bail!("config: unknown TLS fingerprint");
     }
     if public_key.len() != 43 || !public_key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
         bail!("config: Reality public key is malformed");
@@ -232,7 +196,7 @@ pub fn extract(v: &Value) -> Result<TunnelSpec> {
     }
     for d in &domains {
         if !valid_domain(d) {
-            bail!("config: rule domain {d:?} is not a plain domain name");
+            bail!("config: a rule domain is not a plain domain name");
         }
     }
     let mut process_names = Vec::new();
@@ -262,7 +226,7 @@ pub fn extract(v: &Value) -> Result<TunnelSpec> {
         Some("udp") => DirectDns::Udp(
             s(dns, "/server")?.parse().map_err(|_| anyhow!("config: direct DNS server must be an IP address"))?,
         ),
-        other => bail!("config: unsupported direct DNS type {other:?}"),
+        _ => bail!("config: unsupported direct DNS type"),
     };
 
     Ok(TunnelSpec {

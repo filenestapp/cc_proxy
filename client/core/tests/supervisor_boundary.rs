@@ -131,6 +131,33 @@ fn supervisor_runs_only_the_protected_copy_and_refuses_tampering() {
 }
 
 #[test]
+fn runtime_dir_is_rechecked_before_each_privileged_write() {
+    let env = Env::new("swap");
+    let good = fixture();
+    env.write_client(&good);
+    let opts = env.options(None);
+    let handle = std::thread::spawn(move || supervisor::run(opts));
+    env.wait("running", |e| e.status().map(|s| s.state == "running").unwrap_or(false));
+
+    // The runtime directory is replaced by a link to somewhere else; a reload must not write through it.
+    let elsewhere = env.root.join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    fs::rename(&env.runtime, env.root.join("runtime.old")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &env.runtime).unwrap();
+    let mut spec = ccproxy_core::runtime::extract(&good).unwrap();
+    spec.domains.push("new.example.net".into());
+    env.write_client(&ccproxy_core::runtime::render(&spec, None));
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0, "nothing written through the link");
+    assert!(!env.calls().contains("HUP"), "no reload");
+
+    // Stop still works.
+    fs::write(env.user.join("stop"), b"").unwrap();
+    handle.join().unwrap().unwrap();
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+}
+
+#[test]
 fn stale_heartbeat_stops_the_supervisor() {
     let env = Env::new("hb");
     env.write_client(&fixture());

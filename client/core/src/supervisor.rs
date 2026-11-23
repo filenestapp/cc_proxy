@@ -115,9 +115,17 @@ impl Supervisor {
             message: message.into(),
             updated: now(),
         };
+        if self.guard().is_err() {
+            return;
+        }
         if let Ok(data) = serde_json::to_vec_pretty(&s) {
             let _ = write_protected(&self.o.status(), &data, false);
         }
+    }
+
+    /// Re-verify the runtime directory before writing into it with privileges.
+    fn guard(&self) -> Result<()> {
+        runtime::verify_protected_dir(&self.o.runtime_dir, self.o.require_privileged)
     }
 
     fn singbox_check(&self, config: &Path) -> Result<()> {
@@ -142,6 +150,7 @@ impl Supervisor {
             return Ok(false);
         }
         let bytes = serde_json::to_vec_pretty(&protected)?;
+        self.guard()?;
         write_protected(&self.o.candidate(), &bytes, true)?;
         self.singbox_check(&self.o.candidate())?;
         fs::rename(self.o.candidate(), self.o.config())?;
@@ -150,6 +159,7 @@ impl Supervisor {
     }
 
     fn start(&mut self) -> Result<()> {
+        self.guard()?;
         fs::create_dir_all(self.o.workdir())?;
         let mut opts = OpenOptions::new();
         opts.create(true).append(true);
