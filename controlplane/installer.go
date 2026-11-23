@@ -9,7 +9,8 @@ package main
 //	GET /admin/install-commands         copy-ready install / uninstall commands per OS (admin)
 //
 // Nodes run the compiled Go exit agent (egress/agent, built reproducibly by egress/agent/build.sh into a directory
-// with SHA256SUMS and VERSION) and the official sing-box release pinned in install/sing-box.json. The scripts and
+// with SHA256SUMS and VERSION) and the official sing-box release pinned in install/sing-box.json; hosts on the XTCP
+// transport (xtcp.go) also run the official frpc pinned in install/frpc.json. The scripts and
 // pins are embedded in this binary; the agent directory is read at run time from CP_AGENT_DIST, and every binary is
 // hashed against SHA256SUMS before its digest goes into a script or the file is served. Rendering replaces the
 // script's "@@INSTALLER_DATA@@" line with those digests, so the installer verifies everything it downloads. The
@@ -30,7 +31,7 @@ import (
 	"strings"
 )
 
-//go:embed install/exit.sh install/exit.ps1 install/sing-box.json
+//go:embed install/exit.sh install/exit.ps1 install/sing-box.json install/frpc.json
 var installFiles embed.FS
 
 var (
@@ -61,19 +62,24 @@ func (p singBoxPins) baseURL() string {
 	return strings.TrimRight(strings.NewReplacer("{version}", p.Version, "{asset}", "").Replace(p.URL), "/")
 }
 
-func loadSingBoxPins() (singBoxPins, error) {
+func loadSingBoxPins() (singBoxPins, error) { return loadPins("sing-box.json") }
+
+// loadFrpcPins: the frp release whose frpc runs on XTCP hosts (same shape as the sing-box pins).
+func loadFrpcPins() (singBoxPins, error) { return loadPins("frpc.json") }
+
+func loadPins(file string) (singBoxPins, error) {
 	var pins singBoxPins
-	data, err := installFiles.ReadFile("install/sing-box.json")
+	data, err := installFiles.ReadFile("install/" + file)
 	if err == nil {
 		err = json.Unmarshal(data, &pins)
 	}
 	if err != nil {
-		return pins, fmt.Errorf("sing-box pins: %w", err)
+		return pins, fmt.Errorf("%s: %w", file, err)
 	}
 	for _, platform := range installPlatforms {
 		asset, ok := pins.Assets[platform]
 		if !ok || !installHexPattern.MatchString(asset.SHA256) || !strings.Contains(asset.File, pins.Version) {
-			return pins, fmt.Errorf("bad sing-box pin for %s", platform)
+			return pins, fmt.Errorf("bad %s pin for %s", file, platform)
 		}
 	}
 	return pins, nil
@@ -153,7 +159,7 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-func shellData(pins singBoxPins, release agentRelease) string {
+func shellData(pins, frpc singBoxPins, release agentRelease) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Filled in by the control plane when it serves this script.\nAGENT_VERSION='%s'\nSINGBOX_VERSION='%s'\nSINGBOX_BASE_URL='%s'\n",
 		release.Version, pins.Version, pins.baseURL())
@@ -169,11 +175,19 @@ func shellData(pins singBoxPins, release agentRelease) string {
 	for _, k := range sortedKeys(pins.Assets) {
 		fmt.Fprintf(&b, "    %s) echo '%s' ;;\n", k, pins.Assets[k].SHA256)
 	}
+	fmt.Fprintf(&b, "  esac\n}\nFRPC_VERSION='%s'\nFRPC_BASE_URL='%s'\nfrpc_asset_file() {\n  case $1 in\n", frpc.Version, frpc.baseURL())
+	for _, k := range sortedKeys(frpc.Assets) {
+		fmt.Fprintf(&b, "    %s) echo '%s' ;;\n", k, frpc.Assets[k].File)
+	}
+	b.WriteString("  esac\n}\nfrpc_asset_sha256() {\n  case $1 in\n")
+	for _, k := range sortedKeys(frpc.Assets) {
+		fmt.Fprintf(&b, "    %s) echo '%s' ;;\n", k, frpc.Assets[k].SHA256)
+	}
 	b.WriteString("  esac\n}")
 	return b.String()
 }
 
-func powershellData(pins singBoxPins, release agentRelease) string {
+func powershellData(pins, frpc singBoxPins, release agentRelease) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Filled in by the control plane when it serves this script.\n$AgentVersion = '%s'\n$AgentSha256 = @{\n", release.Version)
 	for _, k := range sortedKeys(release.Digests) {
@@ -182,6 +196,10 @@ func powershellData(pins singBoxPins, release agentRelease) string {
 	fmt.Fprintf(&b, "}\n$SingBoxVersion = '%s'\n$SingBoxBaseUrl = '%s'\n$SingBoxAssets = @{\n", pins.Version, pins.baseURL())
 	for _, k := range sortedKeys(pins.Assets) {
 		fmt.Fprintf(&b, "    '%s' = @{ File = '%s'; Sha256 = '%s' }\n", k, pins.Assets[k].File, pins.Assets[k].SHA256)
+	}
+	fmt.Fprintf(&b, "}\n$FrpcVersion = '%s'\n$FrpcBaseUrl = '%s'\n$FrpcAssets = @{\n", frpc.Version, frpc.baseURL())
+	for _, k := range sortedKeys(frpc.Assets) {
+		fmt.Fprintf(&b, "    '%s' = @{ File = '%s'; Sha256 = '%s' }\n", k, frpc.Assets[k].File, frpc.Assets[k].SHA256)
 	}
 	b.WriteString("}")
 	return b.String()
@@ -193,6 +211,10 @@ func renderInstaller(name, dist string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	frpc, err := loadFrpcPins()
+	if err != nil {
+		return nil, err
+	}
 	release, err := loadAgentRelease(dist)
 	if err != nil {
 		return nil, err
@@ -201,9 +223,9 @@ func renderInstaller(name, dist string) ([]byte, error) {
 	if err != nil {
 		return nil, failure(404, "no such installer")
 	}
-	data := shellData(pins, release)
+	data := shellData(pins, frpc, release)
 	if strings.HasSuffix(name, ".ps1") {
-		data = powershellData(pins, release)
+		data = powershellData(pins, frpc, release)
 	}
 	if n := len(installMarker.FindAllIndex(text, -1)); n != 1 {
 		return nil, fmt.Errorf("%s must have exactly one @@INSTALLER_DATA@@ line, has %d", name, n)
@@ -280,11 +302,17 @@ func (a *api) installManifest(*apiRequest) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
+	frpc, err := loadFrpcPins()
+	if err != nil {
+		return response{}, err
+	}
 	release, err := loadAgentRelease(agentDistDir())
 	if err != nil {
 		return response{}, err
 	}
-	return ok(object{"agent": release, "singbox": object{"version": pins.Version, "base_url": pins.baseURL(), "assets": pins.Assets}}, nil)
+	return ok(object{"agent": release,
+		"singbox": object{"version": pins.Version, "base_url": pins.baseURL(), "assets": pins.Assets},
+		"frpc":    object{"version": frpc.Version, "base_url": frpc.baseURL(), "assets": frpc.Assets}}, nil)
 }
 
 // installAgent serves one platform's agent to a valid host token, and only while it still matches SHA256SUMS

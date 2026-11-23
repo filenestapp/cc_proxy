@@ -979,9 +979,35 @@
     };
   };
 
+  // XTCP settings. The frps token and the secret key are write-only: leave them empty to keep the stored values.
+  async function editXtcp(name, h, x) {
+    const on = x.transport === "xtcp";
+    const fields = [
+      { name: "server_addr", label: "frps address", value: x.server_addr || "", required: true, placeholder: "203.0.113.10" },
+      { name: "server_port", label: "frps port", type: "number", value: x.server_port || 7003, required: true },
+      { name: "tls_server_name", label: "frps TLS server name", value: x.tls_server_name || "", placeholder: "Defaults to the frps address", hint: "The name in the frps certificate; it is always verified." },
+      { name: "ca_pem", label: on ? "CA certificate (PEM; leave empty to keep)" : "CA certificate (PEM)", type: "textarea", value: "", required: !on, placeholder: "-----BEGIN CERTIFICATE-----" },
+      { name: "auth_token", label: on ? "frps token (leave empty to keep)" : "frps token", type: "password", value: "", required: !on },
+      { name: "proxy_name", label: "XTCP proxy name", value: x.proxy_name || "ccproxy-" + name + "-direct", required: true, hint: "The visitor's serverName must match." },
+      { name: "secret_key", label: on ? "XTCP secret key (leave empty to keep)" : "XTCP secret key (leave empty to generate)", type: "password", value: "", hint: "Must match the visitor's secretKey." },
+      { name: "local_port", label: "sing-box entry port on the host", type: "number", value: x.local_port || "", required: true, hint: "The user's entry port, within " + h.port_range[0] + "–" + h.port_range[1] + "." },
+    ];
+    const r = await form((on ? "Edit" : "Configure") + " XTCP for " + name, fields, (v) => {
+      const b = { server_addr: v.server_addr, server_port: Number(v.server_port), proxy_name: v.proxy_name, local_port: Number(v.local_port) };
+      if (v.tls_server_name) b.tls_server_name = v.tls_server_name;
+      for (const k of ["ca_pem", "auth_token", "secret_key"]) if (v[k]) b[k] = v[k];
+      return api("PUT", "/admin/hosts/" + enc(name) + "/xtcp", b);
+    }, "Save");
+    if (!r) return;
+    if (r.secret_key) reveal("XTCP secret key for " + name, "Put this secretKey in the visitor's frpc configuration.", r.secret_key);
+    else toast("Saved. Run the install command again on the host.");
+    route();
+  }
+
   async function hostDetail(name, token) {
     setTitle(name);
-    const [hosts, ips, topo, users] = await Promise.all([api("GET", "/admin/hosts"), api("GET", "/admin/ips?host=" + enc(name)), api("GET", "/admin/topology"), api("GET", "/admin/users")]);
+    const [hosts, ips, topo, users, xtcp] = await Promise.all([api("GET", "/admin/hosts"), api("GET", "/admin/ips?host=" + enc(name)), api("GET", "/admin/topology"), api("GET", "/admin/users"),
+      api("GET", "/admin/hosts/" + enc(name) + "/xtcp").catch(() => ({ transport: "public" }))]);
     if (!current(token)) return;
     const h = hosts.find((x) => x.name === name);
     if (!h) { $("#view").innerHTML = '<div class="empty">Host not found. <a href="#/hosts">Back to list</a></div>'; return; }
@@ -1014,6 +1040,17 @@
           <dt>Current config</dt><dd class="mono small">${esc(topo.server_config_etags[name] || "—")}</dd>
         </dl>${agent?.apply_error && !agent.in_sync ? '<p class="line">' + esc(agent.apply_error) + "</p>" : ""}</section>
       </div>
+      <section class="section" id="transport"><h2>Transport<span class="spacer"></span>
+          <button id="xtcp-edit" type="button">${xtcp.transport === "xtcp" ? "Edit XTCP" : "Configure XTCP"}</button>
+          ${xtcp.transport === "xtcp" ? '<button class="danger" id="xtcp-off" type="button">Use public entry</button>' : ""}</h2>
+        <div class="card">${xtcp.transport === "xtcp" ? `<dl class="kv">
+          <dt>Mode</dt><dd>XTCP through frps (direct connections only, no relay fallback)</dd>
+          <dt>frps</dt><dd class="mono">${esc(xtcp.server_addr)}:${xtcp.server_port} (TLS name ${esc(xtcp.tls_server_name)})</dd>
+          <dt>CA</dt><dd class="small">${esc(xtcp.ca_subject || "—")}, until ${esc(xtcp.ca_not_after || "—")}<br><span class="mono">SHA-256 ${esc(xtcp.ca_sha256 || "")}</span></dd>
+          <dt>Proxy</dt><dd class="mono">${esc(xtcp.proxy_name)} → 127.0.0.1:${xtcp.local_port}</dd>
+          <dt>Credentials</dt><dd>${xtcp.has_auth_token ? "frps token set" : "no frps token"}, ${xtcp.has_secret_key ? "secret key set" : "no secret key"} (never shown again)</dd>
+        </dl><p class="small muted">The install command sets up frpc too. Run it again on the host after a change here.</p>`
+          : '<p class="muted">Public entry: clients connect to the public address above. Configure XTCP for a host behind NAT; the install command then also installs frpc.</p>'}</div></section>
       <section class="section"><h2>Entry probes</h2><div class="card">${entryProbes(node?.entry, topo.now)}</div></section>
       <section class="section"><h2>Egress IPs (${ips.length})<span class="spacer"></span><button class="primary" id="add-ips" type="button">Add IPs</button></h2>
         ${ipTable(ips, probes, topo.now, false)}</section>
@@ -1028,6 +1065,11 @@
       if (await form("Edit host " + name, hostFields(h), (v) => api("PUT", "/admin/hosts/" + enc(name), hostBody(v)))) { toast("Saved. The agent will apply the change on its next sync."); route(); }
     };
     $("#install").onclick = () => showInstall(name);
+    $("#xtcp-edit").onclick = () => editXtcp(name, h, xtcp);
+    if ($("#xtcp-off")) $("#xtcp-off").onclick = async () => {
+      if (!(await confirmBox("Use the public entry for " + name, "frps credentials for this host are deleted. Run the install command again on the host: it stops and removes frpc.", "Use public entry"))) return;
+      if (await act(() => api("DELETE", "/admin/hosts/" + enc(name) + "/xtcp"), "Saved. Run the install command again on the host.")) route();
+    };
     $("#rotate").onclick = async () => {
       if (!(await confirmBox("Rotate agent token", "The previous token expires immediately. Then run the install command again on the host and paste the new token: the rerun keeps the configuration and restarts the agent.", "Rotate"))) return;
       const r = await act(() => api("POST", "/admin/hosts/" + enc(name) + "/rotate-token"));

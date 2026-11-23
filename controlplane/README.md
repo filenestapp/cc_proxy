@@ -103,6 +103,8 @@ CP_AGENT_DIST=$PWD/egress/agent/dist cc-controlplane serve ...
 
 `GET /install/exit.sh`, `/install/exit.ps1` and `/install/manifest.json` are public. `GET /install/agent/{os}-{arch}` requires a host agent token, and `GET /admin/install-commands?cp=https://...` requires an administrator. The installer details and the Mac mini acceptance steps are in [the installer guide](../egress/install/README.md).
 
+**XTCP transport.** A host behind NAT can use frp XTCP instead of a public entry: `GET/PUT/DELETE /admin/hosts/{name}/xtcp` (admin; the frps token and secret key are write-only) stores the frps address, TLS name and CA, token, proxy name, secret key and sing-box port in `host_xtcp`. With the host's agent token, `GET /install/xtcp/frpc.toml` and `/install/xtcp/ca.pem` return that host's frpc configuration (or 204), and the same install command then also installs the pinned frpc (`install/frpc.json`) as a boot service. Data flows directly between visitor and exit host; there is no relay fallback. Details in [the installer guide](../egress/install/README.md#xtcp-transport-hosts-behind-nat).
+
 ## Monitoring and topology
 
 | Source | Results | Default frequency |

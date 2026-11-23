@@ -55,8 +55,10 @@ func (s *store) initializeSchema(ctx context.Context) error {
 			return err
 		}
 		if !hasSettings {
-			_, err := tx.Exec(ctx, schemaSQL)
-			return err
+			if _, err := tx.Exec(ctx, schemaSQL); err != nil {
+				return err
+			}
+			return ensureXTCPTable(ctx, tx)
 		}
 		var version int
 		if err := tx.QueryRow(ctx, "SELECT value::integer FROM settings WHERE key = 'schema'").Scan(&version); err != nil {
@@ -72,12 +74,14 @@ func (s *store) initializeSchema(ctx context.Context) error {
 			AND column_name = 'observed_public_ipv4')`).Scan(&hasObservedIPv4); err != nil {
 			return err
 		}
-		if hasObservedIPv4 {
-			return nil
+		if !hasObservedIPv4 {
+			if _, err := tx.Exec(ctx, `ALTER TABLE hosts ADD COLUMN IF NOT EXISTS observed_public_ipv4 inet
+				CHECK (family(observed_public_ipv4) = 4 AND masklen(observed_public_ipv4) = 32)`); err != nil {
+				return err
+			}
 		}
-		_, err := tx.Exec(ctx, `ALTER TABLE hosts ADD COLUMN IF NOT EXISTS observed_public_ipv4 inet
-			CHECK (family(observed_public_ipv4) = 4 AND masklen(observed_public_ipv4) = 32)`)
-		return err
+		// Additive as well: a previous binary ignores the table, so rollback keeps working.
+		return ensureXTCPTable(ctx, tx)
 	})
 }
 
