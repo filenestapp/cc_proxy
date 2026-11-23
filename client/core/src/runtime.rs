@@ -22,7 +22,6 @@ use crate::fsguard::{self, Trust};
 use crate::sysdns::valid_domain;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
-use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
@@ -92,21 +91,29 @@ pub fn verify_protected_dir(dir: &Path, require_privileged: bool) -> Result<()> 
     fsguard::verify_dir(dir, trust(require_privileged))
 }
 
-/// Write a file inside the protected directory (temp + rename in the same directory). `private`: 0600.
+/// Write a file inside the protected directory: a freshly created temp file renamed over `path`, so an entry left
+/// at `path` or at its temp name (link, hard link, foreign file) is replaced, never written through. `private`:
+/// 0600, else 0644.
 pub fn write_protected(path: &Path, data: &[u8], private: bool) -> Result<()> {
-    crate::session::write_atomic(path, data, private)?;
-    #[cfg(unix)]
-    if !private {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o644))?;
-    }
-    Ok(())
+    fsguard::replace_file(path, data, if private { 0o600 } else { 0o644 })
+}
+
+/// Before reusing an existing file in the protected directory (sing-box's cache): remove it unless it is a plain,
+/// single-link file that only root / Administrators own and can write. See [`fsguard::clean_file`].
+pub fn clean_protected_file(path: &Path, require_privileged: bool) -> Result<()> {
+    fsguard::clean_file(path, trust(require_privileged))
+}
+
+/// Open the supervisor's log in the protected directory for appending, after the same check.
+pub fn open_protected_log(path: &Path, require_privileged: bool) -> Result<std::fs::File> {
+    fsguard::open_log(path, trust(require_privileged))
 }
 
 // ---- reading the client's config ------------------------------------------------------------------------
 
-/// Read the client's config: opened without following a link or reparse point, then checked on that same handle
-/// to be a regular file with a single link and at most 1 MiB.
+/// Read the client's config: reached without passing through a link or reparse point (system links on Unix aside,
+/// see [`fsguard::open_without_links`]), then checked on that same handle to be a regular file with a single link
+/// and at most 1 MiB.
 pub fn read_client_config(path: &Path) -> Result<Vec<u8>> {
     fsguard::read_regular_file(path, MAX_CONFIG_BYTES)
 }

@@ -2,12 +2,17 @@
 //! runtime directory that no other account can write to, rename or replace.
 
 use ccproxy_core::fsguard::policy::{self, WinAce, WinRole};
+#[cfg(unix)]
 use ccproxy_core::fsguard::read_regular_file;
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::path::PathBuf;
 
+#[cfg(unix)]
 const MAX: u64 = 1 << 20;
 
+#[cfg(unix)]
 fn scratch(tag: &str) -> PathBuf {
     // Canonical, so the privileged-style walk does not meet a symlink such as macOS's /var.
     let base = fs::canonicalize(env!("CARGO_TARGET_TMPDIR")).unwrap();
@@ -339,6 +344,172 @@ mod unix_dir {
         assert!(verify_dir(&rt, me()).is_err());
         prepare_dir(&rt, me()).unwrap();
         verify_dir(&rt, me()).unwrap();
+        fs::remove_dir_all(&d).unwrap();
+    }
+}
+
+// ---- revision: links anywhere in the config path, entries inside the runtime directory ---------------------
+
+#[test]
+fn windows_final_path_comparison() {
+    use policy::windows_same_path as same;
+    assert!(same(r"\\?\C:\Users\alice\AppData\Roaming\ccproxy\sing-box.json",
+                 r"C:\Users\Alice\AppData\Roaming\ccproxy\sing-box.json"));
+    assert!(same(r"\\?\UNC\server\share\x.json", r"\\server\share\x.json"));
+    assert!(same(r"\\?\C:\a\b", "C:/a/b/"));
+    // A junction anywhere on the way leads somewhere else.
+    assert!(!same(r"\\?\C:\Windows\System32\config\x.json", r"C:\Users\alice\AppData\Roaming\ccproxy\x.json"));
+    // Short names are not expanded, so they are refused rather than guessed.
+    assert!(!same(r"\\?\C:\Users\alice\AppData\x.json", r"C:\Users\ALICE~1\AppData\x.json"));
+}
+
+#[cfg(unix)]
+mod unix_revision {
+    use super::{scratch, MAX};
+    use ccproxy_core::fsguard::{clean_file, open_log, read_regular_file, replace_file, Trust};
+    use std::fs;
+    use std::io::Write;
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+    use std::path::Path;
+
+    fn me() -> Trust {
+        Trust::Uid(unsafe { libc::geteuid() })
+    }
+
+    fn is_link(p: &Path) -> bool {
+        fs::symlink_metadata(p).map(|m| m.file_type().is_symlink()).unwrap_or(false)
+    }
+
+    #[test]
+    fn config_path_with_an_intermediate_user_link_is_refused() {
+        let d = scratch("midlink");
+        fs::create_dir_all(d.join("real/state")).unwrap();
+        fs::write(d.join("real/state/sing-box.json"), b"{}").unwrap();
+        assert_eq!(read_regular_file(&d.join("real/state/sing-box.json"), MAX).unwrap(), b"{}");
+        assert_eq!(read_regular_file(&d.join("real/state/../state/sing-box.json"), MAX).unwrap(), b"{}");
+
+        symlink(d.join("real"), d.join("via")).unwrap(); // a link to a directory, then a real path inside
+        symlink("real/state", d.join("rel")).unwrap(); // relative target
+        for p in [d.join("via/state/sing-box.json"), d.join("rel/sing-box.json")] {
+            let r = read_regular_file(&p, MAX);
+            if unsafe { libc::geteuid() } == 0 {
+                // As root the links above are root-owned in a root-owned 0755 directory: system links, followed.
+                assert_eq!(r.unwrap(), b"{}", "{}", p.display());
+            } else {
+                let err = r.unwrap_err().to_string();
+                assert!(err.contains("not a system link"), "{err}");
+            }
+        }
+        // A link to a file the user may not read, one level up: refused whoever made it (last component).
+        symlink("/etc/hosts", d.join("real/state/hosts.json")).unwrap();
+        assert!(read_regular_file(&d.join("real/state/hosts.json"), MAX).is_err());
+        // A file where a directory is expected.
+        assert!(read_regular_file(&d.join("real/state/sing-box.json/x"), MAX).is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn system_links_in_canonical_macos_paths_are_followed() {
+        // std::env::temp_dir() is under /var, a root-owned link to private/var.
+        let tmp = std::env::temp_dir();
+        assert!(is_link(Path::new("/var")));
+        let d = tmp.join(format!("fsguard-syslink-{}", std::process::id()));
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("sing-box.json"), b"{\"a\":1}").unwrap();
+        assert!(d.starts_with("/var"), "{}", d.display());
+        assert_eq!(read_regular_file(&d.join("sing-box.json"), MAX).unwrap(), b"{\"a\":1}");
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn replace_file_never_writes_through_old_entries() {
+        let d = scratch("replace");
+        let outside = d.join("outside");
+        fs::write(&outside, b"keep").unwrap();
+        // The target and the stale temp name are links to a file outside, and a hard link to another one.
+        symlink(&outside, d.join("config.json")).unwrap();
+        symlink(&outside, d.join("config.tmp")).unwrap();
+        replace_file(&d.join("config.json"), b"new", 0o600).unwrap();
+        assert_eq!(fs::read(&outside).unwrap(), b"keep");
+        assert!(!is_link(&d.join("config.json")));
+        assert_eq!(fs::read(d.join("config.json")).unwrap(), b"new");
+        assert_eq!(fs::metadata(d.join("config.json")).unwrap().mode() & 0o777, 0o600);
+        assert!(!d.join("config.tmp").exists());
+
+        let other = d.join("other");
+        fs::write(&other, b"keep").unwrap();
+        fs::hard_link(&other, d.join("status.json")).unwrap();
+        replace_file(&d.join("status.json"), b"{}", 0o644).unwrap();
+        assert_eq!(fs::read(&other).unwrap(), b"keep");
+        assert_eq!(fs::metadata(d.join("status.json")).unwrap().nlink(), 1);
+        assert_eq!(fs::metadata(d.join("status.json")).unwrap().mode() & 0o777, 0o644);
+
+        fs::create_dir(d.join("dir.tmp")).unwrap(); // fail closed on what cannot be removed as a file
+        assert!(replace_file(&d.join("dir.json"), b"x", 0o600).is_err());
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn clean_file_removes_unsafe_entries_and_keeps_good_ones() {
+        let d = scratch("clean");
+        let outside = d.join("outside");
+        fs::write(&outside, b"keep").unwrap();
+
+        let good = d.join("good");
+        fs::write(&good, b"x").unwrap();
+        fs::set_permissions(&good, fs::Permissions::from_mode(0o600)).unwrap();
+        clean_file(&good, me()).unwrap();
+        assert!(good.exists());
+
+        let link = d.join("link");
+        symlink(&outside, &link).unwrap();
+        let hard = d.join("hard");
+        fs::hard_link(&outside, &hard).unwrap();
+        let fifo = d.join("fifo");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let writable = d.join("writable");
+        fs::write(&writable, b"x").unwrap();
+        fs::set_permissions(&writable, fs::Permissions::from_mode(0o666)).unwrap();
+        for p in [&link, &hard, &fifo, &writable] {
+            clean_file(p, me()).unwrap();
+            assert!(fs::symlink_metadata(p).is_err(), "{} removed", p.display());
+        }
+        assert_eq!(fs::read(&outside).unwrap(), b"keep");
+        assert_eq!(fs::metadata(&outside).unwrap().nlink(), 1);
+
+        // Without ownership checks (tests), links and hard links still go; permissions are not judged.
+        let w2 = d.join("w2");
+        fs::write(&w2, b"x").unwrap();
+        fs::set_permissions(&w2, fs::Permissions::from_mode(0o666)).unwrap();
+        clean_file(&w2, Trust::Unchecked).unwrap();
+        assert!(w2.exists());
+
+        clean_file(&d.join("missing"), me()).unwrap();
+        fs::create_dir(d.join("adir")).unwrap();
+        assert!(clean_file(&d.join("adir"), me()).is_err(), "a directory in the way fails closed");
+        if unsafe { libc::geteuid() } != 0 {
+            assert!(clean_file(&good, Trust::Privileged).is_ok() && !good.exists(), "not root-owned: removed");
+        }
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn log_link_is_replaced_not_appended_to() {
+        let d = scratch("log");
+        let outside = d.join("outside");
+        fs::write(&outside, b"keep").unwrap();
+        symlink(&outside, d.join("tunnel.log")).unwrap();
+        let mut log = open_log(&d.join("tunnel.log"), me()).unwrap();
+        log.write_all(b"line\n").unwrap();
+        assert_eq!(fs::read(&outside).unwrap(), b"keep");
+        assert_eq!(fs::read(d.join("tunnel.log")).unwrap(), b"line\n");
+        assert_eq!(fs::metadata(d.join("tunnel.log")).unwrap().mode() & 0o777, 0o600);
+        drop(log);
+        let mut again = open_log(&d.join("tunnel.log"), me()).unwrap(); // a good log is kept and appended to
+        again.write_all(b"more\n").unwrap();
+        assert_eq!(fs::read(d.join("tunnel.log")).unwrap(), b"line\nmore\n");
         fs::remove_dir_all(&d).unwrap();
     }
 }

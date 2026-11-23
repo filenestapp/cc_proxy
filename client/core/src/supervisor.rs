@@ -20,7 +20,7 @@ use crate::sysdns;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -160,15 +160,13 @@ impl Supervisor {
 
     fn start(&mut self) -> Result<()> {
         self.guard()?;
-        fs::create_dir_all(self.o.workdir())?;
-        let mut opts = OpenOptions::new();
-        opts.create(true).append(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let log = opts.open(self.o.log())?;
+        // Entries a previous version may have left: the work directory gets the same check as the runtime directory
+        // (moved aside if it fails), and the cache and log are removed unless they are plain files only the
+        // supervisor's accounts can write. sing-box opens the cache itself, following links.
+        let privileged = self.o.require_privileged;
+        runtime::prepare_protected_dir(&self.o.workdir(), privileged)?;
+        runtime::clean_protected_file(&self.o.cache(), privileged)?;
+        let log = runtime::open_protected_log(&self.o.log(), privileged)?;
         let child = Command::new(&self.o.singbox)
             .args(["run", "-c"])
             .arg(self.o.config())

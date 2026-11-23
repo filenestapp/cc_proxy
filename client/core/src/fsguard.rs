@@ -1,20 +1,26 @@
 //! Link-safe file access and ownership checks for the privileged supervisor (issue #1, follow-up to CC-01).
 //!
-//! * [`read_regular_file`] opens a file without following a link or reparse point at its last component. It
-//!   then checks type, size and link count on that same open handle before reading from it, so the file
-//!   that is checked is the file that is read.
+//! * [`read_regular_file`] opens a file without following a link or reparse point anywhere in its path, except
+//!   system links on Unix (owned by root, in a directory only root can change, such as macOS's `/var` ->
+//!   `private/var`). It then checks type, size and link count on that same open handle before reading from it, so
+//!   the file that is checked is the file that is read.
 //! * [`prepare_dir`] and [`verify_dir`] make sure a directory the supervisor writes to can be written only by
 //!   root (Unix) or SYSTEM / Administrators (Windows). They check its owner, its mode bits and ACL entries, and
 //!   those of every directory above it, so nobody else can write to it, rename it or replace it.
 //!   [`prepare_dir`] moves a pre-existing directory that fails the check aside and creates a fresh one. It never
 //!   repairs one in place: anything another account could put there earlier (links, hard links, junctions) is
 //!   untrusted.
+//! * [`replace_file`], [`clean_file`] and [`open_log`] handle the entries inside a protected directory. A
+//!   directory that passes the check may still hold entries from an older version (links, hard links, files other
+//!   accounts can write). Files are replaced by creating a new file and renaming it over the old entry. Files that
+//!   are reopened (log, cache) are removed first if they are not plain, single-link files only the trusted accounts
+//!   can write.
 //!
 //! The decision rules are plain functions in [`policy`], so they can be tested on every platform.
 
 use anyhow::{bail, Context, Result};
 use std::fs::{File, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 
 /// Who must own a protected directory and the directories above it.
@@ -48,10 +54,32 @@ pub fn open_no_follow(path: &Path) -> Result<File> {
     o.open(path).with_context(|| format!("opening {} (links are not followed)", path.display()))
 }
 
-/// Read a regular file of at most `max` bytes that has exactly one link. Every check runs on the handle that is
-/// read from.
+/// Open `path` for reading without passing through a link or reparse point anywhere in it.
+///
+/// Unix: the path is walked one component at a time from `/` (or the current directory), each step opened relative
+/// to the previous directory with `O_NOFOLLOW`. An intermediate symlink is followed only when it is a system link:
+/// owned by root, in a directory owned by root that nobody else can write to. The last component is never followed.
+///
+/// Windows: the file is opened without following a reparse point at its last component, then the path the handle
+/// actually refers to (GetFinalPathNameByHandleW) must be the requested path. A junction, symlink or mount point
+/// anywhere in the path changes it.
+pub fn open_without_links(path: &Path) -> Result<File> {
+    #[cfg(unix)]
+    {
+        unix::open_file(path)
+    }
+    #[cfg(windows)]
+    {
+        let file = open_no_follow(path)?;
+        win::verify_final_path(&file, path)?;
+        Ok(file)
+    }
+}
+
+/// Read a regular file of at most `max` bytes that has exactly one link, reached without links (see
+/// [`open_without_links`]). Every check runs on the handle that is read from.
 pub fn read_regular_file(path: &Path, max: u64) -> Result<Vec<u8>> {
-    let file = open_no_follow(path)?;
+    let file = open_without_links(path)?;
     let meta = file.metadata().with_context(|| format!("inspecting {}", path.display()))?;
     if !meta.file_type().is_file() || is_reparse_point(&meta) {
         bail!("{} is not a regular file", path.display());
@@ -108,6 +136,71 @@ pub fn verify_dir(dir: &Path, trust: Trust) -> Result<()> {
     imp::walk(dir, trust, false)
 }
 
+// ---- entries inside a protected directory ------------------------------------------------------------------
+
+/// Write `path` (in a verified protected directory) without opening any existing entry: remove a stale
+/// `<name>.tmp`, create it anew (exclusive create never follows a link), write and sync it, then rename it over
+/// `path`. A link, hard link or foreign file at `path` is replaced, never written through. `mode`: Unix permissions.
+pub fn replace_file(path: &Path, data: &[u8], mode: u32) -> Result<()> {
+    let tmp = path.with_extension("tmp");
+    match std::fs::remove_file(&tmp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("removing stale {}", tmp.display())),
+    }
+    let mut o = OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    let mut f = o.open(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(mode))?; // exact mode, whatever the umask
+    }
+    f.write_all(data)?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))
+}
+
+/// Make sure an existing entry at `path` (in a verified protected directory) is safe to reopen: a regular file with
+/// one link that, under `trust`, only the trusted accounts own and can write. Anything else (symlink, reparse
+/// point, hard link, FIFO, a file others can write) is removed; only the name is removed, never what it points
+/// to. A directory in its place is an error. A missing entry is fine.
+pub fn clean_file(path: &Path, trust: Trust) -> Result<()> {
+    imp::clean_file(path, trust)
+}
+
+/// Open (creating if needed) a log file for appending after [`clean_file`], without following a link, and check
+/// the handle again.
+pub fn open_log(path: &Path, trust: Trust) -> Result<File> {
+    clean_file(path, trust)?;
+    let mut o = OpenOptions::new();
+    o.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        o.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = o.open(path).with_context(|| format!("opening {}", path.display()))?;
+    let meta = file.metadata()?;
+    if !meta.file_type().is_file() || is_reparse_point(&meta) || link_count(&file, &meta)? != 1 {
+        bail!("{} is not a plain file", path.display());
+    }
+    Ok(file)
+}
+
 fn quarantine_name(name: &std::ffi::OsStr) -> std::ffi::OsString {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let mut n = name.to_os_string();
@@ -124,13 +217,17 @@ use win as imp;
 mod unix {
     use super::{policy, quarantine_name, Trust};
     use anyhow::{bail, Context, Result};
-    use std::ffi::{CString, OsStr};
-    use std::fs::{File, Permissions};
+    use std::collections::VecDeque;
+    use std::ffi::{CString, OsStr, OsString};
+    use std::fs::{File, OpenOptions, Permissions};
     use std::io;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::path::{Component, Path, PathBuf};
+
+    /// Most links followed while walking one path (as the kernel's own limit).
+    const MAX_LINKS: usize = 40;
 
     fn c_name(name: &OsStr) -> io::Result<CString> {
         CString::new(name.as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
@@ -154,6 +251,138 @@ mod unix {
             return Err(io::Error::last_os_error());
         }
         Ok(File::from(unsafe { OwnedFd::from_raw_fd(fd) }))
+    }
+
+    fn open_file_at(dir: &File, name: &OsStr) -> io::Result<File> {
+        let c = c_name(name)?;
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC;
+        let fd = unsafe { libc::openat(dir.as_raw_fd(), c.as_ptr(), flags) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(File::from(unsafe { OwnedFd::from_raw_fd(fd) }))
+    }
+
+    fn lstat_at(dir: &File, name: &OsStr) -> io::Result<libc::stat> {
+        let c = c_name(name)?;
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatat(dir.as_raw_fd(), c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(st)
+    }
+
+    fn read_link_at(dir: &File, name: &OsStr) -> io::Result<PathBuf> {
+        let c = c_name(name)?;
+        let mut buf = vec![0u8; 4096];
+        let n = unsafe { libc::readlinkat(dir.as_raw_fd(), c.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        buf.truncate(n as usize);
+        Ok(PathBuf::from(OsString::from_vec(buf)))
+    }
+
+    /// A symlink the system put there: owned by root, in a directory owned by root that nobody else can change.
+    fn system_link(dir: &File, name: &OsStr) -> Result<bool> {
+        let st = lstat_at(dir, name)?;
+        #[allow(clippy::unnecessary_cast)] // mode_t is u16 on macOS, u32 on Linux
+        if (st.st_mode as u32) & (libc::S_IFMT as u32) != libc::S_IFLNK as u32 || st.st_uid != 0 {
+            return Ok(false);
+        }
+        Ok(problems(dir, Trust::Privileged)?.is_empty())
+    }
+
+    fn push_components(queue: &mut VecDeque<OsString>, path: &Path) -> Result<()> {
+        for c in path.components() {
+            match c {
+                Component::RootDir | Component::CurDir => {}
+                Component::ParentDir => queue.push_back(OsString::from("..")),
+                Component::Normal(n) => queue.push_back(n.to_os_string()),
+                Component::Prefix(_) => bail!("{} has an unsupported prefix", path.display()),
+            }
+        }
+        Ok(())
+    }
+
+    /// See [`super::open_without_links`].
+    pub fn open_file(path: &Path) -> Result<File> {
+        let mut queue = VecDeque::new();
+        push_components(&mut queue, path)?;
+        let start = if path.is_absolute() { "/" } else { "." };
+        let mut dir = open_dir(None, OsStr::new(start), true).with_context(|| format!("opening {start}"))?;
+        let mut links = 0;
+        loop {
+            let name = queue.pop_front().with_context(|| format!("{} does not name a file", path.display()))?;
+            if queue.is_empty() {
+                return open_file_at(&dir, &name)
+                    .with_context(|| format!("opening {} (links are not followed)", path.display()));
+            }
+            match open_dir(Some(&dir), &name, false) {
+                Ok(next) => dir = next,
+                Err(e) if is_replaceable(&e) => {
+                    if !system_link(&dir, &name)? {
+                        bail!("{} passes through a link that is not a system link, or a non-directory",
+                              path.display());
+                    }
+                    links += 1;
+                    if links > MAX_LINKS {
+                        bail!("{} passes through too many links", path.display());
+                    }
+                    let target = read_link_at(&dir, &name)?;
+                    if target.is_absolute() {
+                        dir = open_dir(None, OsStr::new("/"), true).context("opening /")?;
+                    }
+                    let mut front = VecDeque::new();
+                    push_components(&mut front, &target)?;
+                    while let Some(c) = front.pop_back() {
+                        queue.push_front(c);
+                    }
+                }
+                Err(e) => return Err(e).with_context(|| format!("opening {}", path.display())),
+            }
+        }
+    }
+
+    /// Why an open file must not be reused under `trust`, if it must not. A directory is an error.
+    fn file_problem(f: &File, trust: Trust) -> Result<Option<String>> {
+        let m = f.metadata()?;
+        if m.is_dir() {
+            bail!("a directory is in the way");
+        }
+        if !m.file_type().is_file() {
+            return Ok(Some("not a regular file".into()));
+        }
+        if m.nlink() != 1 {
+            return Ok(Some("it has other hard links".into()));
+        }
+        let extra = match trust {
+            Trust::Unchecked => return Ok(None),
+            Trust::Uid(uid) => Some(uid),
+            Trust::Privileged => None,
+        };
+        if m.uid() != 0 && Some(m.uid()) != extra {
+            return Ok(Some(format!("it is owned by uid {}", m.uid())));
+        }
+        if m.mode() & 0o022 != 0 || acl::grants_write(f)? {
+            return Ok(Some("other accounts can write to it".into()));
+        }
+        Ok(None)
+    }
+
+    pub fn clean_file(path: &Path, trust: Trust) -> Result<()> {
+        let mut o = OpenOptions::new();
+        o.read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY);
+        let problem = match o.open(path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.raw_os_error() == Some(libc::ELOOP) => "it is a symbolic link".to_string(),
+            Err(e) => return Err(e).with_context(|| format!("inspecting {}", path.display())),
+            Ok(f) => match file_problem(&f, trust).with_context(|| format!("inspecting {}", path.display()))? {
+                None => return Ok(()),
+                Some(p) => p,
+            },
+        };
+        std::fs::remove_file(path).with_context(|| format!("removing {} ({problem})", path.display()))
     }
 
     fn mkdir_at(parent: &File, name: &OsStr) -> io::Result<()> {
@@ -390,9 +619,10 @@ mod win {
         SECURITY_ATTRIBUTES,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateDirectoryW, CreateFileW, GetFileInformationByHandle, MoveFileExW, BY_HANDLE_FILE_INFORMATION,
-        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        CreateDirectoryW, CreateFileW, GetFileInformationByHandle, GetFinalPathNameByHandleW, MoveFileExW,
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, VOLUME_NAME_DOS,
     };
 
     const READ_CONTROL: u32 = 0x0002_0000;
@@ -549,6 +779,63 @@ mod win {
         anyhow::anyhow!("{} is not protected: {}", path.display(), problems.join("; "))
     }
 
+    fn final_path(h: RawHandle) -> io::Result<String> {
+        let mut buf = vec![0u16; 1024];
+        loop {
+            let n = unsafe {
+                GetFinalPathNameByHandleW(h as _, buf.as_mut_ptr(), buf.len() as u32, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS)
+            } as usize;
+            if n == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if n < buf.len() {
+                buf.truncate(n);
+                return Ok(String::from_utf16_lossy(&buf));
+            }
+            buf.resize(n + 1, 0);
+        }
+    }
+
+    /// The open file must be the one the requested path names directly: no junction, symlink or mount point on the
+    /// way changed where it led.
+    pub fn verify_final_path(file: &std::fs::File, requested: &Path) -> Result<()> {
+        let actual = final_path(file.as_raw_handle()).with_context(|| format!("resolving {}", requested.display()))?;
+        let expected = std::path::absolute(requested)?;
+        if !policy::windows_same_path(&actual, &expected.to_string_lossy()) {
+            bail!("{} passes through a junction, symlink or other reparse point", requested.display());
+        }
+        Ok(())
+    }
+
+    pub fn clean_file(path: &Path, trust: Trust) -> Result<()> {
+        let h = match open_entry(path) {
+            Ok(h) => h,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).with_context(|| format!("inspecting {}", path.display())),
+        };
+        let info = file_info(h.as_raw_handle())?;
+        let attrs = info.dwFileAttributes;
+        let problem = if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            Some("it is a junction, symlink or other reparse point".to_string())
+        } else if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
+            bail!("{}: a directory is in the way", path.display());
+        } else if info.nNumberOfLinks != 1 {
+            Some("it has other hard links".to_string())
+        } else if trust != Trust::Unchecked {
+            let (owner, dacl) = security(&h)?;
+            let p = policy::windows_dir_problems(&owner, dacl.as_deref(), policy::WinRole::Target);
+            if p.is_empty() { None } else { Some(p.join("; ")) }
+        } else {
+            None
+        };
+        drop(h);
+        let Some(problem) = problem else { return Ok(()) };
+        // Removes the entry itself; a directory junction is removed as a directory.
+        let removed =
+            if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 { std::fs::remove_dir(path) } else { std::fs::remove_file(path) };
+        removed.with_context(|| format!("removing {} ({problem})", path.display()))
+    }
+
     pub fn walk(dir: &Path, trust: Trust, create: bool) -> Result<()> {
         let checked = trust != Trust::Unchecked;
         if checked {
@@ -646,7 +933,9 @@ pub mod policy {
             return Err("unsupported POSIX ACL version".into());
         }
         let entries: Vec<(u16, u16)> = xattr[4..]
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|e| (u16::from_le_bytes([e[0], e[1]]), u16::from_le_bytes([e[2], e[3]])))
             .collect();
         let mask = entries.iter().find(|(tag, _)| *tag == ACL_MASK).map(|(_, perm)| *perm);
@@ -658,6 +947,26 @@ pub mod policy {
             };
             effective & ACL_WRITE != 0
         }))
+    }
+
+    // ---- Windows paths ----
+
+    /// Whether the path a handle resolved to (GetFinalPathNameByHandleW, `\\?\` form) is the requested absolute
+    /// path. Compared case-insensitively, separators and trailing backslashes normalized. Short (8.3) names in
+    /// the request do not match and are refused.
+    pub fn windows_same_path(actual: &str, requested: &str) -> bool {
+        fn norm(p: &str) -> String {
+            let p = p.replace('/', "\\");
+            let p = if let Some(rest) = p.strip_prefix(r"\\?\UNC\") {
+                format!(r"\\{rest}")
+            } else if let Some(rest) = p.strip_prefix(r"\\?\") {
+                rest.to_string()
+            } else {
+                p
+            };
+            p.trim_end_matches('\\').to_lowercase()
+        }
+        norm(actual) == norm(requested)
     }
 
     // ---- Windows owner and DACL ----
