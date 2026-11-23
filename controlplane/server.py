@@ -40,6 +40,7 @@ Routes (all JSON):
     GET    /admin/topology                      everything the dashboard shows, with firing alerts
     GET    /admin/alerts[?all=1]
     POST   /admin/alerts/test
+    GET    /admin/install-commands?cp=URL[&iface=]  one-line exit-node install / uninstall commands per OS
   Agent  (Authorization: Bearer <host agent token>; every route is scoped to that host)
     GET    /agent/server-config                 ETag = hash of the config
     GET    /agent/ips                           text/plain
@@ -48,6 +49,9 @@ Routes (all JSON):
   Prober (Authorization: Bearer $CP_PROBE_TOKEN)
     GET    /probe/targets
     POST   /probe/report                        {"vantage", "results"}
+  Exit-node installer (see installer.py)
+    GET    /install/exit.sh, /install/exit.ps1, /install/manifest.json   public, no secrets
+    GET    /install/files/{agent.py|probes.py|ips.sh}                  (host agent token)
   GET /healthz, GET /dashboard
 
 Serve behind TLS (a reverse proxy, or --tls-cert/--tls-key) whenever it is reachable beyond localhost:
@@ -68,6 +72,7 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import installer
 from alerts import Alerter, payload, post_json
 from auth import SESSION_TTL, AdminAuth, scrub
 from monitor import Monitor
@@ -631,6 +636,31 @@ def probe_targets(h, store, _p, _b, _q):
 def probe_report(h, store, _p, body, _q):
     """Entry latency from a vantage point: {vantage, results: [{subject, target, ok, latency_ms}]}"""
     h._json(200, {"recorded": h.mon.record("entry", need(body, "vantage"), need(body, "results"))})
+
+
+# -- exit-node installer ----------------------------------------------------------------------------------
+
+@route("GET", "/admin/install-commands", "admin")
+def install_commands(h, store, _p, _b, query):
+    h._json(200, installer.install_commands(query.get("cp", ""), query.get("iface") or None))
+
+
+@route("GET", r"/install/(exit\.sh|exit\.ps1)", None)
+def install_script(h, store, _p, _b, _q, name):
+    h._send(200, installer.render(name), "text/plain; charset=utf-8")
+
+
+@route("GET", "/install/manifest.json", None)
+def install_manifest(h, store, _p, _b, _q):
+    h._json(200, installer.manifest())
+
+
+@route("GET", "/install/files/([^/]+)", "agent")
+def install_file(h, store, _host, _b, _q, name):
+    """Agent files for the installer. Only a valid host agent token may download them."""
+    if name not in installer.FILES:
+        raise HTTPError(404, "no such installer file")
+    h._send(200, installer.read_file(name), "application/octet-stream")
 
 
 @route("GET", "/healthz", None)
