@@ -202,7 +202,7 @@ Probe(target, vantage, latency_ms, ok, at)
 2. **客户端原型（macOS）**：手写配置，跑通域名模式和应用模式，按防泄漏清单逐项验证。分流逻辑已在 Linux TUN 上验证；macOS 真机待验收，见 [client/](../client/README.md)。
 3. **控制面 MVP**：用户、设备、IP 分配、配置订阅接口，加上出口机 agent 的热更新。已完成，见 [controlplane/](../controlplane/README.md)。
 4. **客户端外壳**：登录、状态、诊断、冲突检测，以及打包和签名。已完成：Tauri 桌面端（macOS、Windows、Linux）和 ccproxy 命令行，见 [client/](../client/README.md)。Linux 客户端已通过端到端测试；macOS 应用已构建；三个平台的提权方式和 Windows、Linux 安装包未验证；冲突检测和代码签名未做。
-5. **线路增强**：中转主备、多点探测、拓扑看板。多点探测和拓扑看板已完成，见 [controlplane/](../controlplane/README.md#健康探测与看板)；中转主备未做。
+5. **线路增强**：中转主备、多点探测、拓扑看板。多点探测和拓扑看板已完成，见 [controlplane/](../controlplane/README.md#monitoring-and-topology)；中转主备未做。
 
 ## 验收
 

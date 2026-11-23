@@ -39,6 +39,7 @@ def call(method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", "Bearer " + os.environ.get("CP_ADMIN_TOKEN", ""))
+    req.add_header("User-Agent", "CCProxy-Cpctl")
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
