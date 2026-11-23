@@ -5,17 +5,17 @@
 // polling the control plane), a heartbeat every few seconds, and a stop file on disconnect or exit.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use anyhow::Result;
 use ccproxy_core::api::{Api, Me};
+use ccproxy_core::commands::{self, touch, Connected, Effects, LoggedOut, Tunnel};
 use ccproxy_core::session::{Paths, Session};
 use ccproxy_core::supervisor::Status;
 use ccproxy_core::sync::{sync_once, SyncOutcome};
 use ccproxy_core::{default_device_name, elevate, platform, DEFAULT_MODE};
 use serde::Serialize;
-use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
 const HEARTBEAT_TIMEOUT_SECS: u64 = 30;
@@ -23,14 +23,32 @@ const SYNC_EVERY: Duration = Duration::from_secs(30);
 
 struct App {
     paths: Paths,
-    want_connected: AtomicBool,
+    /// Whether the user wants the tunnel, and when they last connected (older supervisor status belongs to an
+    /// earlier run).
+    tunnel: Tunnel,
     message: Mutex<String>,
     /// Last exit IP / entry from the control plane. Local refreshes (every 1.5 s) reuse it instead of asking
     /// the server, so they must not blank it out.
     /// Keyed by session id: a reply for an earlier session never shows up under a later one.
     me: Mutex<Option<(String, Me)>>,
-    /// When the user last pressed connect (seconds); older supervisor status belongs to an earlier run.
-    connected_at: Mutex<u64>,
+}
+
+/// The real effects behind the connect and logout commands (see [`commands`]).
+struct DesktopEffects;
+
+impl Effects for DesktopEffects {
+    fn sync(&self, paths: &Paths, session: &Session) -> Result<SyncOutcome> {
+        sync_once(paths, session, DEFAULT_MODE)
+    }
+
+    fn launch_supervisor(&self, paths: &Paths) -> Result<()> {
+        let args = elevate::tunnel_args(paths, &sidecar("sing-box"), HEARTBEAT_TIMEOUT_SECS);
+        elevate::launch(&sidecar("ccproxy"), &args)
+    }
+
+    fn remote_logout(&self, session: &Session) -> Result<()> {
+        Api::new(&session.server)?.logout(&session.token)
+    }
 }
 
 #[derive(Serialize)]
@@ -55,18 +73,10 @@ struct View {
     message: String,
 }
 
-fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
-
 fn sidecar(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_default();
     let dir = exe.parent().map(PathBuf::from).unwrap_or_default();
     dir.join(if cfg!(windows) { format!("{name}.exe") } else { name.to_string() })
-}
-
-fn touch(path: &std::path::Path) {
-    let _ = fs::write(path, now().to_string());
 }
 
 impl App {
@@ -75,8 +85,7 @@ impl App {
     }
 
     fn request_stop(&self) {
-        self.want_connected.store(false, Ordering::SeqCst);
-        touch(&self.paths.stop());
+        self.tunnel.request_stop(&self.paths);
     }
 
     fn view(&self, online: bool) -> View {
@@ -91,13 +100,13 @@ impl App {
             host: None,
             tunnel: "idle".into(),
             tunnel_message: String::new(),
-            want_connected: self.want_connected.load(Ordering::SeqCst),
+            want_connected: self.tunnel.wants_connection(),
             message: self.message.lock().unwrap().clone(),
         };
         // The supervisor writes its status only on transitions, so an old "running" can be current. A status older
         // than the last connect belongs to a previous run (the app cannot delete it: it lives in the protected dir).
         if let Some(st) = Status::current() {
-            if st.updated >= *self.connected_at.lock().unwrap() {
+            if st.updated >= self.tunnel.connected_at() {
                 v.tunnel = st.state;
                 v.tunnel_message = st.message;
             }
@@ -170,14 +179,12 @@ async fn login(app: tauri::State<'_, Arc<App>>, server: String, username: String
 async fn logout(app: tauri::State<'_, Arc<App>>) -> Result<View, String> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        app.request_stop();
-        if let Some(s) = Session::load(&app.paths) {
-            if let Ok(api) = Api::new(&s.server) {
-                let _ = api.logout(&s.token);
-            }
+        match commands::logout(&app.paths, &app.tunnel, &DesktopEffects) {
+            LoggedOut::SignedOut | LoggedOut::NotSignedIn => app.set_message("Signed out."),
+            // A newer sign-in replaced the session while the server call was in flight: it stays signed in, and
+            // its message stays as it is.
+            LoggedOut::Superseded => {}
         }
-        Session::clear(&app.paths);
-        app.set_message("Signed out.");
         app.view(false)
     })
     .await
@@ -188,20 +195,11 @@ async fn logout(app: tauri::State<'_, Arc<App>>) -> Result<View, String> {
 async fn connect(app: tauri::State<'_, Arc<App>>) -> Result<View, String> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let session = Session::load(&app.paths).ok_or("Sign in first.")?;
-        match sync_once(&app.paths, &session, DEFAULT_MODE).map_err(|e| format!("Could not load the configuration: {e:#}"))? {
-            SyncOutcome::SignedOut => return Err("Your session expired. Sign in again.".into()),
-            SyncOutcome::Unassigned(m) => return Err(format!("No egress IP is assigned: {m}")),
-            _ => {}
-        }
-        let _ = fs::remove_file(app.paths.stop());
-        *app.connected_at.lock().unwrap() = now();
-        touch(&app.paths.heartbeat());
-        app.want_connected.store(true, Ordering::SeqCst);
-        let args = elevate::tunnel_args(&app.paths, &sidecar("sing-box"), HEARTBEAT_TIMEOUT_SECS);
-        if let Err(e) = elevate::launch(&sidecar("ccproxy"), &args) {
-            app.want_connected.store(false, Ordering::SeqCst);
-            return Err(format!("Administrator authorization was unavailable: {e:#}"));
+        match commands::connect(&app.paths, &app.tunnel, &DesktopEffects)? {
+            Connected::Started => {}
+            // Signed out or replaced while the config synced: nothing was started for the old session. Return before
+            // touching the app message or refreshing online, which would act for the replacement session.
+            Connected::Superseded => return Err("The session changed while connecting. Connect again.".into()),
         }
         app.set_message("");
         Ok(app.view(true))
@@ -223,7 +221,7 @@ fn background(app: Arc<App>) {
     let mut last_sync = Instant::now();
     loop {
         std::thread::sleep(Duration::from_millis(500));
-        if !app.want_connected.load(Ordering::SeqCst) {
+        if !app.tunnel.wants_connection() {
             continue;
         }
         if last_beat.elapsed() >= HEARTBEAT_EVERY {
@@ -254,10 +252,9 @@ fn main() {
     let paths = Paths::new(None).expect("state directory");
     let app = Arc::new(App {
         paths,
-        want_connected: AtomicBool::new(false),
+        tunnel: Tunnel::default(),
         message: Mutex::new(String::new()),
         me: Mutex::new(None),
-        connected_at: Mutex::new(0),
     });
     // A tunnel left over from a previous run of the app stops by itself once its heartbeat goes stale.
     {

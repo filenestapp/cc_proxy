@@ -4,6 +4,7 @@
 //! * [`session`]: where the signed-in session and the current sing-box config live on disk.
 //! * [`sync`]: keep the local config in step with the control plane (ETag polling).
 //! * [`supervisor`]: run sing-box, reload it when its config file changes, stop on request.
+//! * [`commands`]: the desktop app's connect / disconnect / logout logic, applied only for the session that asked.
 //! * [`elevate`]: start the supervisor with the privileges a TUN interface needs, per OS.
 //! * [`sysdns`]: route rule domains' lookups to the TUN (macOS) and flush OS DNS caches.
 //!
@@ -11,6 +12,7 @@
 //! a heartbeat. The privileged supervisor only reads them. No socket or IPC protocol sits between the two.
 
 pub mod api;
+pub mod commands;
 pub mod elevate;
 pub mod fsguard;
 pub mod runtime;
