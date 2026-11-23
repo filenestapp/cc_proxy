@@ -69,7 +69,17 @@ pub fn launch(cli: &Path, args: &[String]) -> Result<()> {
     }
     #[cfg(target_os = "linux")]
     {
-        Command::new("pkexec").arg(cli).args(args).spawn().context("running pkexec (is polkit installed?)")?;
+        let mut child = Command::new("pkexec")
+            .arg(cli)
+            .args(args)
+            .spawn()
+            .context("running pkexec (is polkit installed?)")?;
+        // pkexec replaces itself with the supervisor after authorization. Reap it when the tunnel exits.
+        std::thread::spawn(move || {
+            if let Err(error) = child.wait() {
+                eprintln!("Could not reap the Linux tunnel helper: {error}");
+            }
+        });
         return Ok(());
     }
     #[cfg(target_os = "windows")]
