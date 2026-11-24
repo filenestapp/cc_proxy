@@ -14,6 +14,10 @@
 //   - When a reload fails definitively the last confirmed configuration is put back at --config.
 //   - Every --probe-interval seconds each URL from /agent/probe-targets is fetched from every egress IP, bound to
 //     that IP, in the background; results go out with the next heartbeats.
+//   - XTCP hosts (xtcp.go, with --frpc-config): GET /agent/xtcp, the host's desired frpc proxies. A new generation is
+//     verified, written, hot-reloaded (or frpc restarted with --frpc-restart-cmd when its frps settings changed),
+//     and confirmed only once frpc's loopback admin API lists every proxy as registered; otherwise the working
+//     configuration is restored. The heartbeat carries the outcome in "xtcp".
 //   - Per-device traffic (usage.go): each candidate also gets sing-box's API service on --usage-api (loopback,
 //     sing-box 1.14+). The agent follows its connection events and sends upload and download bytes per VLESS user
 //     and UTC hour to POST /agent/usage every --usage-interval seconds, independently of sync and heartbeats.
@@ -117,6 +121,13 @@ func run(argv []string) int {
 	fs.BoolVar(&o.Run, "run", false, "supervise sing-box as a child process")
 	fs.StringVar(&o.ReloadCmd, "reload-cmd", "", "command that makes sing-box load --config")
 	fs.StringVar(&o.RunReload, "run-reload", "", "with --run: signal (SIGHUP) or restart; default signal, restart on Windows")
+	fs.StringVar(&o.FrpcConfig, "frpc-config", "", "XTCP hosts: the frpc.toml frpc runs; enables XTCP mapping sync")
+	fs.StringVar(&o.FrpcBin, "frpc", "frpc", "with --frpc-config: frpc executable (for verify)")
+	fs.StringVar(&o.FrpcCA, "frpc-ca", "", "with --frpc-config: the CA file frpc.toml names for frps")
+	fs.StringVar(&o.FrpcLog, "frpc-log", "", "with --frpc-config: frpc log file named in frpc.toml (Windows); default console")
+	fs.StringVar(&o.FrpcAdmin, "frpc-admin", "127.0.0.1:9097", "with --frpc-config: numeric loopback address:port for frpc's admin API")
+	fs.StringVar(&o.FrpcRestartCmd, "frpc-restart-cmd", "", "with --frpc-config: command that restarts the frpc service")
+	fs.Float64Var(&o.FrpcConfirmTimeout, "frpc-confirm-timeout", 20, "seconds to wait for frpc to register a new generation")
 	fs.StringVar(&logFile, "log-file", "", "append the agent's and sing-box's output here (rotated at 10 MB, 5 kept)")
 	if err := fs.Parse(argv); err != nil {
 		return 2

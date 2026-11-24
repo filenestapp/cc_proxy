@@ -57,6 +57,8 @@ type heartbeat struct {
 	ApplyError      *string `json:"apply_error"`
 	ApplyState      string  `json:"apply_state"`
 	LocalEgressIPv4 string  `json:"local_egress_ipv4"`
+	// Sent by agents with XTCP sync (xtcp_sync.go); absent from older agents.
+	XTCP *xtcpReport `json:"xtcp"`
 }
 
 // IsGlobalUnicast also includes locally scoped and special-purpose IPv4 ranges.
@@ -129,6 +131,11 @@ func (s *store) reportAgent(ctx context.Context, name, token string, address net
 			name, s.now(), strings.Trim(hb.ConfigETag, `"`), hb.SingboxRunning, applied, state)
 		if err != nil {
 			return err
+		}
+		if hb.XTCP != nil {
+			if err := recordXTCPReport(ctx, tx, name, s.now(), *hb.XTCP); err != nil {
+				return err
+			}
 		}
 		changed := false
 		if isPublicIPv4(address) {

@@ -526,6 +526,28 @@ class InstallScriptTest(GoControlPlaneFixture):
             self.assertIn(want, text)
         self.assertEqual(read_text(self.p("etc", "ccproxy-exit", "frp-ca.pem")).strip(), read_text(TLS.cert).strip())
         self.assertIn("TRANSPORT='xtcp'", read_text(self.p("etc", "ccproxy-exit", "install.conf")))
+        # frpc's admin API for the agent's XTCP sync: loopback, the agent's password, before the first proxy.
+        secret_file = self.p("var", "lib", "ccproxy-exit", "agent", "frpc-admin.secret")
+        self.assertEqual(stat.S_IMODE(os.stat(secret_file).st_mode), 0o600)
+        secret = read_text(secret_file).strip()
+        self.assertRegex(secret, r"^[0-9a-f]{32}$")
+        block = ('webServer.addr = "127.0.0.1"\nwebServer.port = 9097\nwebServer.user = "ccproxy-agent"\n'
+                 'webServer.password = "%s"\n\n[[proxies]]\n' % secret)
+        self.assertIn(block, text)
+        self.assertLess(text.index("webServer.addr"), text.index("[[proxies]]"))
+        ctl = self.p("opt", "ccproxy-exit", "libexec", "frpc-ctl")
+        self.assertEqual(stat.S_IMODE(os.stat(ctl).st_mode), 0o755)
+        return secret
+
+    def assert_xtcp_agent_args(self, args):
+        """The agent gets the frpc paths and the restart helper from this installation, never from the network."""
+        def value(flag):
+            return args[args.index(flag) + 1]
+        self.assertEqual(value("--frpc"), self.p("opt", "ccproxy-exit", "bin", "frpc"))
+        self.assertEqual(value("--frpc-config"), self.p("etc", "ccproxy-exit", "frpc.toml"))
+        self.assertEqual(value("--frpc-ca"), self.p("etc", "ccproxy-exit", "frp-ca.pem"))
+        self.assertEqual(value("--frpc-admin"), "127.0.0.1:9097")
+        self.assertEqual(value("--frpc-restart-cmd"), self.p("opt", "ccproxy-exit", "libexec", "frpc-ctl") + " restart")
 
     @unittest.skipUnless(sys.platform == "darwin", "native macOS path (launchd plists, plutil, BSD tools)")
     def test_macos_xtcp_install_upgrade_and_back_to_public(self):
@@ -542,10 +564,16 @@ class InstallScriptTest(GoControlPlaneFixture):
         r = self.run_script()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("transport: XTCP", r.stderr)
-        self.assert_xtcp_files()
+        admin_secret = self.assert_xtcp_files()
         conf = self.p("etc", "ccproxy-exit", "frpc.toml")
         for secret in (self.XTCP["auth_token"], self.XTCP["secret_key"]):
             self.assert_secret_only_in(secret, {conf}, r)
+        self.assert_secret_only_in(admin_secret, {conf, self.p("var", "lib", "ccproxy-exit", "agent", "frpc-admin.secret")}, r)
+        self.assertIn("launchctl kickstart -k system/com.ccproxy.exit.frpc",
+                      read_text(self.p("opt", "ccproxy-exit", "libexec", "frpc-ctl")))
+        agent_plist = self.p("Library", "LaunchDaemons", "com.ccproxy.exit.agent.plist")
+        self.assert_xtcp_agent_args(json.loads(subprocess.run(
+            ["plutil", "-extract", "ProgramArguments", "json", "-o", "-", agent_plist], capture_output=True, text=True).stdout))
         self.assert_token_only_in_token_file(r)
         plist = self.p("Library", "LaunchDaemons", "com.ccproxy.exit.frpc.plist")
         self.assertEqual(subprocess.run(["plutil", "-lint", plist], capture_output=True).returncode, 0)
@@ -554,6 +582,8 @@ class InstallScriptTest(GoControlPlaneFixture):
         self.assertEqual(args, [self.p("opt", "ccproxy-exit", "bin", "frpc"), "-c", conf])
         calls = self.calls_text()
         self.assertIn("launchctl bootstrap system %s" % plist, calls)
+        # frpc starts before the agent, so the agent finds it serving the installed file and only confirms it.
+        self.assertLess(calls.index("launchctl bootstrap system %s" % plist), calls.index("launchctl bootstrap system %s" % agent_plist))
         self.assertIn("frpc.log", read_text(self.p("etc", "newsyslog.d", "ccproxy-exit.conf")))
 
         # The host goes back to the public entry: a rerun removes frpc and its credentials.
@@ -562,7 +592,9 @@ class InstallScriptTest(GoControlPlaneFixture):
         r = self.run_script()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("removed frpc", r.stderr)
-        for gone in (plist, conf, self.p("etc", "ccproxy-exit", "frp-ca.pem"), self.p("opt", "ccproxy-exit", "bin", "frpc")):
+        for gone in (plist, conf, self.p("etc", "ccproxy-exit", "frp-ca.pem"), self.p("opt", "ccproxy-exit", "bin", "frpc"),
+                     self.p("opt", "ccproxy-exit", "libexec", "frpc-ctl"),
+                     self.p("var", "lib", "ccproxy-exit", "agent", "frpc-admin.secret")):
             self.assertFalse(os.path.exists(gone), gone)
         self.assertIn("launchctl bootout system/com.ccproxy.exit.frpc", self.calls_text())
 
@@ -574,7 +606,11 @@ class InstallScriptTest(GoControlPlaneFixture):
         self.seed_frpc("linux")
         r = self.run_script("--cp", self.cp.url, "--cafile", self.ca, "--token-file", self.token_file, os_name="Linux")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assert_xtcp_files()
+        admin_secret = self.assert_xtcp_files()
+        self.assertIn("exec systemctl restart ccproxy-exit-frpc.service", read_text(self.p("opt", "ccproxy-exit", "libexec", "frpc-ctl")))
+        agent_unit = read_text(self.p("etc", "systemd", "system", "ccproxy-exit-agent.service"))
+        exec_start = [line for line in agent_unit.splitlines() if line.startswith("ExecStart=")][0]
+        self.assert_xtcp_agent_args([a.strip('"') for a in exec_start[len("ExecStart="):].split('" "')])
         unit = read_text(self.p("etc", "systemd", "system", "ccproxy-exit-frpc.service"))
         self.assertIn("ExecStart=%s -c %s" % (self.p("opt", "ccproxy-exit", "bin", "frpc"), self.p("etc", "ccproxy-exit", "frpc.toml")), unit)
         self.assertIn("Restart=always", unit)
@@ -582,6 +618,11 @@ class InstallScriptTest(GoControlPlaneFixture):
         calls = self.calls_text()
         self.assertIn("systemctl enable ccproxy-exit-singbox.service ccproxy-exit-agent.service ccproxy-exit-frpc.service", calls)
         self.assertIn("systemctl restart ccproxy-exit-frpc.service", calls)
+        self.assertLess(calls.index("systemctl restart ccproxy-exit-frpc.service"), calls.index("systemctl restart ccproxy-exit-agent.service"))
+        # A rerun keeps the admin password, so the running frpc and the agent keep agreeing on it.
+        r = self.run_script(os_name="Linux")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.assert_xtcp_files(), admin_secret)
         r = self.run_script("--uninstall", os_name="Linux")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("ccproxy-exit-frpc.service", self.calls_text().split("disable --now")[-1])

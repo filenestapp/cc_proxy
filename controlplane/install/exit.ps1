@@ -50,6 +50,8 @@ $FrpcConf = Join-Path $Data 'frpc.toml'
 $FrpCa = Join-Path $Data 'frp-ca.pem'
 $FrpcTask = 'CCProxyExitFrpc'
 $FrpcFirewallRule = 'CC Proxy exit node frpc (XTCP)'
+$FrpcAdminPort = 9097                                     # frpc's admin API on loopback, for the agent's XTCP sync
+$FrpcAdminSecret = Join-Path $State 'frpc-admin.secret'
 # Full-string patterns: .NET "$" also matches before a trailing newline, "\z" does not.
 $UrlPattern = '\Ahttps://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?\z'
 $TokenPattern = '\A[A-Za-z0-9_-]{16,256}\z'
@@ -124,13 +126,39 @@ function Stop-ExitNode {
     } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
+# frpc's admin API for the agent: loopback only, with a random password the agent reads from its state directory.
+# The block goes before the first proxy, exactly as the agent inserts it (egress/agent/xtcp.go adminBlock), so a
+# freshly installed file already equals the agent's candidate and needs no reload.
+function Add-FrpcAdmin([string]$Text) {
+    $secret = ''
+    if (Test-Path -LiteralPath $FrpcAdminSecret) { $secret = ([string](Get-Content -LiteralPath $FrpcAdminSecret -TotalCount 1)).Trim() }
+    if ($secret -cnotmatch '^[0-9a-f]{32,64}$') {
+        $bytes = New-Object byte[] 16
+        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $secret = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+        Write-Text $FrpcAdminSecret ($secret + "`n")
+    }
+    $block = "# Local admin API for the CC Proxy exit agent: loopback only, password in the agent's state directory.`n" +
+        "webServer.addr = `"127.0.0.1`"`nwebServer.port = $FrpcAdminPort`nwebServer.user = `"ccproxy-agent`"`n" +
+        "webServer.password = `"$secret`"`n`n"
+    $lines = $Text -split "`n"
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -ceq '[[proxies]]') {
+            return (($lines[0..($i - 1)] -join "`n") + "`n" + $block + ($lines[$i..($lines.Count - 1)] -join "`n"))
+        }
+    }
+    return $Text + "`n" + $block
+}
+
 # A host that left the XTCP transport (or an uninstall): remove frpc's task, firewall rule, binary and credentials.
 function Remove-Frpc {
     if (Get-ScheduledTask -TaskName $FrpcTask -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $FrpcTask -Confirm:$false
     }
     Get-NetFirewallRule -DisplayName $FrpcFirewallRule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-    foreach ($f in @($FrpcExe, (Join-Path $App 'frpc.sha256'), $FrpcConf, $FrpCa)) {
+    foreach ($f in @($FrpcExe, (Join-Path $App 'frpc.sha256'), $FrpcConf, $FrpCa, $FrpcAdminSecret, (Join-Path $State 'xtcp-state.json'),
+            (Join-Path $State 'frpc-confirmed.toml'), (Join-Path $State 'frpc-confirmed-ca.pem'), (Join-Path $State 'frpc-previous.toml'),
+            (Join-Path $State 'frpc-previous-ca.pem'), (Join-Path $State 'frpc-candidate.toml'))) {
         if (Test-Path -LiteralPath $f) { Remove-Item -Force -LiteralPath $f }
     }
 }
@@ -315,7 +343,7 @@ function Install-ExitNode {
             }
             Write-Text $FrpCa $ca.Text
             $pending = Join-Path $Data 'frpc.toml.check'
-            Write-Text $pending $xtcp.Text
+            Write-Text $pending (Add-FrpcAdmin $xtcp.Text)
             $out = & $FrpcExe verify -c $pending 2>&1
             if ($LASTEXITCODE -ne 0) { Remove-Item -Force $pending; Fail "frpc rejected the XTCP configuration from the control plane: $out" }
             Move-Item -LiteralPath $pending -Destination $FrpcConf -Force   # frps token and XTCP secret key
@@ -327,13 +355,21 @@ function Install-ExitNode {
         Set-RestrictedAcl $App $true
         Set-RestrictedAcl $Data $false
         $trustedFiles = @($AgentExe, $SingBoxExe, $TokenPath, $State)
-        if ($xtcp.Status -eq 200) { $trustedFiles += @($FrpcExe, $FrpcConf, $FrpCa) }
+        if ($xtcp.Status -eq 200) { $trustedFiles += @($FrpcExe, $FrpcConf, $FrpCa, $FrpcAdminSecret) }
         foreach ($f in $trustedFiles) { Assert-Trusted $f }
 
         $agentArgs = @('--cp', $cp, '--token-file', $TokenPath, '--config', (Join-Path $State 'config.json'),
             '--state-dir', $State, '--singbox', $SingBoxExe, '--run', '--run-reload', 'restart',
             '--log-file', (Join-Path $Logs 'agent.log'))
         if ($agentName) { $agentArgs += @('--name', $agentName) }
+        if ($xtcp.Status -eq 200) {
+            # XTCP sync: the agent hot-reloads frpc through its loopback admin API and restarts the frpc task only when
+            # the frps settings change. Single quotes keep the path literal for the agent's command splitting.
+            $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $restart = "'$powershell' -NoProfile -NonInteractive -Command Stop-ScheduledTask -TaskName $FrpcTask; Start-ScheduledTask -TaskName $FrpcTask"
+            $agentArgs += @('--frpc', $FrpcExe, '--frpc-config', $FrpcConf, '--frpc-ca', $FrpCa, '--frpc-log', $frpcLog,
+                '--frpc-admin', "127.0.0.1:$FrpcAdminPort", '--frpc-restart-cmd', $restart)
+        }
         $argLine = ($agentArgs | ForEach-Object { '"' + $_ + '"' }) -join ' '
         $action = New-ScheduledTaskAction -Execute $AgentExe -Argument $argLine -WorkingDirectory $Data
         $trigger = New-ScheduledTaskTrigger -AtStartup

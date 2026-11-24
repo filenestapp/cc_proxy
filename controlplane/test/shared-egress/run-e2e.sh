@@ -10,13 +10,22 @@
 #   v-carol, v-dave     an frpc XTCP visitor plus a sing-box client per user (XTCP entry)
 #   echo      answers with the caller's IPv4
 #
+# exit-nat starts like a host installed before #45 (frpc.toml fetched once, no admin API). Then the Go exit agent
+# from this checkout takes over (the one-time upgrade): it supervises sing-box (--run) and keeps frpc's proxies in
+# step through GET /agent/xtcp, hot reload and frpc's live status (issue #45).
+#
 # Checks: two shared users on the direct host and two on the XTCP host reach their own listener and leave from the
-# same egress IPv4, concurrently; an existing single-port XTCP host upgrades without touching the first mapping or its
-# visitor; a user's visitor key opens only that user's proxy; allocation conflicts and mode switches; releasing or
+# same egress IPv4, concurrently; an existing single-port XTCP host shows "upgrade_needed", then the agent adopts it;
+# a second shared user's port becomes ready through normal agent sync without rerunning the installer, while the first
+# visitor stays connected (assignment-to-ready time is printed); a user's visitor key opens only that user's proxy;
+# frps refusing a new proxy is reported as failed, keeps the working mappings and is retried; releasing a user removes
+# the retired proxy; an agent restart does not reload frpc; allocation conflicts and mode switches; releasing or
 # revoking one holder leaves the other working.
 #
 # Needs: Docker, Go, psql, TEST_DATABASE_URL, internet access (pinned binaries from GitHub, Reality handshake
-# target, STUN for frp hole punching). KEEP=1 leaves the containers running.
+# target, STUN for frp hole punching). KEEP=1 leaves the containers running. The XTCP host's agent reaches the control
+# plane through host.docker.internal; with Docker Desktop that reaches 127.0.0.1, on Linux set CP_LISTEN=0.0.0.0 (or
+# the Docker bridge address) so the containers can connect.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -34,6 +43,7 @@ ADMIN_TOKEN="admin-$(rnd)" FRPS_TOKEN="frps-$(rnd)" XTCP_KEY="xtcp-$(rnd)" PW="u
 SCHEMA="cp_shared_e2e_$(openssl rand -hex 6)"
 CP_PORT="${CP_PORT:-18493}"
 CP="http://127.0.0.1:$CP_PORT"
+CP_LISTEN="${CP_LISTEN:-127.0.0.1}"
 CONTAINERS="ccs-frps ccs-exit-pub ccs-exit-nat ccs-echo ccs-c-alice ccs-c-bob ccs-v-carol ccs-v-dave"
 CP_PID=""
 
@@ -42,6 +52,8 @@ cleanup() {
   [ -n "$CP_PID" ] && kill "$CP_PID" 2>/dev/null || true
   for c in ccs-exit-pub ccs-exit-nat; do docker exec "$c" cat /tmp/sing-box.log > "$OUT/$c-sing-box.log" 2>/dev/null || true; done
   docker exec ccs-exit-nat cat /tmp/frpc.log > "$OUT/exit-nat-frpc.log" 2>/dev/null || true
+  docker exec ccs-exit-nat cat /tmp/agent.log > "$OUT/exit-nat-agent.log" 2>/dev/null || true
+  docker exec ccs-frps cat /tmp/frps.log > "$OUT/frps.log" 2>/dev/null || true
   if [[ "${KEEP:-0}" != 1 ]]; then
     docker rm -f $CONTAINERS >/dev/null 2>&1 || true
     docker network rm $NET >/dev/null 2>&1 || true
@@ -105,7 +117,7 @@ echo "== control plane on $CP (schema $SCHEMA)"
 psql_run "CREATE SCHEMA $SCHEMA"
 DSN=$(python3 -I -c "import sys,urllib.parse as u; p=u.urlsplit(sys.argv[1]); q=dict(u.parse_qsl(p.query), search_path=sys.argv[2]); print(u.urlunsplit(p._replace(query=u.urlencode(q))))" "$TEST_DATABASE_URL" "$SCHEMA")
 DATABASE_URL="$DSN" "$OUT/cc-controlplane" init >/dev/null
-DATABASE_URL="$DSN" CP_ADMIN_TOKEN="$ADMIN_TOKEN" "$OUT/cc-controlplane" serve --listen 127.0.0.1 --port "$CP_PORT" > "$OUT/cp.log" 2>&1 &
+DATABASE_URL="$DSN" CP_ADMIN_TOKEN="$ADMIN_TOKEN" "$OUT/cc-controlplane" serve --listen "$CP_LISTEN" --port "$CP_PORT" > "$OUT/cp.log" 2>&1 &
 CP_PID=$!
 waitfor 30 "control plane" "curl -fsS $CP/healthz >/dev/null 2>&1"
 api() { # api METHOD PATH [JSON] -> body; HTTP status in $OUT/status
@@ -131,6 +143,36 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()
 EOF
+cat > "$OUT/forward.py" <<'EOF'
+# forward.py LISTEN_PORT HOST PORT: a loopback TCP forwarder, so the agent's plain-http control plane URL is loopback.
+import socket, sys, threading
+def pipe(a, b):
+    try:
+        while True:
+            data = a.recv(65536)
+            if not data:
+                break
+            b.sendall(data)
+    except OSError:
+        pass
+    finally:
+        for s in (a, b):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+server = socket.create_server(("127.0.0.1", int(sys.argv[1])))
+while True:
+    client, _ = server.accept()
+    try:
+        upstream = socket.create_connection((sys.argv[2], int(sys.argv[3])), timeout=10)
+    except OSError:
+        client.close()
+        continue
+    upstream.settimeout(None)
+    threading.Thread(target=pipe, args=(client, upstream), daemon=True).start()
+    threading.Thread(target=pipe, args=(upstream, client), daemon=True).start()
+EOF
 cat > "$OUT/frps.toml" <<EOF
 bindPort = 7003
 auth.method = "token"
@@ -142,7 +184,7 @@ log.to = "console"
 EOF
 run() { # run NAME IP [docker args...] -- a long-running tools container with sing-box and frp mounted
   local name=$1 ip=$2; shift 2
-  docker run -d --name "$name" --network $NET --ip "$ip" -v "$OUT/tls:/tls:ro" -v "$SB_BIN:/usr/local/bin/sing-box:ro" \
+  docker run -d --init --name "$name" --network $NET --ip "$ip" -v "$OUT/tls:/tls:ro" -v "$SB_BIN:/usr/local/bin/sing-box:ro" \
     -v "$FRP_DIR/frpc:/usr/local/bin/frpc:ro" -v "$FRP_DIR/frps:/usr/local/bin/frps:ro" "$@" ccx-tools sleep infinity >/dev/null
 }
 run ccs-frps $IP_FRPS --network-alias frps -v "$OUT/frps.toml:/etc/frps.toml:ro"
@@ -150,7 +192,7 @@ docker exec -d ccs-frps sh -c 'frps -c /etc/frps.toml > /tmp/frps.log 2>&1'
 run ccs-echo $IP_ECHO -v "$OUT/echo.py:/echo.py:ro"
 docker exec -d ccs-echo python3 /echo.py
 run ccs-exit-pub $IP_PUB
-run ccs-exit-nat $IP_NAT
+run ccs-exit-nat $IP_NAT --add-host host.docker.internal:host-gateway
 run ccs-c-alice 172.31.92.31
 run ccs-c-bob 172.31.92.32
 run ccs-v-carol 172.31.92.33
@@ -225,11 +267,21 @@ api POST /admin/users/carol/assign "{\"ip\":\"$IP_NAT\",\"port\":20443}" >/dev/n
 CA_JSON=$(python3 -I -c "import json,sys; print(json.dumps(open(sys.argv[1]).read()))" "$OUT/tls/ca.pem")
 api PUT /admin/hosts/nat/xtcp "{\"server_addr\":\"$IP_FRPS\",\"server_port\":7003,\"tls_server_name\":\"frps\",\"ca_pem\":$CA_JSON,\"auth_token\":\"$FRPS_TOKEN\",\"proxy_name\":\"ccproxy-nat-direct\",\"secret_key\":\"$XTCP_KEY\",\"local_port\":20443}" > "$OUT/xtcp.json"
 check "the admin XTCP view hides both secrets" "! grep -q -e '$FRPS_TOKEN' -e '$XTCP_KEY' '$OUT/xtcp.json'"
-start_frpc() { # fetch the host's frpc.toml as the installer does and (re)start frpc
-  agent_get "$NAT_TOKEN" "/install/xtcp/frpc.toml?ca_file=/tls/ca.pem" > "$OUT/$1"
-  docker cp "$OUT/$1" ccs-exit-nat:/etc/frpc.toml >/dev/null
-  docker exec ccs-exit-nat sh -c 'frpc verify -c /etc/frpc.toml >/dev/null && pkill -x frpc; sleep 0.5; (frpc -c /etc/frpc.toml >> /tmp/frpc.log 2>&1 &)'
+start_frpc() { # fetch the host's frpc.toml as an installer from before #45 does (no admin API) and (re)start frpc
+  agent_get "$NAT_TOKEN" "/install/xtcp/frpc.toml?ca_file=$NAT_CA" > "$OUT/$1"
+  docker cp "$OUT/$1" ccs-exit-nat:/etc/ccx/frpc.toml >/dev/null
+  docker exec ccs-exit-nat sh -c 'frpc verify -c /etc/ccx/frpc.toml >/dev/null && /usr/local/sbin/frpc-ctl restart && kill -0 "$(cat /run/frpc.pid)"'
 }
+# The exit host's frpc supervisor, standing in for systemd / launchd: "restart" stops frpc and starts it again on
+# /etc/ccx/frpc.toml. The agent calls it only when it cannot hot-reload (first adoption, frps settings changed).
+docker exec -i ccs-exit-nat sh -c 'mkdir -p /etc/ccx /var/lib/ccx/agent && chmod 700 /var/lib/ccx && cp /tls/ca.pem /etc/ccx/frp-ca.pem && cat > /usr/local/sbin/frpc-ctl && chmod 755 /usr/local/sbin/frpc-ctl' <<'EOF'
+#!/bin/sh
+pid=$(cat /run/frpc.pid 2>/dev/null)
+if [ -n "$pid" ] && kill "$pid" 2>/dev/null; then while kill -0 "$pid" 2>/dev/null; do sleep 0.05; done; fi
+nohup frpc -c /etc/ccx/frpc.toml >> /tmp/frpc.log 2>&1 &
+echo $! > /run/frpc.pid
+EOF
+NAT_CA=/etc/ccx/frp-ca.pem
 CAROL=$(login carol macbook)
 start_frpc frpc-v1.toml
 start_server ccs-exit-nat "$NAT_TOKEN"
@@ -259,17 +311,65 @@ start_client ccs-v-carol "$CAROL"
 if waitfor 90 "carol through XTCP" "[ \"\$(seen ccs-v-carol)\" = $IP_NAT ]"; then echo "PASS carol (single-port host) leaves from $IP_NAT"
 else echo "FAIL carol (single-port host) through XTCP"; status=1; fi
 
+sync_state() { api GET /admin/hosts/nat/xtcp | json '["sync"]["state"]'; }
+port_status() { api GET /admin/hosts/nat/xtcp | python3 -I -c "import json,sys; print(' '.join('%d=%s' % (m['port'], m['status']) for m in json.load(sys.stdin)['mappings']))"; }
+check "an agent without XTCP sync shows the one-time upgrade (sync upgrade_needed)" "[ \"\$(sync_state)\" = upgrade_needed ]"
+
+echo "== one-time upgrade: the Go agent takes over sing-box and frpc on the XTCP host"
+(cd "$REPO/egress/agent" && CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH go build -trimpath -o "$OUT/bin/ccproxy-exit-agent" .)
+docker cp "$OUT/bin/ccproxy-exit-agent" ccs-exit-nat:/usr/local/bin/ccproxy-exit-agent >/dev/null
+printf '%s\n' "$NAT_TOKEN" > "$OUT/tokens/nat"
+docker cp "$OUT/tokens/nat" ccs-exit-nat:/etc/ccx/agent.token >/dev/null
+# The agent accepts plain http only on loopback: a forwarder inside the container reaches this machine's control
+# plane (host.docker.internal; on Linux set CP_LISTEN to an address the containers can reach).
+docker cp "$OUT/forward.py" ccs-exit-nat:/usr/local/bin/forward.py >/dev/null
+docker exec -d ccs-exit-nat python3 -I /usr/local/bin/forward.py "$CP_PORT" host.docker.internal "$CP_PORT"
+start_agent() {
+  docker exec ccs-exit-nat sh -c "pkill -f '^ccproxy-exit-agent '; pkill -x sing-box; sleep 0.5"
+  docker exec -d ccs-exit-nat sh -c "exec ccproxy-exit-agent --cp http://127.0.0.1:$CP_PORT --token-file /etc/ccx/agent.token \
+    --config /var/lib/ccx/config.json --state-dir /var/lib/ccx/agent --singbox /usr/local/bin/sing-box --run --name nat \
+    --frpc /usr/local/bin/frpc --frpc-config /etc/ccx/frpc.toml --frpc-ca $NAT_CA --frpc-restart-cmd '/usr/local/sbin/frpc-ctl restart' \
+    --log-file /tmp/agent.log"
+}
+frpc_pid() { docker exec ccs-exit-nat cat /run/frpc.pid; }
+start_agent
+if waitfor 120 "the agent confirms the XTCP mappings" "[ \"\$(sync_state)\" = ready ]"; then echo "PASS after the upgrade the host's XTCP sync is ready"
+else echo "FAIL XTCP sync after the upgrade: $(sync_state)"; status=1; fi
+check "the agent adopted the installed frpc with one restart (admin API on loopback)" \
+  "docker exec ccs-exit-nat grep -q 'frpc confirmed generation .* (frpc restart)' /tmp/agent.log && docker exec ccs-exit-nat grep -q '^webServer.addr = \"127.0.0.1\"' /etc/ccx/frpc.toml"
+check "frpc's admin API refuses requests without the agent's password" \
+  "[ \"\$(docker exec ccs-exit-nat curl -q -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9097/api/status)\" = 401 ]"
+admin_listen() { docker exec ccs-exit-nat awk '$4 == "0A" && $2 ~ /:2389$/ {print $2}' /proc/net/tcp; }   # 9097 = 0x2389
+check "frpc's admin API listens on loopback only" "[ \"\$(admin_listen)\" = 0100007F:2389 ]"
+if waitfor 90 "carol after the upgrade" "[ \"\$(seen ccs-v-carol)\" = $IP_NAT ]"; then echo "PASS carol leaves from $IP_NAT after the agent upgrade"
+else echo "FAIL carol after the agent upgrade"; status=1; fi
+
+echo "== a second shared user on the same IPv4, without running the installer again"
 api PUT /admin/users/carol '{"mode":"shared"}' >/dev/null
 api PUT /admin/users/dave '{"mode":"shared"}' >/dev/null
+FRPC_PID=$(frpc_pid)
+# carol's connection keeps being used while dave is added: count failed requests from assignment to readiness.
+docker exec -d ccs-v-carol sh -c 'rm -f /tmp/probe.out; while [ ! -f /tmp/probe.stop ]; do if curl -q -sS --max-time 5 -x socks5h://127.0.0.1:2080 http://'"$IP_ECHO"':8080/ >/dev/null 2>&1; then echo ok; else echo fail; fi >> /tmp/probe.out; sleep 0.5; done'
+assigned_at=$(python3 -I -c 'import time; print(time.time())')
 api POST /admin/users/dave/assign "{\"ip\":\"$IP_NAT\"}" > "$OUT/r.json"
 check "dave shares carol's IPv4 on entry port 20000" "[ \$(code) = 200 ] && [ \"\$(json '[\"port\"]' < '$OUT/r.json')\" = 20000 ]"
-check "the console reports the installed frpc as outdated" "[ \"\$(api GET /admin/hosts/nat/xtcp | json '[\"frpc_state\"]')\" = outdated ]"
+check "right after the assignment the new port is pending, not ready" "port_status | grep -q '20000=pending'"
+if waitfor 120 "port 20000 ready" "[ \"\$(port_status)\" = '20443=ready 20000=ready' ]"; then
+  ready_at=$(python3 -I -c 'import time; print(time.time())')
+  echo "PASS both ports ready through normal agent sync (assignment to ready: $(python3 -I -c "print(round($ready_at - $assigned_at, 1))")s, default --interval 5 --settle 10)"
+else echo "FAIL port 20000 never became ready: $(port_status)"; status=1; fi
+docker exec ccs-v-carol touch /tmp/probe.stop
+sleep 1
+docker exec ccs-v-carol cat /tmp/probe.out > "$OUT/carol-during-assign.txt"
+echo "carol during dave's assignment: $(grep -c ok "$OUT/carol-during-assign.txt") ok, $(grep -c fail "$OUT/carol-during-assign.txt") failed"
+check "carol's connection was not interrupted while dave's port was added" "! grep -q fail '$OUT/carol-during-assign.txt' && grep -q ok '$OUT/carol-during-assign.txt'"
+check "frpc was hot-reloaded, not restarted" "[ \"\$(frpc_pid)\" = '$FRPC_PID' ] && docker exec ccs-exit-nat grep -q 'frpc confirmed generation .* (hot reload)' /tmp/agent.log"
+check "the installer was not run again (its fetch is outdated, the agent's sync is current)" "[ \"\$(api GET /admin/hosts/nat/xtcp | json '[\"frpc_state\"]')\" = outdated ]"
+docker exec ccs-exit-nat cat /etc/ccx/frpc.toml > "$OUT/frpc-v2.toml"
+check "the live frpc configuration keeps the first mapping byte for byte" \
+  "python3 -I -c \"import sys; a=open(sys.argv[1]).read(); b=open(sys.argv[2]).read(); p=a[a.index('[[proxies]]'):]; sys.exit(0 if b.count(p.strip())==1 and b.count('[[proxies]]')==2 else 1)\" '$OUT/frpc-v1.toml' '$OUT/frpc-v2.toml'"
+check "frps registered dave's proxy" "docker exec ccs-frps grep -q 'new proxy \[ccproxy-nat-direct-20000\] type \[xtcp\] success' /tmp/frps.log"
 DAVE=$(login dave laptop)
-start_frpc frpc-v2.toml
-check "the upgraded frpc configuration keeps the first mapping byte for byte" \
-  "python3 -I -c \"import sys; a=open(sys.argv[1]).read(); b=open(sys.argv[2]).read(); sys.exit(0 if b.startswith(a) and b.count('[[proxies]]')==2 else 1)\" '$OUT/frpc-v1.toml' '$OUT/frpc-v2.toml'"
-check "and the console reports it current" "[ \"\$(api GET /admin/hosts/nat/xtcp | json '[\"frpc_state\"]')\" = current ]"
-start_server ccs-exit-nat "$NAT_TOKEN"
 api GET "/admin/users/dave/xtcp-visitor?ca_file=/tls/ca.pem" > "$OUT/dave-visitor.json"
 json '["frpc_toml"]' < "$OUT/dave-visitor.json" > "$OUT/dave-visitor.toml"
 check "dave's visitor holds neither the frps token nor the host secret key" "! grep -q -e '$FRPS_TOKEN' -e '$XTCP_KEY' '$OUT/dave-visitor.toml'"
@@ -278,14 +378,13 @@ docker exec -e FRP_AUTH_TOKEN="$FRPS_TOKEN" ccs-v-dave sh -c 'frpc verify -c /et
 start_client ccs-v-dave "$DAVE"
 if waitfor 90 "dave through XTCP" "[ \"\$(seen ccs-v-dave)\" = $IP_NAT ]"; then echo "PASS dave (new mapping) leaves from $IP_NAT"
 else echo "FAIL dave through XTCP"; status=1; fi
-if waitfor 90 "carol after the frpc restart" "[ \"\$(seen ccs-v-carol)\" = $IP_NAT ]"; then echo "PASS carol (original visitor) leaves from $IP_NAT after the upgrade"
-else echo "FAIL carol after the upgrade"; status=1; fi
 concurrently ccs-v-carol "$OUT/c.txt" ccs-v-dave "$OUT/d.txt"
 echo "concurrent: carol saw '$(cat "$OUT/c.txt")', dave saw '$(cat "$OUT/d.txt")'"
 check "carol (original visitor) and dave (new mapping), concurrently, both leave from $IP_NAT" \
   "[ \"\$(cat '$OUT/c.txt')\" = $IP_NAT ] && [ \"\$(cat '$OUT/d.txt')\" = $IP_NAT ]"
 check "each reached its own listener (user-carol on 20443, user-dave on 20000)" \
-  "docker exec ccs-exit-nat grep -q 'inbound/vless\[user-carol\]' /tmp/sing-box.log && docker exec ccs-exit-nat grep -q 'inbound/vless\[user-dave\]' /tmp/sing-box.log"
+  "docker exec ccs-exit-nat grep -q 'inbound/vless\[user-carol\]' /tmp/agent.log && docker exec ccs-exit-nat grep -q 'inbound/vless\[user-dave\]' /tmp/agent.log"
+check "the agent log holds no credential" "! docker exec ccs-exit-nat grep -q -e '$FRPS_TOKEN' -e '$XTCP_KEY' -e \"\$(docker exec ccs-exit-nat cat /var/lib/ccx/agent/frpc-admin.secret)\" /tmp/agent.log"
 
 echo "== scoping: dave's visitor key does not open carol's proxy"
 sed -e 's/^serverName = .*/serverName = "ccproxy-nat-direct"/' -e 's/^bindPort = .*/bindPort = 21443/' -e 's/^name = .*/name = "probe-visitor"/' \
@@ -316,15 +415,70 @@ check "frps refused it as an authentication failure for dave's proxy" \
   "docker exec ccs-frps grep -q 'xtcp connection of \[ccproxy-nat-direct-20000\] auth failed' /tmp/frps.log"
 check "carol's original visitor still works next to the failed probe" "[ \"\$(seen ccs-v-carol)\" = $IP_NAT ]"
 
-echo "== release dave: carol keeps working"
+echo "== failed activation: frps refuses a new proxy; the working mappings stay"
+api POST /admin/users "{\"name\":\"erin\",\"password\":\"$PW\"}" >/dev/null
+api PUT /admin/users/erin '{"mode":"shared"}' >/dev/null
+# Another frpc already holds the name erin's port would get, so frps refuses the agent's registration.
+cat > "$OUT/squatter.toml" <<EOF
+serverAddr = "$IP_FRPS"
+serverPort = 7003
+auth.method = "token"
+auth.token = "$FRPS_TOKEN"
+transport.tls.enable = true
+transport.tls.trustedCaFile = "/tls/ca.pem"
+transport.tls.serverName = "frps"
+
+[[proxies]]
+name = "ccproxy-nat-direct-20001"
+type = "xtcp"
+secretKey = "squatter-secret-0123456789"
+localIP = "127.0.0.1"
+localPort = 1
+EOF
+docker cp "$OUT/squatter.toml" ccs-v-dave:/etc/squatter.toml >/dev/null
+docker exec ccs-v-dave sh -c '(frpc -c /etc/squatter.toml > /tmp/squatter.log 2>&1 &)'
+waitfor 30 "the squatter registers" "docker exec ccs-frps grep -q 'new proxy \[ccproxy-nat-direct-20001\] type \[xtcp\] success' /tmp/frps.log"
+api POST /admin/users/erin/assign "{\"ip\":\"$IP_NAT\",\"port\":20001}" >/dev/null
+if waitfor 120 "the failure is reported" "[ \"\$(sync_state)\" = failed ]"; then echo "PASS the console reports the failed activation"
+else echo "FAIL the failed activation was not reported: $(sync_state)"; status=1; fi
+api GET /admin/hosts/nat/xtcp > "$OUT/failed-view.json"
+echo "console message: $(json '["sync"]["message"]' < "$OUT/failed-view.json")"
+check "the message names the exit host and the refused proxy, without credentials" \
+  "grep -q 'Exit host nat' '$OUT/failed-view.json' && grep -q 'ccproxy-nat-direct-20001' '$OUT/failed-view.json' && ! grep -q -e '$FRPS_TOKEN' -e '$XTCP_KEY' '$OUT/failed-view.json'"
+# frpc can report its failure before sing-box's next confirmed heartbeat.
+if waitfor 45 "the working listeners remain ready alongside the failed mapping" "[ \"\$(port_status)\" = '20443=ready 20000=ready 20001=failed' ]"; then
+  echo "PASS the other ports keep their status (20443 and 20000 ready, 20001 failed)"
+else
+  echo "FAIL the other ports did not recover their ready status: $(port_status)"
+  status=1
+fi
+check "carol and dave keep working on the restored mappings" "[ \"\$(seen ccs-v-carol)\" = $IP_NAT ] && [ \"\$(seen ccs-v-dave)\" = $IP_NAT ]"
+docker exec ccs-v-dave pkill -f squatter.toml || true
+if waitfor 150 "the retried activation" "[ \"\$(port_status)\" = '20443=ready 20000=ready 20001=ready' ]"; then echo "PASS once the name is free the agent's retry activates port 20001"
+else echo "FAIL retry after the conflict: $(port_status)"; status=1; fi
+api POST /admin/users/erin/release >/dev/null
+
+echo "== release dave: the retired proxy is removed, carol keeps working"
 api POST /admin/users/dave/release >/dev/null
 check "releasing dave keeps the IP assigned to carol (no cooldown)" \
   "python3 -I -c \"import json,sys; i=json.load(sys.stdin)[0]; sys.exit(0 if i['status']=='assigned' and i['users']==['carol'] else 1)\" < <(api GET '/admin/ips?host=nat')"
-start_frpc frpc-v3.toml
-start_server ccs-exit-nat "$NAT_TOKEN"
-check "the frpc configuration is back to the original single mapping" "cmp -s '$OUT/frpc-v1.toml' '$OUT/frpc-v3.toml'"
+if waitfor 120 "release applied" "[ \"\$(port_status)\" = '20443=ready' ] && [ \"\$(sync_state)\" = ready ]"; then echo "PASS after the release only carol's mapping is configured and ready"
+else echo "FAIL release: $(port_status)"; status=1; fi
+check "frps closed dave's retired proxy" "docker exec ccs-frps grep -q 'close proxy \[ccproxy-nat-direct-20000\] success' /tmp/frps.log"
+docker exec ccs-exit-nat cat /etc/ccx/frpc.toml > "$OUT/frpc-v3.toml"
+check "the live frpc configuration is back to the single original mapping" \
+  "[ \$(grep -c '^\[\[proxies\]\]' '$OUT/frpc-v3.toml') = 1 ] && grep -q '^name = \"ccproxy-nat-direct\"$' '$OUT/frpc-v3.toml'"
 if waitfor 60 "carol after dave's release" "[ \"\$(seen ccs-v-carol)\" = $IP_NAT ]"; then echo "PASS carol still leaves from $IP_NAT"
 else echo "FAIL carol after dave's release"; status=1; fi
+
+echo "== agent restart: the confirmed generation is kept and frpc is not reloaded"
+reloads_before=$(docker exec ccs-exit-nat grep -c 'http request: \[/api/reload\]' /tmp/frpc.log || true)
+FRPC_PID=$(frpc_pid)
+start_agent
+if waitfor 60 "sync after the agent restart" "[ \"\$(sync_state)\" = ready ]"; then sleep 12; fi
+check "after an agent restart the host is still ready, frpc neither restarted nor reloaded" \
+  "[ \"\$(sync_state)\" = ready ] && [ \"\$(frpc_pid)\" = '$FRPC_PID' ] && [ \"\$(docker exec ccs-exit-nat grep -c 'http request: \[/api/reload\]' /tmp/frpc.log || true)\" = '$reloads_before' ]"
+check "carol still connects after the agent restart" "[ \"\$(seen ccs-v-carol)\" = $IP_NAT ]"
 
 [ $status = 0 ] && echo "ALL PASSED" || echo "SOME CHECKS FAILED"
 exit $status

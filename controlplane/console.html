@@ -1025,15 +1025,34 @@
     }, "Save");
     if (!r) return;
     if (r.secret_key) reveal("XTCP secret key for " + name, "Put this secretKey in the visitor's frpc configuration.", r.secret_key);
+    else if (r.sync && r.sync.agent_capable) toast("Saved. The exit agent applies it on its next sync; watch Sync for Ready.");
     else toast("Saved. Run the install command again on the host.");
     route();
   }
 
+  // Per-port readiness from the agent's XTCP sync: ready only when frpc registered the proxy and sing-box listens.
+  const xtcpBadges = {
+    ready: '<span class="badge ok">Ready</span>',
+    pending: '<span class="badge info">Pending</span>',
+    failed: '<span class="badge bad">Failed</span>',
+    upgrade_needed: '<span class="badge warn">Agent upgrade needed</span>',
+  };
   function xtcpMappingList(x) {
     const list = x.mappings || [{ proxy_name: x.proxy_name, port: x.local_port, user: "", primary: true }];
-    return list.map((m) => `<div class="mono">${esc(m.proxy_name)} → 127.0.0.1:${m.port}${m.user ? ' <span class="muted">(' + esc(m.user) + ")</span>" : m.primary ? ' <span class="muted">(no user on this port)</span>' : ""}</div>`).join("");
+    return list.map((m) => `<div><span class="mono">${esc(m.proxy_name)} → 127.0.0.1:${m.port}</span>${m.user ? ' <span class="muted">(' + esc(m.user) + ")</span>" : m.primary ? ' <span class="muted">(no user on this port)</span>' : ""} ${xtcpBadges[m.status] || ""}</div>`).join("");
+  }
+  function xtcpSync(x) {
+    const s = x.sync;
+    if (!s) return "";
+    const agent = s.agent || {};
+    const when = agent.reported_at ? ' <span class="small muted">reported ' + ago(now() - agent.reported_at) + "</span>" : "";
+    const detail = s.state === "ready"
+      ? '<div class="small muted">Generation ' + s.desired_generation + " confirmed by live frpc status; sing-box serves every entry port.</div>"
+      : '<div class="small muted">' + esc(s.message || "") + "</div>";
+    return (xtcpBadges[s.state] || esc(s.state)) + when + detail;
   }
   function xtcpState(x) {
+    if (x.sync && x.sync.agent_capable) return '<span class="small muted">Managed by the agent (see Sync). Installer fetch: ' + esc(x.frpc_state) + "</span>";
     if (x.frpc_state === "current") return '<span class="badge ok">Current</span> <span class="small muted">fetched ' + (x.delivered_at ? ago(now() - x.delivered_at) : "") + "</span>";
     if (x.frpc_state === "outdated") return '<span class="badge warn">Run the install command again</span><div class="small muted">The proxies changed since the host last fetched its frpc configuration. Existing proxies keep working; new or moved users connect after the rerun.</div>';
     return '<span class="badge">Unknown</span><div class="small muted">Not fetched since mapping tracking began. Run the install command again to confirm.</div>';
@@ -1096,6 +1115,7 @@
           <dt>frps</dt><dd class="mono">${esc(xtcp.server_addr)}:${xtcp.server_port} (TLS name ${esc(xtcp.tls_server_name)})</dd>
           <dt>CA</dt><dd class="small">${esc(xtcp.ca_subject || "—")}, until ${esc(xtcp.ca_not_after || "—")}<br><span class="mono">SHA-256 ${esc(xtcp.ca_sha256 || "")}</span></dd>
           <dt>Proxies</dt><dd>${xtcpMappingList(xtcp)}</dd>
+          <dt>Sync</dt><dd>${xtcpSync(xtcp)}</dd>
           <dt>Exit host frpc</dt><dd>${xtcpState(xtcp)}</dd>
           <dt>Credentials</dt><dd>${xtcp.has_auth_token ? "frps token set" : "no frps token"}, ${xtcp.has_secret_key ? "secret key set" : "no secret key"} (never shown again)</dd>
         </dl><p class="small muted">The install command sets up frpc too. Run it again on the host after a change here.</p>`
