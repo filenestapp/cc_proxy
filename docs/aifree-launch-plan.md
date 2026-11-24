@@ -48,17 +48,17 @@ mailboxes        id, customer_id, address(unique), cloudmail_user_id, status(act
 
 | WP | 内容 | 负责 | 依赖 | 主要文件 |
 | --- | --- | --- | --- | --- |
-| WP0 | 决策确认 + API 契约 `docs/aifree-account-api.md`（路由、请求/响应、错误码、状态机） | Claude（本会话） | — | docs/ |
-| WP1a | Logo 与品牌规范：SVG 主标、图标、色板、字体，产出 `brand/` 目录 | Claude | — | brand/ |
-| WP1b | 全量改名 CC Proxy → aifree：tauri 配置、tray、locales、console、安装脚本、CI 产物名、README；用 WP1a 的图标生成全套 icons | Codex | WP1a（仅图标替换那一步） | client/desktop、controlplane/console.html、controlplane/install、.github |
-| WP2 | 域名切换：控制面按 Host 路由、`--public-url` 配置、安装命令与客户端默认地址改为 `cp.aifree.sg`、旧域名并存；部署文档 | Codex | WP1b | controlplane/http.go、installer.go、client 默认值 |
-| WP3 | 客户账号后端：开放注册 + 邮箱验证（经 cloud-mail `noreply@` 发信，失败重试）、登录/登出、找回密码、限流、会话与 CSRF | Codex | WP0、WP7（发信） | controlplane/schema.sql、store.go、新文件 account.go |
-| WP4 | 套餐与订阅后端：plans/subscriptions/orders、Stripe Checkout + Billing 订阅 + Webhook（签名校验、幂等）、客户门户、到期任务、自动开通住宅 IP、控制台"订阅/订单/待开通"页 | Codex | WP3 | controlplane/ 新文件 billing.go、console.html |
-| WP5 | 营销官网：首页（价值主张、架构图、对比、套餐卡片、流程、FAQ）、条款、隐私、下载页；中英双语；部署到 Cloudflare Pages | Claude | WP1a | 新目录 site/ |
-| WP6 | 用户中心：注册/登录/验证/找回、我的订阅（订阅、续费、取消）、订单与收据、设备列表、客户端下载、企业邮箱面板 | Claude | WP0 契约；联调需 WP3/WP4 | controlplane/account.html（内嵌，同 console.html 做法） |
-| WP7 | 部署 cloud-mail 到 `mail.aifree.sg`：Worker、D1、KV、R2、`jwt_secret`、管理员账号；Email Routing catch-all → Worker；发信域 SPF/DKIM/DMARC；建 `noreply@`、`support@`；控制面用的管理员 API 账号 | Claude + 你（需 Cloudflare 授权） | 域名已接入 Cloudflare | 新目录 deploy/cloud-mail/ + docs/aifree-email-setup.md |
-| WP8 | 企业邮箱开通：后台对付费客户调用 cloud-mail API 生成 `name@aifree.sg`（`POST /api/login` 取管理员 token → `POST /api/user/add`），停用 `PUT /api/user/setStatus`、到期回收；初始密码只显示一次；用户中心展示并跳转 mail.aifree.sg 网页收件箱 | Codex（后端）+ Claude（UI） | WP3、WP4、WP7 | controlplane/ 新文件 mailbox.go |
-| WP9 | 集成验收：docker compose e2e（注册→支付回调→开通→客户端登录→出网→到期回收→邮箱开通），预发布环境演练，域名切流 | Claude 主导，Codex reviewer 复核 | 全部 | controlplane/test/ |
+| WP0 (#34) | 决策确认 + API 契约 `docs/aifree-account-api.md`（路由、请求/响应、错误码、状态机） | Claude（本会话） | — | docs/ |
+| WP1a (#35) | Logo 与品牌规范：SVG 主标、图标、色板、字体，产出 `brand/` 目录 | Claude | — | brand/ |
+| WP1b (#36) | 全量改名 CC Proxy → aifree：tauri 配置、tray、locales、console、安装脚本、CI 产物名、README；用 WP1a 的图标生成全套 icons | Codex | WP1a（仅图标替换那一步） | client/desktop、controlplane/console.html、controlplane/install、.github |
+| WP2 (#37) | 域名切换：控制面按 Host 路由、`--public-url` 配置、安装命令与客户端默认地址改为 `cp.aifree.sg`、旧域名并存；部署文档 | Codex | WP1b | controlplane/http.go、installer.go、client 默认值 |
+| WP3 (#38) | 客户账号后端：开放注册 + 邮箱验证（经 cloud-mail `noreply@` 发信，失败重试）、登录/登出、找回密码、限流、会话与 CSRF | Codex | WP0、WP7（发信） | controlplane/schema.sql、store.go、新文件 account.go |
+| WP4 (#39) | 套餐与订阅后端：plans/subscriptions/orders、Stripe Checkout + Billing 订阅 + Webhook（签名校验、幂等）、客户门户、到期任务、自动开通住宅 IP、控制台"订阅/订单/待开通"页 | Codex | WP3 | controlplane/ 新文件 billing.go、console.html |
+| WP5 (#40) | 营销官网：首页（价值主张、架构图、对比、套餐卡片、流程、FAQ）、条款、隐私、下载页；中英双语；部署到 Cloudflare Pages | Claude | WP1a | 新目录 site/ |
+| WP6 (#41) | 用户中心：注册/登录/验证/找回、我的订阅（订阅、续费、取消）、订单与收据、设备列表、客户端下载、企业邮箱面板 | Claude | WP0 契约；联调需 WP3/WP4 | controlplane/account.html（内嵌，同 console.html 做法） |
+| WP7 (#42) | 部署 cloud-mail 到 `mail.aifree.sg`：Worker、D1、KV、R2、`jwt_secret`、管理员账号；Email Routing catch-all → Worker；发信域 SPF/DKIM/DMARC；建 `noreply@`、`support@`；控制面用的管理员 API 账号 | Claude + 你（需 Cloudflare 授权） | 域名已接入 Cloudflare | 新目录 deploy/cloud-mail/ + docs/aifree-email-setup.md |
+| WP8 (#43) | 企业邮箱开通：后台对付费客户调用 cloud-mail API 生成 `name@aifree.sg`（`POST /api/login` 取管理员 token → `POST /api/user/add`），停用 `PUT /api/user/setStatus`、到期回收；初始密码只显示一次；用户中心展示并跳转 mail.aifree.sg 网页收件箱 | Codex（后端）+ Claude（UI） | WP3、WP4、WP7 | controlplane/ 新文件 mailbox.go |
+| WP9 (#44) | 集成验收：docker compose e2e（注册→支付回调→开通→客户端登录→出网→到期回收→邮箱开通），预发布环境演练，域名切流 | Claude 主导，Codex reviewer 复核 | 全部 | controlplane/test/ |
 
 ## 排期与并行
 
