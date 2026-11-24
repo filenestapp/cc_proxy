@@ -19,7 +19,7 @@ import (
 //go:embed sqlite_export.py
 var sqliteExport string
 
-var importTables = []string{"settings", "hosts", "egress_ips", "users", "devices", "admins", "admin_sessions", "audit", "agents", "probes", "alerts"}
+var importTables = []string{"settings", "hosts", "egress_ips", "users", "devices", "admins", "admin_sessions", "customers", "customer_sessions", "email_tokens", "audit", "agents", "probes", "alerts"}
 
 func (s *store) migrateSQLite(ctx context.Context, path string) error {
 	var imported []string

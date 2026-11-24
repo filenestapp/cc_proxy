@@ -22,7 +22,10 @@ import (
 //go:embed console.html
 var consolePage []byte
 
-const sessionCookie = "cp_session"
+const (
+	sessionCookie         = "cp_session"
+	customerSessionCookie = "aifree_session"
+)
 
 type object = map[string]any
 type fields map[string]json.RawMessage
@@ -30,12 +33,17 @@ type fields map[string]json.RawMessage
 type httpError struct {
 	status  int
 	message string
+	code    string
 }
 
 func (e *httpError) Error() string { return e.message }
 
 func failure(status int, format string, args ...any) error {
-	return &httpError{status, fmt.Sprintf(format, args...)}
+	return &httpError{status: status, message: fmt.Sprintf(format, args...)}
+}
+
+func failureCode(status int, code, format string, args ...any) error {
+	return &httpError{status: status, message: fmt.Sprintf(format, args...), code: code}
 }
 
 func statusOf(err error) int {
@@ -66,13 +74,14 @@ func (n *integer) UnmarshalJSON(data []byte) error {
 
 type apiRequest struct {
 	*http.Request
-	Body    fields
-	raw     []byte
-	Address string
-	Token   string
-	Agent   string
-	Device  deviceIdentity
-	Session adminSession
+	Body     fields
+	raw      []byte
+	Address  string
+	Token    string
+	Agent    string
+	Device   deviceIdentity
+	Session  adminSession
+	Customer customerSession
 }
 
 func (r *apiRequest) decode(dst any, required ...string) error {
@@ -114,13 +123,20 @@ type api struct {
 	probeToken     string
 	trustedProxies []netip.Prefix
 	limiter        loginLimiter
+	actions        accountActionLimiter
+	mail           mailSender
 	served         servedCache
 }
 
 func newAPI(s *store, adminToken, probeToken string, proxies []netip.Prefix) http.Handler {
+	return newAPIWithMail(s, adminToken, probeToken, proxies, newCloudMailSenderFromEnv())
+}
+
+func newAPIWithMail(s *store, adminToken, probeToken string, proxies []netip.Prefix, mail mailSender) http.Handler {
 	a := &api{
 		store: s, mux: http.NewServeMux(), adminToken: adminToken, probeToken: probeToken, trustedProxies: proxies,
 		limiter: loginLimiter{failures: make(map[string][]time.Time)},
+		actions: accountActionLimiter{hits: make(map[string][]time.Time)}, mail: mail,
 	}
 	a.bind("GET /healthz", "", "", a.health)
 	a.bind("POST /v1/login", "", "", a.login)
@@ -138,6 +154,7 @@ func newAPI(s *store, adminToken, probeToken string, proxies []netip.Prefix) htt
 		a.bind(pattern, "", "", a.console)
 	}
 	a.adminRoutes()
+	a.accountRoutes()
 	a.installRoutes()
 	a.xtcpRoutes()
 	a.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -168,7 +185,12 @@ func (a *api) bind(pattern, role, auditAction string, fn endpoint) {
 				log.Printf("%s %s: %v", r.Method, pattern, err)
 				message = "internal server error"
 			}
-			out = response{status: status, body: object{"error": message}}
+			body := object{"error": message}
+			var problem *httpError
+			if errors.As(err, &problem) && problem.code != "" {
+				body["code"] = problem.code
+			}
+			out = response{status: status, body: body}
 		} else if auditAction != "" {
 			var detail string
 			if len(req.Body) != 0 {
@@ -179,6 +201,9 @@ func (a *api) bind(pattern, role, auditAction string, fn endpoint) {
 				}
 			}
 			a.writeAudit(req, req.Session.Admin, r.Method+" "+auditAction, r.URL.Path, detail)
+		}
+		if err == nil && role == "customer" && out.cookie == nil {
+			out.cookie = a.customerCookie(req, customerCookieValue(r), int(customerSessionTTL.Seconds()))
 		}
 		sendResponse(w, out)
 	})
@@ -217,7 +242,7 @@ func sendResponse(w http.ResponseWriter, resp response) {
 	if resp.cookie != nil {
 		http.SetCookie(w, resp.cookie)
 	}
-	if resp.status == http.StatusNotModified {
+	if resp.status == http.StatusNotModified || resp.status == http.StatusNoContent {
 		w.WriteHeader(resp.status)
 		return
 	}
@@ -257,6 +282,23 @@ func (a *api) authorize(r *apiRequest, role string) error {
 		if r.Token != "" && equalSecret(r.Token, a.adminToken) {
 			r.Session.Admin = "api-token"
 			return nil
+		}
+	case "customer":
+		if cookie := customerCookieValue(r.Request); cookie != "" {
+			session, err := a.store.customerSession(ctx, cookie)
+			if err == nil {
+				if r.Method != http.MethodGet && r.Method != http.MethodHead && !equalSecret(r.Header.Get("X-CSRF-Token"), session.CSRF) {
+					return failureCode(403, "csrf", "missing or wrong CSRF token")
+				}
+				if err := a.store.touchCustomerSession(ctx, cookie); err != nil {
+					return err
+				}
+				r.Customer = session
+				return nil
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
 		}
 		if cookie := cookieValue(r.Request); cookie != "" {
 			session, err := a.store.session(ctx, cookie)
@@ -298,6 +340,13 @@ func equalSecret(given, expected string) bool {
 
 func cookieValue(r *http.Request) string {
 	if cookie, err := r.Cookie(sessionCookie); err == nil {
+		return cookie.Value
+	}
+	return ""
+}
+
+func customerCookieValue(r *http.Request) string {
+	if cookie, err := r.Cookie(customerSessionCookie); err == nil {
 		return cookie.Value
 	}
 	return ""
@@ -367,6 +416,12 @@ func (a *api) sessionCookie(r *apiRequest, token string, maxAge int) *http.Cooki
 		SameSite: http.SameSiteStrictMode, MaxAge: maxAge}
 }
 
+func (a *api) customerCookie(r *apiRequest, token string, maxAge int) *http.Cookie {
+	secure := r.TLS != nil || (a.trusted(peerIP(r.Request)) && r.Header.Get("X-Forwarded-Proto") == "https")
+	return &http.Cookie{Name: customerSessionCookie, Value: token, Path: "/", HttpOnly: true, Secure: secure,
+		SameSite: http.SameSiteLaxMode, MaxAge: maxAge}
+}
+
 func (a *api) writeAudit(r *apiRequest, actor, action, target, detail string) {
 	if err := a.store.audit(r.Context(), actor, action, target, detail, r.Address); err != nil {
 		log.Printf("write audit log: %v", err)
@@ -411,6 +466,17 @@ func (a *api) login(r *apiRequest) (response, error) {
 	keys := []string{"user:" + body.Username, "addr:" + r.Address}
 	if a.limiter.blocked(a.store.clock(), keys...) {
 		return response{}, failure(429, "too many failed sign-ins; try again later")
+	}
+	if strings.Contains(body.Username, "@") {
+		_, err := a.store.checkCustomerCredentials(r.Context(), body.Username, body.Password)
+		if err != nil && statusOf(err) == http.StatusUnauthorized {
+			a.limiter.fail(a.store.clock(), keys...)
+		}
+		if err != nil {
+			return response{}, err
+		}
+		// WP4 will resolve the customer's active subscription and customer_proxy row here.
+		return response{}, failureCode(403, "no_active_subscription", "no active subscription")
 	}
 	token, user, err := a.store.loginUser(r.Context(), body.Username, body.Password, body.Device, body.Platform)
 	if err != nil && statusOf(err) == 401 {
