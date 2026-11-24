@@ -6,12 +6,18 @@ mod packets;
 
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashSet;
+use std::future::Future;
 use std::io;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex as AsyncMutex;
+use tokio::task::{JoinError, JoinSet};
+use tokio::time::{timeout_at, Instant as Deadline};
 
 const SERVICE: &str = "netcheck.wenbo.io";
+const CHECK_TIMEOUT: Duration = Duration::from_secs(45);
 const TRACE_HOSTS: &[(&str, &str)] = &[
     ("anthropic", "claude.ai"),
     ("anthropic", "api.anthropic.com"),
@@ -33,13 +39,58 @@ const IPV6_HOSTS: &[(&str, &str)] = &[
     ("openai", "chatgpt.com"),
     ("cloudflare", "[2606:4700:4700::1111]"),
 ];
-static RUNNING: AtomicBool = AtomicBool::new(false);
+const STUN_TARGETS: &[(&str, u16, u8)] = &[
+    ("stun.l.google.com", 19302, 4),
+    ("stun.cloudflare.com", 3478, 4),
+    ("stun.l.google.com", 19302, 6),
+];
+const PROXY_EXIT: usize = TRACE_HOSTS.len() + IPV6_HOSTS.len();
 
-struct RunGuard;
+static RUNNING: AsyncMutex<()> = AsyncMutex::const_new(());
+static PROBES: LazyLock<ProbeSlots> = LazyLock::new(ProbeSlots::default);
 
-impl Drop for RunGuard {
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Probe {
+    Local,
+    Transport,
+    Exit(usize),
+    Dns,
+    Stun(usize),
+    Resolutions,
+    Analysis,
+}
+
+#[derive(Default)]
+struct ProbeSlots(Mutex<HashSet<Probe>>);
+
+struct ProbeGuard {
+    slots: &'static ProbeSlots,
+    probe: Probe,
+}
+
+impl Drop for ProbeGuard {
     fn drop(&mut self) {
-        RUNNING.store(false, Ordering::Release);
+        self.slots.0.lock().unwrap().remove(&self.probe);
+    }
+}
+
+impl ProbeSlots {
+    fn spawn<T: Send + 'static>(
+        &'static self,
+        jobs: &mut JoinSet<T>,
+        probe: Probe,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> bool {
+        // The OS resolver can outlive our deadline. Keep one worker per probe until it actually exits.
+        if !self.0.lock().unwrap().insert(probe) {
+            return false;
+        }
+        let permit = ProbeGuard { slots: self, probe };
+        jobs.spawn_blocking(move || {
+            let _permit = permit;
+            work()
+        });
+        true
     }
 }
 
@@ -117,7 +168,7 @@ struct Transport {
     pings: Vec<f64>,
 }
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 pub(crate) struct Report {
     local: local::Details,
     exits: Vec<ExitReading>,
@@ -127,79 +178,278 @@ pub(crate) struct Report {
     transport: Transport,
     server: Option<Value>,
     server_error: Option<Failure>,
+    incomplete: bool,
+}
+
+enum ResultPart {
+    Local(local::Details, Option<ureq::Proxy>),
+    Transport(Transport),
+    Exit(usize, ExitReading),
+    Dns(Vec<NetworkReading>, Vec<NetworkReading>),
+    Stun(usize, NetworkReading),
 }
 
 #[tauri::command]
 pub(crate) async fn run_environment_check() -> Result<Report, &'static str> {
-    if RUNNING.swap(true, Ordering::AcqRel) {
-        return Err("already_running");
-    }
-    let guard = RunGuard;
-    let job = tauri::async_runtime::spawn_blocking(move || {
-        let _guard = guard;
-        collect()
-    });
-    tokio::time::timeout(Duration::from_secs(45), job)
-        .await
-        .map_err(|_| "deadline")?
-        .map_err(|_| "internal")
+    run_check(&RUNNING, collect(&PROBES)).await
 }
 
-fn collect() -> Report {
-    std::thread::scope(|scope| {
-        let local = scope.spawn(local::collect);
-        let direct = http::agent(false, None);
-        let ipv6 = http::agent(true, None);
-        // Keep the latency samples on the analysis connection before starting parallel probes.
-        let transport = http::measure(&direct);
+async fn run_check(
+    running: &AsyncMutex<()>,
+    check: impl Future<Output = Report>,
+) -> Result<Report, &'static str> {
+    let _run = running.try_lock().map_err(|_| "already_running")?;
+    Ok(check.await)
+}
 
-        let mut traces = Vec::new();
-        for &(group, host) in TRACE_HOSTS {
-            let agent = direct.clone();
-            traces.push(scope.spawn(move || http::trace(&agent, group, host, None, "direct")));
+async fn next_before<T: 'static>(
+    jobs: &mut JoinSet<T>,
+    deadline: Deadline,
+) -> Option<Result<T, JoinError>> {
+    timeout_at(deadline, jobs.join_next()).await.ok().flatten()
+}
+
+async fn collect(slots: &'static ProbeSlots) -> Report {
+    let deadline = Deadline::now() + CHECK_TIMEOUT;
+    let direct = http::agent(false, None);
+    let ipv6 = http::agent(true, None);
+    let analysis_client = http::agent(false, None);
+
+    let mut jobs = JoinSet::new();
+    let mut incomplete = !slots.spawn(&mut jobs, Probe::Local, || {
+        let (details, proxy) = local::collect();
+        ResultPart::Local(details, proxy)
+    });
+    let measurement_client = analysis_client.clone();
+    incomplete |= !slots.spawn(&mut jobs, Probe::Transport, move || {
+        ResultPart::Transport(http::measure(&measurement_client))
+    });
+
+    let traces = TRACE_HOSTS
+        .iter()
+        .map(|&(group, host)| (group, host, None, &direct))
+        .chain(
+            IPV6_HOSTS
+                .iter()
+                .map(|&(group, host)| (group, host, Some(6), &ipv6)),
+        );
+    for (index, (group, host, family, agent)) in traces.enumerate() {
+        let agent = agent.clone();
+        incomplete |= !slots.spawn(&mut jobs, Probe::Exit(index), move || {
+            ResultPart::Exit(index, http::trace(&agent, group, host, family, "direct"))
+        });
+    }
+    incomplete |= !slots.spawn(&mut jobs, Probe::Dns, || {
+        let (dns, udp) = packets::dns();
+        ResultPart::Dns(dns, udp)
+    });
+    for (index, &(host, port, family)) in STUN_TARGETS.iter().enumerate() {
+        incomplete |= !slots.spawn(&mut jobs, Probe::Stun(index), move || {
+            ResultPart::Stun(index, packets::stun(host, port, family))
+        });
+    }
+    let mut resolutions = JoinSet::new();
+    slots.spawn(&mut resolutions, Probe::Resolutions, packets::resolutions);
+
+    let mut report = read_probes(slots, jobs, deadline, incomplete).await;
+
+    // DNS comparison is independent of the service report, which can start while it finishes.
+    let mut analysis = JoinSet::new();
+    if Deadline::now() < deadline {
+        let payload = http::payload(
+            &report.local,
+            &report.transport,
+            &report.exits,
+            &report.udp,
+            &report.dns,
+        );
+        slots.spawn(&mut analysis, Probe::Analysis, move || {
+            http::submit(
+                &analysis_client,
+                payload,
+                deadline.saturating_duration_since(Deadline::now()),
+            )
+        });
+    }
+
+    match next_before(&mut resolutions, deadline).await {
+        Some(Ok(results)) => report.resolutions = results,
+        _ => report.incomplete = true,
+    }
+    match next_before(&mut analysis, deadline).await {
+        Some(Ok(Ok(result))) => report.server = Some(result),
+        Some(Ok(Err(error))) => report.server_error = Some(error),
+        Some(Err(_)) => report.server_error = Some(Failure::Network),
+        None => report.server_error = Some(Failure::Timeout),
+    }
+    report
+}
+
+async fn read_probes(
+    slots: &'static ProbeSlots,
+    mut jobs: JoinSet<ResultPart>,
+    deadline: Deadline,
+    incomplete: bool,
+) -> Report {
+    let mut report = Report {
+        incomplete,
+        ..Report::default()
+    };
+    let mut exits = Vec::new();
+    let mut stun = Vec::new();
+    let mut dns_udp = Vec::new();
+    while !jobs.is_empty() {
+        let part = match next_before(&mut jobs, deadline).await {
+            Some(Ok(part)) => part,
+            Some(Err(_)) => {
+                report.incomplete = true;
+                continue;
+            }
+            None => {
+                report.incomplete = true;
+                break;
+            }
+        };
+        match part {
+            ResultPart::Local(details, proxy) => {
+                report.local = details;
+                if let Some(proxy) = proxy {
+                    report.incomplete |= Deadline::now() >= deadline
+                        || !slots.spawn(&mut jobs, Probe::Exit(PROXY_EXIT), move || {
+                            let agent = http::agent(false, Some(proxy));
+                            let result =
+                                http::trace(&agent, "anthropic", "claude.ai", None, "proxy");
+                            ResultPart::Exit(PROXY_EXIT, result)
+                        });
+                }
+            }
+            ResultPart::Transport(transport) => report.transport = transport,
+            ResultPart::Exit(index, result) => exits.push((index, result)),
+            ResultPart::Dns(dns, udp) => {
+                report.dns = dns;
+                dns_udp = udp;
+            }
+            ResultPart::Stun(index, result) => stun.push((index, result)),
         }
-        for &(group, host) in IPV6_HOSTS {
-            let agent = ipv6.clone();
-            traces.push(scope.spawn(move || http::trace(&agent, group, host, Some(6), "direct")));
-        }
-        let dns = scope.spawn(packets::dns);
-        let resolutions = scope.spawn(packets::resolutions);
-        let stun = [
-            scope.spawn(|| packets::stun("stun.l.google.com", 19302, 4)),
-            scope.spawn(|| packets::stun("stun.cloudflare.com", 3478, 4)),
-            scope.spawn(|| packets::stun("stun.l.google.com", 19302, 6)),
-        ];
-        let (local, proxy) = local.join().expect("local diagnostics completed");
-        if let Some(proxy) = proxy {
-            traces.push(scope.spawn(move || {
-                let agent = http::agent(false, Some(proxy));
-                http::trace(&agent, "anthropic", "claude.ai", None, "proxy")
+    }
+    exits.sort_by_key(|(index, _)| *index);
+    stun.sort_by_key(|(index, _)| *index);
+    report.exits = exits.into_iter().map(|(_, row)| row).collect();
+    report.udp = stun
+        .into_iter()
+        .map(|(_, row)| row)
+        .chain(dns_udp)
+        .collect();
+    report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn exit(last_octet: u8) -> ResultPart {
+        ResultPart::Exit(
+            0,
+            ExitReading {
+                host: "example.test".to_owned(),
+                ip: Some([203, 0, 113, last_octet].into()),
+                ..ExitReading::default()
+            },
+        )
+    }
+
+    fn dns(last_octet: u8) -> ResultPart {
+        let reading = NetworkReading {
+            server: "resolver.test",
+            ip: Some([203, 0, 113, last_octet].into()),
+            ..NetworkReading::default()
+        };
+        ResultPart::Dns(vec![reading], Vec::new())
+    }
+
+    #[test]
+    fn deadline_returns_completed_probes_and_retry_runs_while_dns_is_stalled() {
+        static SLOTS: LazyLock<ProbeSlots> = LazyLock::new(ProbeSlots::default);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let running = AsyncMutex::new(());
+            let (release_dns, wait_for_dns) = mpsc::channel();
+            let (dns_started, wait_for_start) = mpsc::sync_channel(1);
+            let mut first = JoinSet::new();
+            assert!(SLOTS.spawn(&mut first, Probe::Dns, move || {
+                dns_started.send(()).unwrap();
+                let _ = wait_for_dns.recv();
+                dns(6)
             }));
-        }
-        let exits = traces
-            .into_iter()
-            .map(|trace| trace.join().expect("exit probe completed"))
-            .collect::<Vec<_>>();
-        let (dns, dns_udp) = dns.join().expect("DNS probes completed");
-        let udp = stun
-            .into_iter()
-            .map(|probe| probe.join().expect("STUN probe completed"))
-            .chain(dns_udp)
-            .collect::<Vec<_>>();
-        let (server, server_error) =
-            match http::submit(&direct, &local, &transport, &exits, &udp, &dns) {
-                Ok(server) => (Some(server), None),
-                Err(error) => (None, Some(error)),
-            };
-        Report {
-            local,
-            exits,
-            dns,
-            udp,
-            resolutions: resolutions.join().expect("DNS comparison completed"),
-            transport,
-            server,
-            server_error,
-        }
-    })
+            assert!(SLOTS.spawn(&mut first, Probe::Exit(0), || exit(7)));
+            wait_for_start.recv_timeout(Duration::from_secs(2)).unwrap();
+
+            let report = run_check(
+                &running,
+                read_probes(
+                    &SLOTS,
+                    first,
+                    Deadline::now() + Duration::from_millis(200),
+                    false,
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(report.incomplete);
+            assert_eq!(report.exits.len(), 1);
+            assert_eq!(report.exits[0].ip, Some([203, 0, 113, 7].into()));
+
+            let mut retry = JoinSet::new();
+            assert!(!SLOTS.spawn(&mut retry, Probe::Dns, || panic!("duplicate DNS worker")));
+            assert!(SLOTS.spawn(&mut retry, Probe::Exit(0), || exit(8)));
+            let report = run_check(
+                &running,
+                read_probes(
+                    &SLOTS,
+                    retry,
+                    Deadline::now() + Duration::from_secs(2),
+                    true,
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(report.incomplete);
+            assert_eq!(report.exits.len(), 1);
+            assert_eq!(report.exits[0].ip, Some([203, 0, 113, 8].into()));
+            assert!(report.dns.is_empty());
+
+            release_dns.send(()).unwrap();
+            let mut later = JoinSet::new();
+            let recovery_deadline = Deadline::now() + Duration::from_secs(2);
+            while !SLOTS.spawn(&mut later, Probe::Dns, || dns(9)) {
+                assert!(Deadline::now() < recovery_deadline);
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            let report = run_check(
+                &running,
+                read_probes(&SLOTS, later, recovery_deadline, false),
+            )
+            .await
+            .unwrap();
+            assert!(!report.incomplete);
+            assert_eq!(report.dns[0].ip, Some([203, 0, 113, 9].into()));
+        });
+    }
+
+    #[test]
+    fn simultaneous_checks_are_still_rejected() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let running = AsyncMutex::new(());
+            let _active = running.lock().await;
+            let second = run_check(&running, std::future::ready(Report::default())).await;
+            assert_eq!(second.err(), Some("already_running"));
+        });
+    }
 }
