@@ -61,7 +61,10 @@ func (s *store) initializeSchema(ctx context.Context) error {
 			if err := ensureUsageTables(ctx, tx); err != nil {
 				return err
 			}
-			return ensureXTCPTable(ctx, tx)
+			if err := ensureXTCPTable(ctx, tx); err != nil {
+				return err
+			}
+			return ensureCustomerTables(ctx, tx)
 		}
 		var version int
 		if err := tx.QueryRow(ctx, "SELECT value::integer FROM settings WHERE key = 'schema'").Scan(&version); err != nil {
@@ -87,7 +90,10 @@ func (s *store) initializeSchema(ctx context.Context) error {
 		if err := ensureUsageTables(ctx, tx); err != nil {
 			return err
 		}
-		return ensureXTCPTable(ctx, tx)
+		if err := ensureXTCPTable(ctx, tx); err != nil {
+			return err
+		}
+		return ensureCustomerTables(ctx, tx)
 	})
 }
 
