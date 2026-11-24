@@ -23,8 +23,12 @@ import (
 var consolePage []byte
 
 const (
-	sessionCookie         = "cp_session"
-	customerSessionCookie = "aifree_session"
+	sessionCookie          = "cp_session"
+	customerSessionCookie  = "aifree_session"
+	defaultPublicURL       = "https://cp.aifree.sg"
+	controlPlaneHost       = "cp.aifree.sg"
+	legacyControlPlaneHost = "ccproxy.macmini.sg"
+	customerHost           = "app.aifree.sg"
 )
 
 type object = map[string]any
@@ -126,17 +130,26 @@ type api struct {
 	actions        accountActionLimiter
 	mail           mailSender
 	served         servedCache
+	publicURL      string
 }
 
 func newAPI(s *store, adminToken, probeToken string, proxies []netip.Prefix) http.Handler {
-	return newAPIWithMail(s, adminToken, probeToken, proxies, newCloudMailSenderFromEnv())
+	return newAPIWithPublicURL(s, adminToken, probeToken, proxies, defaultPublicURL)
 }
 
 func newAPIWithMail(s *store, adminToken, probeToken string, proxies []netip.Prefix, mail mailSender) http.Handler {
+	return newAPIWithMailAndPublicURL(s, adminToken, probeToken, proxies, mail, defaultPublicURL)
+}
+
+func newAPIWithPublicURL(s *store, adminToken, probeToken string, proxies []netip.Prefix, publicURL string) http.Handler {
+	return newAPIWithMailAndPublicURL(s, adminToken, probeToken, proxies, newCloudMailSenderFromEnv(), publicURL)
+}
+
+func newAPIWithMailAndPublicURL(s *store, adminToken, probeToken string, proxies []netip.Prefix, mail mailSender, publicURL string) http.Handler {
 	a := &api{
 		store: s, mux: http.NewServeMux(), adminToken: adminToken, probeToken: probeToken, trustedProxies: proxies,
 		limiter: loginLimiter{failures: make(map[string][]time.Time)},
-		actions: accountActionLimiter{hits: make(map[string][]time.Time)}, mail: mail,
+		actions: accountActionLimiter{hits: make(map[string][]time.Time)}, mail: mail, publicURL: publicURL,
 	}
 	a.bind("GET /healthz", "", "", a.health)
 	a.bind("POST /v1/login", "", "", a.login)
@@ -157,10 +170,41 @@ func newAPIWithMail(s *store, adminToken, probeToken string, proxies []netip.Pre
 	a.accountRoutes()
 	a.installRoutes()
 	a.xtcpRoutes()
-	a.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		sendResponse(w, response{status: 404, body: object{"error": "no route"}})
+	a.mux.HandleFunc("/", noRoute)
+	return routeByHost(a.mux)
+}
+
+func noRoute(w http.ResponseWriter, _ *http.Request) {
+	sendResponse(w, response{status: 404, body: object{"error": "no route"}})
+}
+
+func routeByHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch requestHost(r.Host) {
+		case customerHost:
+			if !isCustomerRoute(r.URL.Path) {
+				noRoute(w, r)
+				return
+			}
+		case controlPlaneHost, legacyControlPlaneHost:
+			if isCustomerRoute(r.URL.Path) {
+				noRoute(w, r)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
 	})
-	return a.mux
+}
+
+func requestHost(host string) string {
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		host = name
+	}
+	return strings.ToLower(strings.TrimSuffix(host, "."))
+}
+
+func isCustomerRoute(path string) bool {
+	return path == "/account" || strings.HasPrefix(path, "/account/") || strings.HasPrefix(path, "/v1/account/")
 }
 
 func (a *api) bind(pattern, role, auditAction string, fn endpoint) {

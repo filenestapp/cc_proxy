@@ -277,13 +277,24 @@ func installCommands(cp, iface string) (map[string]osCommands, error) {
 	}, nil
 }
 
+func controlPlanePublicURL(value string) (string, error) {
+	if value == "" {
+		value = defaultPublicURL
+	}
+	value = strings.TrimRight(value, "/")
+	if !installURLPattern.MatchString(value) {
+		return "", failure(400, "public URL must be the control plane's https URL, such as https://cp.example:8443")
+	}
+	return value, nil
+}
+
 func (a *api) installRoutes() {
 	a.bind("GET /install/exit.sh", "", "", a.installScript("exit.sh"))
 	a.bind("GET /install/exit.ps1", "", "", a.installScript("exit.ps1"))
 	a.bind("GET /install/manifest.json", "", "", a.installManifest)
 	a.bind("GET /install/agent/{platform}", "agent", "", a.installAgent)
 	a.bind("GET /admin/install-commands", "admin", "", func(r *apiRequest) (response, error) {
-		return ok(installCommands(r.URL.Query().Get("cp"), r.URL.Query().Get("iface")))
+		return ok(installCommands(a.publicURL, r.URL.Query().Get("iface")))
 	})
 }
 
