@@ -168,10 +168,10 @@ mod tests {
     fn windows_quoting_preserves_helper_paths_and_argument_boundaries() {
         assert_eq!(quote_windows_arg(""), "\"\"");
         assert_eq!(
-            quote_windows_arg(r"C:\Program Files\CC Proxy\sing-box.exe"),
-            r#""C:\Program Files\CC Proxy\sing-box.exe""#
+            quote_windows_arg(r"C:\Program Files\aifree\sing-box.exe"),
+            r#""C:\Program Files\aifree\sing-box.exe""#
         );
-        assert_eq!(quote_windows_arg(r"C:\CC Proxy\"), r#""C:\CC Proxy\\""#);
+        assert_eq!(quote_windows_arg(r"C:\aifree\"), r#""C:\aifree\\""#);
         assert_eq!(quote_windows_arg(r#"a\"b"#), r#""a\\\"b""#);
     }
 }

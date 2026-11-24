@@ -3,7 +3,7 @@ name = "ccproxy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "cc_proxy command-line client; also the privileged tunnel helper the desktop app launches"
+description = "aifree command-line client; also the privileged tunnel helper the desktop app launches"
 
 [[bin]]
 name = "ccproxy"

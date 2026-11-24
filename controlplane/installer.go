@@ -45,7 +45,7 @@ var (
 )
 
 // ps1FirstLine: the Windows command runs only a downloaded script that starts with this line.
-const ps1FirstLine = "# CC Proxy exit-node installer for Windows."
+const ps1FirstLine = "# aifree exit-node installer for Windows."
 
 type singBoxAsset struct {
 	File   string `json:"file"`

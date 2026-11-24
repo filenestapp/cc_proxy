@@ -1,4 +1,4 @@
-// CC Proxy desktop app: sign in, connect, see where your traffic exits.
+// aifree desktop app: sign in, connect, see where your traffic exits.
 //
 // This process never runs privileged. On connect it asks the OS (one password / UAC prompt) to start the bundled
 // `ccproxy tunnel` supervisor, then only writes files the supervisor reads: the sing-box config (kept current by

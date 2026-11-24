@@ -94,7 +94,7 @@ echo "== test CA and frps certificate"
 (
   cd "$OUT/tls"
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout ca.key -out ca.pem -days 2 \
-    -subj "/CN=CC Proxy shared egress e2e CA" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=keyCertSign" 2>/dev/null
+    -subj "/CN=aifree shared egress e2e CA" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=keyCertSign" 2>/dev/null
   openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout frps.key -out frps.csr -subj "/CN=frps" 2>/dev/null
   printf 'subjectAltName=DNS:frps\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n' > frps.ext
   openssl x509 -req -in frps.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out frps.pem -days 2 -extfile frps.ext 2>/dev/null

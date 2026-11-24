@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use x509_cert::{der::Decode, Certificate};
 
 const USER_AGENT: &str = concat!(
-    "CC-Proxy/",
+    "aifree/",
     env!("CARGO_PKG_VERSION"),
     " (environment-check)"
 );

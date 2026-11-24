@@ -1,4 +1,4 @@
-# Build CC Proxy desktop packages for macOS, Windows, and Linux.
+# Build aifree desktop packages for macOS, Windows, and Linux.
 # Each job bundles the ccproxy helper and a SHA-256-verified sing-box next to the app, then uploads the installers.
 # Unsigned: macOS notarisation and Windows code signing need certificates and are not configured here.
 name: desktop
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Sidecars (ccproxy + verified sing-box)
+      - name: Sidecars (aifree CLI compatibility helper + verified sing-box)
         run: desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
       - name: Core and CLI checks
         run: cargo clippy --locked -p ccproxy -p ccproxy-core --target ${{ matrix.target }} -- -D warnings
@@ -60,7 +60,7 @@ jobs:
         run: npx --yes @tauri-apps/cli@2.12.6 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
       - uses: actions/upload-artifact@v4
         with:
-          name: ccproxy-${{ matrix.target }}
+          name: aifree-${{ matrix.target }}
           path: |
             client/target/${{ matrix.target }}/release/bundle/**/*.dmg
             client/target/${{ matrix.target }}/release/bundle/**/*.app

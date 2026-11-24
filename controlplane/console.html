@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CC Proxy Console</title>
+<title>aifree Console</title>
 <script>
   const appearance = (() => {
-    const key = "ccproxy.appearance";
+    const key = "aifree.appearance";
     const system = matchMedia("(prefers-color-scheme: dark)");
     let preference = "system";
     try {
@@ -297,7 +297,7 @@
 <div id="login" class="login" hidden>
   <form class="card" id="login-form">
     <select class="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-    <span class="brand-mark" data-icon="topology"></span><h1>CC Proxy Console</h1>
+    <span class="brand-mark" data-icon="topology"></span><h1>aifree Console</h1>
     <p class="muted small" style="margin:0 0 16px">Sign in with an administrator account.</p>
     <div class="form-row"><label for="l-user">Username</label><input id="l-user" autocomplete="username" required></div>
     <div class="form-row"><label for="l-pass">Password</label><input id="l-pass" type="password" autocomplete="current-password" required></div>
@@ -308,7 +308,7 @@
 
 <div id="app" class="shell" hidden>
   <nav class="side" aria-label="Main navigation">
-    <a class="brand" href="#/"><span class="brand-mark" data-icon="topology"></span>CC Proxy</a>
+    <a class="brand" href="#/"><span class="brand-mark" data-icon="topology"></span>aifree</a>
     <div class="nav-links">
       <a href="#/" data-nav="overview"><span data-icon="topology"></span>Topology</a>
       <a href="#/hosts" data-nav="hosts"><span data-icon="server"></span>Hosts</a>
@@ -538,7 +538,7 @@
     fn(parts.slice(1), token).catch((e) => { if (token === routeToken && e.message !== "Signed out") $("#view").innerHTML = '<div class="empty">Could not load: ' + esc(e.message) + "</div>"; });
   }
   window.addEventListener("hashchange", () => { if (me) route(); });
-  const setTitle = (t) => { $("#title").textContent = t; document.title = t + " · CC Proxy"; };
+  const setTitle = (t) => { $("#title").textContent = t; document.title = t + " · aifree"; };
   const current = (token) => token === routeToken;
   function refreshEvery(sec, fn, token) { timer = setInterval(() => { if (current(token)) fn(); }, sec * 1000); }
 
@@ -1043,7 +1043,7 @@
     const r = await act(() => api("GET", "/admin/users/" + enc(user) + "/xtcp-visitor"));
     if (!r) return;
     const { ov, close } = overlay("<h3>XTCP visitor for " + esc(user) + '</h3><p class="small muted">frpc visitor for proxy <span class="mono">' + esc(r.proxy_name) +
-      "</span>. Its secret key opens only this user's entry port " + r.bind_port + ". Set <span class=\"mono\">FRP_AUTH_TOKEN</span> to the frps token in frpc's environment, save the frps CA as frp-ca.pem, and point CC Proxy at <span class=\"mono\">" +
+      "</span>. Its secret key opens only this user's entry port " + r.bind_port + ". Set <span class=\"mono\">FRP_AUTH_TOKEN</span> to the frps token in frpc's environment, save the frps CA as frp-ca.pem, and point aifree at <span class=\"mono\">" +
       esc(r.bind_addr + ":" + r.bind_port) + '</span>.</p><pre class="secret" style="white-space:pre-wrap;max-height:50vh;overflow:auto">' + esc(r.frpc_toml) + "</pre>" +
       '<div class="buttons"><button type="button" data-copy>Copy</button><button type="button" class="primary" data-ok>Done</button></div>');
     $("[data-copy]", ov).onclick = async () => {

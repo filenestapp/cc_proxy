@@ -1,4 +1,4 @@
-//! `ccproxy`: sign in to the control plane and run the tunnel from a terminal.
+//! The aifree CLI signs in to the control plane and runs the tunnel from a terminal.
 //!
 //!   ccproxy login --server https://cp.example.com --user alice      (password from stdin or CCPROXY_PASSWORD)
 //!   sudo ccproxy up                                                 (foreground: keeps config current, runs sing-box)
@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
-#[command(name = "ccproxy", version, about = "cc_proxy client")]
+#[command(name = "ccproxy", version, about = "aifree command-line client")]
 struct Cli {
     /// State directory (session, config, status). Default: the OS config dir + cc-proxy.
     #[arg(long, global = true)]

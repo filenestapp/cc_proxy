@@ -1,4 +1,4 @@
-// Command ccproxy-exit-agent keeps an exit node's sing-box in step with the CC Proxy control plane.
+// Command ccproxy-exit-agent keeps an exit node's sing-box in step with the aifree control plane.
 //
 // It is the compiled counterpart of controlplane/agent.py (which stays available to existing callers) and speaks
 // the same agent API and heartbeat contract:
