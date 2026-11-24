@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS checkout_price_id text NOT NULL DEFAULT '';
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS checkout_amount integer NOT NULL DEFAULT 0;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS checkout_expires_at bigint;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS checkout_session_id text NOT NULL DEFAULT '';
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_status text NOT NULL DEFAULT '';
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS past_due_since double precision;
 CREATE INDEX IF NOT EXISTS subscriptions_customer ON subscriptions(customer_id, updated_at DESC);
@@ -110,6 +111,7 @@ type proxyView struct {
 }
 type orderView struct {
 	ID             int64    `json:"id"`
+	Email          string   `json:"email"`
 	SubscriptionID *int64   `db:"subscription_id" json:"subscription_id"`
 	Amount         int      `db:"amount_cny" json:"amount"`
 	Currency       string   `json:"currency"`
@@ -269,17 +271,37 @@ type checkoutReservation struct {
 	ExpiresAt  int64
 }
 
+type pendingCheckoutPlanChange struct {
+	reservation checkoutReservation
+	sessionID   string
+}
+
+func (e *pendingCheckoutPlanChange) Error() string {
+	return "a subscription or Checkout Session already exists"
+}
+
 func (s *store) reserveCheckout(ctx context.Context, customerID int64, plan string) (checkoutReservation, error) {
 	reservation := checkoutReservation{CustomerID: customerID, Plan: plan}
 	err := s.write(ctx, func(tx pgx.Tx) error {
 		var currentPlan string
 		var providerSubscription bool
-		err := tx.QueryRow(ctx, `SELECT id,plan_code,stripe_subscription_id IS NOT NULL,checkout_price_id,checkout_amount,COALESCE(checkout_expires_at,0)
+		var sessionID string
+		err := tx.QueryRow(ctx, `SELECT id,plan_code,stripe_subscription_id IS NOT NULL,checkout_price_id,checkout_amount,COALESCE(checkout_expires_at,0),checkout_session_id
 			FROM subscriptions WHERE customer_id=$1 AND status IN ('pending','active','past_due')`, customerID).
-			Scan(&reservation.ID, &currentPlan, &providerSubscription, &reservation.PriceID, &reservation.Amount, &reservation.ExpiresAt)
+			Scan(&reservation.ID, &currentPlan, &providerSubscription, &reservation.PriceID, &reservation.Amount, &reservation.ExpiresAt, &sessionID)
 		if err == nil {
 			if !providerSubscription && currentPlan == plan && reservation.ExpiresAt > s.clock().Unix() {
 				return nil
+			}
+			if !providerSubscription && currentPlan != plan && reservation.ExpiresAt > s.clock().Unix() && sessionID != "" {
+				var priceID string
+				if err := tx.QueryRow(ctx, "SELECT stripe_price_id FROM plans WHERE code=$1 AND active", plan).Scan(&priceID); err != nil {
+					return missing(err, "plan")
+				}
+				if priceID == "" {
+					return failureCode(503, "stripe_unavailable", "plan is not configured in Stripe")
+				}
+				return &pendingCheckoutPlanChange{reservation: reservation, sessionID: sessionID}
 			}
 			return failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
 		}
@@ -308,6 +330,39 @@ func (s *store) reserveCheckout(ctx context.Context, customerID int64, plan stri
 			VALUES($1,$2,'pending',$3,$4,$5,$6,$6) RETURNING id`, customerID, plan, reservation.PriceID, reservation.Amount, reservation.ExpiresAt, s.now()).Scan(&reservation.ID)
 	})
 	return reservation, err
+}
+
+func (s *store) replacePendingCheckout(ctx context.Context, previous pendingCheckoutPlanChange, plan string) (checkoutReservation, error) {
+	reservation := checkoutReservation{CustomerID: previous.reservation.CustomerID, Plan: plan}
+	err := s.write(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE subscriptions SET status='expired',updated_at=$2
+			WHERE id=$1 AND status='pending' AND stripe_subscription_id IS NULL AND checkout_session_id=$3`,
+			previous.reservation.ID, s.now(), previous.sessionID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
+		}
+		if err := tx.QueryRow(ctx, "SELECT stripe_price_id,price_cny FROM plans WHERE code=$1 AND active", plan).Scan(&reservation.PriceID, &reservation.Amount); err != nil {
+			return missing(err, "plan")
+		}
+		if reservation.PriceID == "" {
+			return failureCode(503, "stripe_unavailable", "plan is not configured in Stripe")
+		}
+		reservation.ExpiresAt = s.clock().Add(24 * time.Hour).Unix()
+		return tx.QueryRow(ctx, `INSERT INTO subscriptions(customer_id,plan_code,status,checkout_price_id,checkout_amount,checkout_expires_at,created_at,updated_at)
+			VALUES($1,$2,'pending',$3,$4,$5,$6,$6) RETURNING id`, reservation.CustomerID, plan, reservation.PriceID, reservation.Amount, reservation.ExpiresAt, s.now()).Scan(&reservation.ID)
+	})
+	return reservation, err
+}
+
+func (s *store) setCheckoutSessionID(ctx context.Context, reservationID int64, sessionID string) error {
+	return s.write(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE subscriptions SET checkout_session_id=$2,updated_at=$3
+			WHERE id=$1 AND status='pending' AND stripe_subscription_id IS NULL`, reservationID, sessionID, s.now())
+		return rowsChanged(tag, err, "Checkout reservation")
+	})
 }
 
 func (s *store) storeStripeEvent(ctx context.Context, event stripeEvent) error {
@@ -643,7 +698,8 @@ func (s *store) listSubscriptions(ctx context.Context, status string) ([]subscri
 		AND ($1='' OR s.status=$1) ORDER BY s.updated_at DESC,s.id DESC`, status)
 }
 func (s *store) listOrders(ctx context.Context) ([]orderView, error) {
-	return rowsOf[orderView](ctx, s.pool, `SELECT id,subscription_id,amount_cny,currency,status,paid_at,receipt_url FROM orders ORDER BY created_at DESC`)
+	return rowsOf[orderView](ctx, s.pool, `SELECT o.id,c.email,o.subscription_id,o.amount_cny,o.currency,o.status,o.paid_at,o.receipt_url
+		FROM orders o JOIN customers c ON c.id=o.customer_id ORDER BY o.created_at DESC`)
 }
 func (s *store) listProvisioning(ctx context.Context) ([]provisioningView, error) {
 	return rowsOf[provisioningView](ctx, s.pool, `SELECT p.id,p.customer_id,p.subscription_id,p.kind,p.status,p.note,p.created_at,c.email
@@ -678,10 +734,18 @@ func (s *store) completeProvisioning(ctx context.Context, id int64, note string)
 
 type stripeClient interface {
 	createCustomer(context.Context, string, string) (string, error)
-	createCheckout(context.Context, string, checkoutReservation) (string, error)
+	createCheckout(context.Context, string, checkoutReservation) (stripeCheckoutSession, error)
+	expireCheckout(context.Context, string) error
 	createPortal(context.Context, string, string) (string, error)
 	getSubscription(context.Context, string) (stripeSubscription, error)
 }
+
+type stripeCheckoutSession struct {
+	ID  string
+	URL string
+}
+
+var errStripeCheckoutCompleted = errors.New("Stripe Checkout Session already completed")
 
 const (
 	stripeAPIVersion = "2026-11-18.endive"
@@ -727,6 +791,15 @@ func (c *stripeHTTPClient) call(ctx context.Context, method, path string, values
 	}
 	defer res.Body.Close()
 	if res.StatusCode/100 != 2 {
+		var failure struct {
+			Error struct {
+				Code    string
+				Message string
+			}
+		}
+		if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&failure); err == nil && (failure.Error.Code != "" || failure.Error.Message != "") {
+			return fmt.Errorf("Stripe %s %s returned HTTP %d: %s %s", method, path, res.StatusCode, failure.Error.Code, failure.Error.Message)
+		}
 		return fmt.Errorf("Stripe %s %s returned HTTP %d", method, path, res.StatusCode)
 	}
 	return json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(out)
@@ -741,7 +814,7 @@ func (c *stripeHTTPClient) createCustomer(ctx context.Context, email, key string
 	return result.ID, err
 }
 
-func (c *stripeHTTPClient) createCheckout(ctx context.Context, customer string, reservation checkoutReservation) (string, error) {
+func (c *stripeHTTPClient) createCheckout(ctx context.Context, customer string, reservation checkoutReservation) (stripeCheckoutSession, error) {
 	var price struct {
 		Active     bool
 		Currency   string
@@ -752,10 +825,10 @@ func (c *stripeHTTPClient) createCheckout(ctx context.Context, customer string, 
 		}
 	}
 	if err := c.call(ctx, http.MethodGet, "/prices/"+url.PathEscape(reservation.PriceID), nil, "", &price); err != nil {
-		return "", err
+		return stripeCheckoutSession{}, err
 	}
 	if !price.Active || price.Currency != "cny" || price.UnitAmount != reservation.Amount || price.Recurring.Interval != "month" || price.Recurring.IntervalCount != 1 {
-		return "", failureCode(503, "stripe_unavailable", "Stripe Price must match the active monthly CNY plan")
+		return stripeCheckoutSession{}, failureCode(503, "stripe_unavailable", "Stripe Price must match the active monthly CNY plan")
 	}
 	id := strconv.FormatInt(reservation.ID, 10)
 	values := url.Values{
@@ -766,12 +839,21 @@ func (c *stripeHTTPClient) createCheckout(ctx context.Context, customer string, 
 		"metadata[plan]": {reservation.Plan}, "metadata[aifree_subscription_id]": {id},
 		"subscription_data[metadata][aifree_subscription_id]": {id},
 	}
-	var result struct{ URL string }
+	var result stripeCheckoutSession
 	err := c.call(ctx, http.MethodPost, "/checkout/sessions", values, "aifree-checkout-"+customer+"-"+id, &result)
-	if err == nil && result.URL == "" {
-		err = errors.New("Stripe Checkout response missing URL")
+	if err == nil && (result.ID == "" || result.URL == "") {
+		err = errors.New("Stripe Checkout response missing ID or URL")
 	}
-	return result.URL, err
+	return result, err
+}
+
+func (c *stripeHTTPClient) expireCheckout(ctx context.Context, sessionID string) error {
+	var result struct{ Status string }
+	err := c.call(ctx, http.MethodPost, "/checkout/sessions/"+url.PathEscape(sessionID)+"/expire", nil, "", &result)
+	if err != nil && (strings.Contains(strings.ToLower(err.Error()), "already completed") || strings.Contains(strings.ToLower(err.Error()), "checkout_session_completed")) {
+		return errStripeCheckoutCompleted
+	}
+	return err
 }
 
 func (c *stripeHTTPClient) createPortal(ctx context.Context, customer, returnURL string) (string, error) {
@@ -945,7 +1027,20 @@ func (a *api) accountCheckout(r *apiRequest) (response, error) {
 	}
 	reservation, err := a.store.reserveCheckout(ctx, customer.ID, body.Plan)
 	if err != nil {
-		return response{}, err
+		var change *pendingCheckoutPlanChange
+		if !errors.As(err, &change) {
+			return response{}, err
+		}
+		if err := a.store.stripe.expireCheckout(ctx, change.sessionID); err != nil {
+			if errors.Is(err, errStripeCheckoutCompleted) {
+				return response{}, failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
+			}
+			return response{}, err
+		}
+		reservation, err = a.store.replacePendingCheckout(ctx, *change, body.Plan)
+		if err != nil {
+			return response{}, err
+		}
 	}
 	stripeCustomer, err := a.store.customerStripeID(ctx, customer.ID)
 	if err != nil {
@@ -962,8 +1057,14 @@ func (a *api) accountCheckout(r *apiRequest) (response, error) {
 			return response{}, err
 		}
 	}
-	u, err := a.store.stripe.createCheckout(ctx, stripeCustomer, reservation)
-	return ok(object{"url": u}, err)
+	checkout, err := a.store.stripe.createCheckout(ctx, stripeCustomer, reservation)
+	if err != nil {
+		return response{}, err
+	}
+	if err := a.store.setCheckoutSessionID(ctx, reservation.ID, checkout.ID); err != nil {
+		return response{}, err
+	}
+	return ok(object{"url": checkout.URL}, nil)
 }
 
 func (a *api) accountPortal(r *apiRequest) (response, error) {

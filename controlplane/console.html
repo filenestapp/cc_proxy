@@ -314,6 +314,7 @@
       <a href="#/hosts" data-nav="hosts"><span data-icon="server"></span>Hosts</a>
       <a href="#/ips" data-nav="ips"><span data-icon="ips"></span>Egress IPs</a>
       <a href="#/users" data-nav="users"><span data-icon="users"></span>Users</a>
+      <a href="#/customers" data-nav="customers"><span data-icon="users"></span>Customers</a>
       <a href="#/usage" data-nav="usage"><span data-icon="chart"></span>Usage</a>
       <a href="#/plans" data-nav="plans"><span data-icon="card"></span>Plans</a>
       <a href="#/subscriptions" data-nav="subscriptions"><span data-icon="card"></span>Subscriptions</a>
@@ -1592,6 +1593,18 @@
   // ---- billing --------------------------------------------------------------------------------------------
   const money = (amount, currency = "cny") => new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase(), minimumFractionDigits: 2 }).format((amount || 0) / 100);
   const billingBadge = (status) => '<span class="badge ' + ({ active: "ok", paid: "ok", past_due: "warn", pending: "warn", failed: "bad", cancelled: "bad", expired: "bad", refunded: "bad" }[status] || "") + '">' + esc(status.replaceAll("_", " ")) + "</span>";
+  PAGES.customers = async (_, token) => {
+    setTitle("Customers");
+    const customers = await api("GET", "/admin/customers");
+    if (!current(token)) return;
+    const rows = customers.map((c) => '<tr><td class="mono">' + c.id + '</td><td>' + esc(c.email) + '</td><td>' + (c.email_verified ? "Verified" : "Unverified") + '</td><td>' + billingBadge(c.status) + '</td><td class="mono">' + esc(c.user_name || "—") + '</td><td class="actions"><button class="link" data-customer-status="' + esc(c.status === "active" ? "suspended" : "active") + '" data-customer-id="' + c.id + '">' + (c.status === "active" ? "Suspend" : "Restore") + '</button></td></tr>').join("");
+    $("#view").innerHTML = '<p class="small muted">Suspending revokes device and console sessions. It does not cancel Stripe billing or release the assigned IP; cancel the subscription in Stripe for a permanent ban.</p><div class="toolbar"><span class="muted">' + customers.length + ' customers</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Email</th><th>Verification</th><th>Status</th><th>Proxy user</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">No customers.</td></tr>') + "</tbody></table></div>";
+    $("#refresh").onclick = route;
+    $$('[data-customer-id]').forEach((button) => button.onclick = async () => {
+      const status = button.dataset.customerStatus;
+      if (await act(() => api("PUT", "/admin/customers/" + button.dataset.customerId, { status }), status === "suspended" ? "Customer suspended." : "Customer restored.")) route();
+    });
+  };
   PAGES.plans = async (_, token) => {
     setTitle("Plans");
     const plans = await api("GET", "/admin/plans");
@@ -1629,8 +1642,8 @@
     setTitle("Orders");
     const orders = await api("GET", "/admin/orders");
     if (!current(token)) return;
-    const rows = orders.map((o) => '<tr><td class="mono">' + o.id + "</td><td class=\"mono\">" + (o.subscription_id || "—") + "</td><td>" + money(o.amount, o.currency) + "</td><td>" + billingBadge(o.status) + "</td><td>" + fmtTime(o.paid_at) + "</td><td>" + (o.receipt_url ? '<a href="' + esc(o.receipt_url) + '" target="_blank" rel="noreferrer">Receipt</a>' : "—") + "</td></tr>").join("");
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + orders.length + ' orders</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Subscription</th><th>Amount</th><th>Status</th><th>Paid</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">No orders.</td></tr>') + "</tbody></table></div>";
+    const rows = orders.map((o) => '<tr><td class="mono">' + o.id + '</td><td>' + esc(o.email) + "</td><td class=\"mono\">" + (o.subscription_id || "—") + "</td><td>" + money(o.amount, o.currency) + "</td><td>" + billingBadge(o.status) + "</td><td>" + fmtTime(o.paid_at) + "</td><td>" + (o.receipt_url ? '<a href="' + esc(o.receipt_url) + '" target="_blank" rel="noreferrer">Receipt</a>' : "—") + "</td></tr>").join("");
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + orders.length + ' orders</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Customer</th><th>Subscription</th><th>Amount</th><th>Status</th><th>Paid</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">No orders.</td></tr>') + "</tbody></table></div>";
     $("#refresh").onclick = route;
   };
   PAGES.provisioning = async (_, token) => {

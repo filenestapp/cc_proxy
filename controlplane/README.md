@@ -221,6 +221,9 @@ assignment, and release follow webhook processing. Complete paid Team seats and 
 the **Provisioning** page. Renewal failures receive a three-day grace period by default. To change it, set
 `subscription_grace_seconds` through `PUT /admin/settings`.
 
+Suspending a customer in the console revokes their device and console sessions, but does not cancel their Stripe
+subscription or release its assigned IP. For a permanent ban, cancel the subscription in Stripe as well.
+
 ## Alerts
 
 Rules use the same topology data as the console. The default evaluation interval is 15 seconds.

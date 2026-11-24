@@ -17,20 +17,27 @@ import (
 )
 
 type fakeStripe struct {
-	customers, checkout, portal, reads int
-	reservation                        checkoutReservation
-	subscriptions                      map[string]stripeSubscription
-	readErr                            error
+	customers, checkout, expires, portal, reads int
+	reservation                                 checkoutReservation
+	subscriptions                               map[string]stripeSubscription
+	readErr, expireErr                          error
 }
 
 func (f *fakeStripe) createCustomer(_ context.Context, _, _ string) (string, error) {
 	f.customers++
 	return "cus_test", nil
 }
-func (f *fakeStripe) createCheckout(_ context.Context, _ string, reservation checkoutReservation) (string, error) {
+func (f *fakeStripe) createCheckout(_ context.Context, _ string, reservation checkoutReservation) (stripeCheckoutSession, error) {
 	f.checkout++
 	f.reservation = reservation
-	return "https://checkout.test/session", nil
+	return stripeCheckoutSession{ID: "cs_test", URL: "https://checkout.test/session"}, nil
+}
+func (f *fakeStripe) expireCheckout(_ context.Context, sessionID string) error {
+	f.expires++
+	if sessionID != "cs_test" {
+		return errors.New("unexpected Checkout Session ID")
+	}
+	return f.expireErr
 }
 func (f *fakeStripe) createPortal(_ context.Context, _, _ string) (string, error) {
 	f.portal++
@@ -133,8 +140,8 @@ func TestBillingCustomerRoutesAndAdminCookie(t *testing.T) {
 		t.Fatalf("Checkout retry did not reuse the reservation and customer: %d %+v", checkout.Code, fake)
 	}
 	checkout = accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"premium"}`, cookie, csrf)
-	if checkout.Code != http.StatusConflict || responseCode(t, checkout) != "subscription_exists" {
-		t.Fatalf("competing checkout: %d %s", checkout.Code, checkout.Body.String())
+	if checkout.Code != http.StatusServiceUnavailable || responseCode(t, checkout) != "stripe_unavailable" {
+		t.Fatalf("competing checkout without a configured plan: %d %s", checkout.Code, checkout.Body.String())
 	}
 	portal := accountRequest(t, h, http.MethodPost, "/v1/account/portal", `{}`, cookie, csrf)
 	if portal.Code != http.StatusOK || fake.portal != 1 {
@@ -151,6 +158,8 @@ func TestBillingCustomerRoutesAndAdminCookie(t *testing.T) {
 	if adminRec.Code != http.StatusOK || !strings.Contains(adminRec.Body.String(), "billing@example.com") {
 		t.Fatalf("admin customers: %d %s", adminRec.Code, adminRec.Body.String())
 	}
+	_, err := s.pool.Exec(t.Context(), `INSERT INTO orders(customer_id,amount_cny,status,created_at) VALUES($1,60000,'paid',$2)`, c.ID, s.now())
+	require(t, err)
 	for _, path := range []string{"/admin/subscriptions", "/admin/orders", "/admin/provisioning", "/admin/plans"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+testAdminToken)
@@ -159,9 +168,59 @@ func TestBillingCustomerRoutesAndAdminCookie(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
 		}
+		if path == "/admin/orders" && !strings.Contains(rec.Body.String(), `"email":"billing@example.com"`) {
+			t.Fatalf("admin orders omitted customer email: %s", rec.Body.String())
+		}
 	}
 	if c.ID == 0 {
 		t.Fatal("customer was not created")
+	}
+}
+
+func TestCheckoutPlanChangeExpiresPendingSession(t *testing.T) {
+	s := testStore(t)
+	c, cookie, csrf := billingCustomer(t, s)
+	_, err := s.pool.Exec(t.Context(), `UPDATE plans SET stripe_price_id=CASE code WHEN 'standard' THEN 'price_standard' WHEN 'premium' THEN 'price_premium' ELSE stripe_price_id END`)
+	require(t, err)
+	fake := &fakeStripe{}
+	h := billingAPI(s, fake)
+
+	first := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"standard"}`, cookie, csrf)
+	if first.Code != http.StatusOK || fake.checkout != 1 {
+		t.Fatalf("initial checkout: %d %s", first.Code, first.Body.String())
+	}
+	changed := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"premium"}`, cookie, csrf)
+	if changed.Code != http.StatusOK || fake.expires != 1 || fake.checkout != 2 || fake.reservation.Plan != "premium" {
+		t.Fatalf("changed checkout: HTTP %d fake=%+v body=%s", changed.Code, fake, changed.Body.String())
+	}
+	var expired, pending int
+	err = s.pool.QueryRow(t.Context(), `SELECT count(*) FILTER (WHERE status='expired'),count(*) FILTER (WHERE status='pending') FROM subscriptions WHERE customer_id=$1`, c.ID).Scan(&expired, &pending)
+	require(t, err)
+	if expired != 1 || pending != 1 {
+		t.Fatalf("unexpected reservation states: expired=%d pending=%d", expired, pending)
+	}
+}
+
+func TestCheckoutPlanChangeRejectsCompletedSession(t *testing.T) {
+	s := testStore(t)
+	c, cookie, csrf := billingCustomer(t, s)
+	_, err := s.pool.Exec(t.Context(), `UPDATE plans SET stripe_price_id=CASE code WHEN 'standard' THEN 'price_standard' WHEN 'premium' THEN 'price_premium' ELSE stripe_price_id END`)
+	require(t, err)
+	fake := &fakeStripe{expireErr: errStripeCheckoutCompleted}
+	h := billingAPI(s, fake)
+	first := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"standard"}`, cookie, csrf)
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial checkout: %d %s", first.Code, first.Body.String())
+	}
+	changed := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"premium"}`, cookie, csrf)
+	if changed.Code != http.StatusConflict || responseCode(t, changed) != "subscription_exists" || fake.expires != 1 || fake.checkout != 1 {
+		t.Fatalf("completed Checkout Session was not rejected: HTTP %d fake=%+v body=%s", changed.Code, fake, changed.Body.String())
+	}
+	var status, plan string
+	err = s.pool.QueryRow(t.Context(), `SELECT status,plan_code FROM subscriptions WHERE customer_id=$1`, c.ID).Scan(&status, &plan)
+	require(t, err)
+	if status != "pending" || plan != "standard" {
+		t.Fatalf("completed Checkout Session changed reservation: status=%s plan=%s", status, plan)
 	}
 }
 
@@ -415,7 +474,7 @@ func TestStripeCheckoutUsesMatchingPriceAndStableIdempotencyKey(t *testing.T) {
 				t.Fatalf("unexpected Checkout parameters: %v", req.Form)
 			}
 			keys = append(keys, req.Header.Get("Idempotency-Key"))
-			body = `{"url":"https://checkout.stripe.com/c/pay/fixture"}`
+			body = `{"id":"cs_fixture","url":"https://checkout.stripe.com/c/pay/fixture"}`
 		default:
 			t.Fatalf("unexpected Stripe request: %s %s", req.Method, req.URL.Path)
 		}
@@ -428,14 +487,37 @@ func TestStripeCheckoutUsesMatchingPriceAndStableIdempotencyKey(t *testing.T) {
 	}
 	priceAmount = 60000
 	for range 2 {
-		checkoutURL, err := client.createCheckout(t.Context(), "cus_fixture", reservation)
+		checkout, err := client.createCheckout(t.Context(), "cus_fixture", reservation)
 		require(t, err)
-		if checkoutURL != "https://checkout.stripe.com/c/pay/fixture" {
-			t.Fatalf("unexpected Checkout URL: %s", checkoutURL)
+		if checkout.ID != "cs_fixture" || checkout.URL != "https://checkout.stripe.com/c/pay/fixture" {
+			t.Fatalf("unexpected Checkout Session: %+v", checkout)
 		}
 	}
 	if len(keys) != 2 || keys[0] == "" || keys[0] != keys[1] {
 		t.Fatalf("Checkout retries used different idempotency keys: %v", keys)
+	}
+}
+
+func TestStripeExpiresCheckoutSession(t *testing.T) {
+	completed := false
+	client := stripeHTTPClient{key: "fixture-key", client: &http.Client{Transport: stripeFixtureTransport(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.Path != "/v1/checkout/sessions/cs_fixture/expire" {
+			t.Fatalf("unexpected Stripe request: %s %s", req.Method, req.URL.Path)
+		}
+		body := `{"id":"cs_fixture","status":"expired"}`
+		status := http.StatusOK
+		if completed {
+			status = http.StatusBadRequest
+			body = `{"error":{"code":"checkout_session_completed","message":"Checkout Session already completed"}}`
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}}
+	if err := client.expireCheckout(t.Context(), "cs_fixture"); err != nil {
+		t.Fatalf("expire Checkout Session: %v", err)
+	}
+	completed = true
+	if err := client.expireCheckout(t.Context(), "cs_fixture"); !errors.Is(err, errStripeCheckoutCompleted) {
+		t.Fatalf("completed Checkout Session error = %v, want %v", err, errStripeCheckoutCompleted)
 	}
 }
 
