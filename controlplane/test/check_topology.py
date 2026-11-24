@@ -1,5 +1,5 @@
 """Phase 3 of the control-plane e2e: the dashboard data reflects reality. Retries for up to 40 s while
-probes come in. Run inside the cp container (needs CP_ADMIN_TOKEN)."""
+probes come in. Uses CP_URL and CP_ADMIN_TOKEN."""
 import json
 import os
 import sys
@@ -10,7 +10,7 @@ TARGET = "http://target.test:8080/strict"
 
 
 def topology():
-    req = urllib.request.Request("http://127.0.0.1:8443/admin/topology",
+    req = urllib.request.Request(os.environ["CP_URL"] + "/admin/topology",
                                  headers={"Authorization": "Bearer " + os.environ["CP_ADMIN_TOKEN"]})
     return json.load(urllib.request.urlopen(req, timeout=5))
 

@@ -1,5 +1,5 @@
 # Local demo for trying the desktop app on this computer.
-#   control plane  runs on the host (127.0.0.1:18450), started by up.sh
+#   cp             Go control plane on 127.0.0.1:18450, backed by PostgreSQL
 #   egress         exit node "local": agent + sing-box; entry ports 20000-20009 published on 127.0.0.1;
 #                  egress IP 10.99.0.3 on the demo "internet"
 #   echo           echo.test:8080 replies with the source IP it sees (10.99.0.3 when it went through the tunnel)
@@ -7,6 +7,30 @@
 name: ccproxy-demo
 
 services:
+  db:
+    image: postgres:16
+    environment: { POSTGRES_DB: controlplane, POSTGRES_USER: controlplane, POSTGRES_PASSWORD: demo-postgres }
+    volumes: ["db-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "controlplane", "-d", "controlplane"]
+      interval: 1s
+      retries: 30
+    networks: [data]
+
+  cp:
+    build: { context: ../../../controlplane }
+    environment:
+      DATABASE_URL: postgres://controlplane:demo-postgres@db:5432/controlplane?sslmode=disable
+      CP_ADMIN_TOKEN: "${CP_ADMIN_TOKEN:-}"
+    ports: ["127.0.0.1:${CP_DEMO_PORT:-18450}:8443"]
+    volumes: ["./out/settings.json:/out/settings.json:ro"]
+    depends_on: { db: { condition: service_healthy } }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8443/healthz"]
+      interval: 1s
+      retries: 30
+    networks: [wan, data]
+
   decoy:
     image: caddy:2.10.2-alpine
     command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
@@ -26,8 +50,7 @@ services:
     image: egress-e2e-tunclient   # python + sing-box, built from egress/test/Dockerfile.tunclient
     build: { context: ../../../egress/test, dockerfile: Dockerfile.tunclient }
     cap_add: [NET_ADMIN]
-    environment: { CP_AGENT_TOKEN: "${AGENT_TOKEN}" }
-    extra_hosts: ["host.docker.internal:host-gateway"]
+    environment: { CP_AGENT_TOKEN: "${AGENT_TOKEN:-}" }
     ports: ["127.0.0.1:20000-20009:20000-20009"]
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -35,13 +58,18 @@ services:
         set -e
         wan=$$(ip -o -4 addr | awk '/ 10\.99\.0\./ {print $$2; exit}')
         mkdir -p /etc/sing-box
-        exec python3 -u /src/controlplane/agent.py --cp http://host.docker.internal:18450 --iface "$$wan" \
+        exec python3 -u /src/controlplane/agent.py --cp http://cp:8443 --iface "$$wan" \
           --config /etc/sing-box/config.json --state-dir /var/lib/agent --interval 2 --settle 2 --run
     volumes: ["../../../controlplane:/src/controlplane:ro", "../../../egress:/src/egress:ro"]
-    depends_on: [decoy, echo]
+    depends_on: [cp, decoy, echo]
     networks: { wan: { ipv4_address: 10.99.0.2 } }
 
 networks:
+  data:
+    internal: true
   wan:
     ipam:
       config: [{ subnet: 10.99.0.0/24, gateway: 10.99.0.1, ip_range: 10.99.0.128/25 }]
+
+volumes:
+  db-data:
