@@ -36,6 +36,40 @@ Create additional administrators in the console or run `./cc-controlplane admin-
 
 From the repo root, run `docker build -t cc-controlplane controlplane` to build a runtime image. It embeds the console, connects using `DATABASE_URL`, and listens on port 8443 by default.
 
+## aifree domains and cutover
+
+One control-plane process serves the following public names. Route by the original `Host` header; do not use a redirect for API traffic.
+
+| Host | Routes |
+| --- | --- |
+| `cp.aifree.sg` | Client and exit-agent APIs, installers, and the administrator console |
+| `app.aifree.sg` | Customer `/v1/account/*` API and the future customer center at `/account` |
+| `ccproxy.macmini.sg` | The same client, agent, installer, and administrator routes as `cp.aifree.sg` during migration |
+
+Other hosts intentionally retain the previous unrestricted routing. This keeps localhost development, direct test requests, and private deployment names working. The configured aifree hosts are the only hosts that enforce the public split.
+
+Install commands default to the configured public control-plane URL, not the browser's request URL. The administrator console pre-fills that URL and can send a validated HTTPS `cp` override when an existing control plane must remain reachable during a DNS cutover. Set `CP_PUBLIC_URL` or pass `--public-url`; it must be an HTTPS URL and defaults to `https://cp.aifree.sg`. Until the new DNS resolves, keep `CP_PUBLIC_URL=https://ccproxy.macmini.sg`.
+
+```bash
+CP_PUBLIC_URL=https://cp.aifree.sg \
+  cc-controlplane serve --listen 127.0.0.1 --port 8443 \
+  --trusted-proxy 127.0.0.1/32
+```
+
+Use the flag for a one-off deployment override:
+
+```bash
+cc-controlplane serve --public-url https://cp.aifree.sg
+```
+
+### Deployment and cutover
+
+1. Create DNS `A`/`AAAA` (or proxied equivalent) records for `cp.aifree.sg` and `app.aifree.sg` that reach the same reverse proxy as the control plane. Leave `ccproxy.macmini.sg` pointed at that proxy.
+2. Obtain and install a certificate covering all three names. Configure the reverse proxy to pass the original `Host`, plus `X-Forwarded-For` and `X-Forwarded-Proto`. Start the control plane with the proxy addresses in `--trusted-proxy` or `CP_TRUSTED_PROXIES` so secure cookies and audit addresses are interpreted correctly.
+3. Set `CP_PUBLIC_URL=https://cp.aifree.sg`, deploy, and check the public routes: `https://cp.aifree.sg/console`, a desktop login and agent heartbeat against `cp.aifree.sg`, and a customer API request against `https://app.aifree.sg/v1/account/...`. Check that an install command generated from the console embeds `https://cp.aifree.sg`.
+4. Roll out a desktop release whose sign-in field defaults to `https://cp.aifree.sg`. New exit-agent installation commands will use that URL. Existing desktop sessions and agents must continue using `ccproxy.macmini.sg` without a redirect.
+5. Retire the old host only after the agent inventory shows every exit has been reinstalled or explicitly reconfigured to `cp.aifree.sg`, supported desktop clients have migrated, and the old-host access logs have remained unused for an agreed observation period. Then remove the old DNS record and its certificate name in a later deployment; do not retire it merely because the new hosts are healthy.
+
 ## Import SQLite v2 data
 
 Stop the old control plane and back up its SQLite database. Point `DATABASE_URL` at an empty PostgreSQL database. Run the migration from a host with Python 3.8 or newer for SQLite access.
