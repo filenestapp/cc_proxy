@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CC Proxy</title>
+<link rel="stylesheet" href="./environment.css">
 <script>
   const appearance = (() => {
     const key = "ccproxy.appearance";
@@ -195,8 +196,22 @@
     </dl>
     <div class="footer"><span id="v-server"></span><button id="logout" type="button">Sign out</button></div>
   </section>
+  <nav id="environment-entry" class="environment-entry">
+    <button id="environment-open" class="environment-link" aria-controls="environment-page" type="button" data-i18n="environment_check">Environment check</button>
+  </nav>
+  <section id="environment-page" aria-labelledby="environment-title" hidden>
+    <div class="environment-actions">
+      <button id="environment-back" class="environment-link environment-back" type="button" data-i18n="environment_back">Back</button>
+      <button id="environment-run" class="environment-retry" type="button" data-i18n="environment_retry">Run again</button>
+    </div>
+    <h1 id="environment-title" tabindex="-1" data-i18n="environment_check">Environment check</h1>
+    <p class="environment-note" data-i18n="environment_note">Netcheck compares network paths using observed addresses, system language, time zone and timings. Local network settings stay on this device.</p>
+    <p id="environment-status" class="environment-status" role="status" aria-live="polite"></p>
+    <div id="environment-results"></div>
+  </section>
 </main>
 <script type="module">
+import { createEnvironmentPage } from "./environment.mjs";
 import { messages, resolveLanguage } from "./locale.mjs";
 
 (() => {
@@ -220,6 +235,7 @@ import { messages, resolveLanguage } from "./locale.mjs";
   };
 
   const t = (key) => messages[activeLanguage][key] ?? messages.en.operation_failed;
+  const environment = createEnvironmentPage({ invoke, translate: t, onNavigate: render });
   const text = (id, value) => {
     const el = $(id);
     if (el.textContent !== value) el.textContent = value;
@@ -240,6 +256,7 @@ import { messages, resolveLanguage } from "./locale.mjs";
     for (const input of loginInputs) {
       if (input.dataset.validationError) input.setCustomValidity(t(input.dataset.validationError));
     }
+    environment.render();
     render();
   }
 
@@ -269,12 +286,18 @@ import { messages, resolveLanguage } from "./locale.mjs";
 
   function render() {
     text("loading", t(loadingFailed ? "loading_failed" : "loading"));
-    if (!view) return;
+    const inspecting = environment.isOpen();
+    $("environment-entry").hidden = inspecting;
+    $("loading").hidden = inspecting || Boolean(view);
+    if (!view || inspecting) {
+      $("login").hidden = true;
+      $("home").hidden = true;
+      return;
+    }
     const v = view;
     const state = v.tunnel;
     const on = v.want_connected || state === "running";
     if (!on) stopping = false;
-    $("loading").hidden = true;
     $("login").hidden = v.signed_in;
     $("home").hidden = !v.signed_in;
     $("login-btn").disabled = Boolean(pending);
