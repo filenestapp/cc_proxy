@@ -127,8 +127,9 @@ port. Every other user assigned to the host, including users who share an egress
 random server-held secret that is separate from the primary secret key and never leaves the control plane. A user's
 visitor therefore opens only that user's entry port, and the primary visitor's key opens no other mapping. **Visitor config** on the
 host page (or `GET /admin/users/{name}/xtcp-visitor`) shows the user's visitor configuration; frpc reads the frps
-token from the `FRP_AUTH_TOKEN` environment variable. The exit host learns new mappings when its install command runs
-again. Until then the host page shows **Run the install command again** and only the existing proxies work.
+token from the `FRP_AUTH_TOKEN` environment variable. An upgraded exit agent picks up new, moved and released
+mappings by itself (next section). A host whose agent predates this shows **Agent upgrade needed**; it learns new
+mappings only when its install command runs again.
 
 The install command does not change. With the host's agent token, the installer asks
 `GET /install/xtcp/frpc.toml` and `GET /install/xtcp/ca.pem`. A 204 means the public entry, and nothing about the
@@ -146,6 +147,58 @@ ordinary install changes. A 200 makes the installer do the following:
 A rerun upgrades an existing installation in place and restarts frpc with the current configuration. After **Use
 public entry**, a rerun stops frpc and removes its service, binary and credentials. Uninstall removes frpc together
 with everything else.
+
+### Automatic mapping sync (exit agent)
+
+Once a host runs an agent from this release, port changes need no rerun. Assign, Reassign, Release or a removed user
+changes the host's proxies, and the agent applies the change during its normal sync (every 5 seconds):
+
+1. It fetches the host's desired frpc configuration (`GET /agent/xtcp`, with its own agent token, so a host only
+   ever sees its own proxies). Each change gets a new generation number.
+2. It checks the CA and runs `frpc verify` on the candidate. A rejected candidate never touches the running frpc.
+3. It keeps the working files and replaces `frpc.toml` (and the CA, if it changed) atomically. It hot-reloads frpc
+   through frpc's admin API, so proxies that did not change, including the primary visitor's, keep running. frpc
+   only reloads proxies, so a changed frps address, token or CA is applied by restarting frpc instead.
+4. It confirms the change from frpc's live status: every desired proxy must be registered with frps (`running`) and
+   no retired one may remain. Only then does it report the generation as applied.
+5. If frpc refuses the candidate or does not confirm it within 20 seconds, the agent puts the working configuration
+   back, reloads it, reports **Failed** with the reason (no credentials), and retries after a minute or as soon as a
+   newer change arrives.
+
+The admin API listens on `127.0.0.1:9097` only and requires a password the installer generates
+(`/var/lib/ccproxy-exit/agent/frpc-admin.secret`, root-only; `C:\ProgramData\CCProxyExit\state\frpc-admin.secret` on
+Windows). The agent takes the frpc paths and its restart command from the service definition the installer wrote
+(`--frpc`, `--frpc-config`, `--frpc-ca`, `--frpc-restart-cmd`), never from the control plane:
+`/opt/ccproxy-exit/libexec/frpc-ctl restart` runs `systemctl restart ccproxy-exit-frpc` on Linux or
+`launchctl kickstart -k system/com.ccproxy.exit.frpc` on macOS; on Windows the agent stops and starts the
+`CCProxyExitFrpc` task.
+
+**One-time upgrade.** Run the host's install command once (macOS, Linux or Windows; the command is unchanged). It
+installs the new agent, adds the admin block to `frpc.toml`, and restarts frpc once. From then on the agent picks up
+any mapping that is still pending, including assignments made before the upgrade, and every later change. Public-entry
+hosts are unaffected. Start a rollout with a single existing XTCP exit.
+
+**Recognizing a confirmed port.** The host page's **Proxies** list shows a badge per port, and **Sync** shows the
+host's state:
+
+| Badge | Meaning |
+| --- | --- |
+| Ready | frpc registered this port's proxy with frps (live status) **and** sing-box confirmed the configuration with this port's listener. A client can use it now. |
+| Pending | Not confirmed yet: the agent has not fetched or confirmed the change, or sing-box has not confirmed the new listener. Fetching the file or a successful reload alone never makes a port ready. |
+| Failed | The agent tried the current change and frpc refused it or did not register it. The message names the exit host and the proxy. The previous mappings stay in use; the agent retries. |
+| Agent upgrade needed | The host's agent predates mapping sync. Run the install command once. |
+
+On the exit host, `grep xtcp: /var/log/ccproxy-exit/agent.log` (macOS), `journalctl -u ccproxy-exit-agent | grep
+xtcp:` (Linux) or the agent log on Windows shows lines such as `frpc confirmed generation 42 (hot reload):
+ccproxy-208-direct, ccproxy-208-direct-20444 registered`.
+
+**Restoring the previous working configuration.** The agent restores it by itself when a change fails. To do it by
+hand (for example to undo the one-time upgrade): stop the agent, copy `frpc-confirmed.toml` (the last confirmed
+generation) or `frpc-previous.toml` (the file found before the agent first changed it) from the agent's state directory
+(`/var/lib/ccproxy-exit/agent/`, `C:\ProgramData\CCProxyExit\state\`) over `frpc.toml`, with the matching
+`frpc-confirmed-ca.pem` / `frpc-previous-ca.pem` over `frp-ca.pem`, and restart frpc. While the control plane still
+wants other mappings, a running agent applies them again; release or reassign the users first, or leave the agent
+stopped.
 
 ### macmini-sg-208 acceptance (Apple Silicon, XTCP)
 
@@ -279,7 +332,8 @@ must be able to reach the chosen TLS 1.3 server. A manual handshake target can b
 ## Tests
 
 ```bash
-(cd egress/agent && go test ./...)                     # Go agent unit tests (37)
+(cd egress/agent && go test ./...)                     # Go agent unit tests
+(cd egress/agent && CCPROXY_FRP_DIR=/path/to/frp_0.72.0_<os>_<arch> go test -run TestXTCPWithRealFrp .)   # real frps/frpc
 egress/agent/build.sh --verify                         # reproducible cross-build, 6 targets
 cd controlplane && go test ./...                       # installer routes, rendering, digests, console (no database)
 TEST_DATABASE_URL=postgresql://... python3 -m unittest tests.test_installer tests.test_go_agent -v
@@ -295,6 +349,10 @@ TEST_DATABASE_URL=postgresql://... python3 -m unittest tests.test_installer test
 | `controlplane/test/usage/run-e2e.sh` (Docker) | The pinned linux sing-box 1.14.4 package as an exit with the current agent, real sing-box clients: exact bytes per device for two devices of one user and a second user on one egress IPv4, short-lived and long connections, control-plane outage with retries, reload during a live connection, exit restart, the previous agent release on a second exit, and an account deleted and recreated with the same names within the hour | Linux arm64 (Docker Desktop) |
 | `tests/test_go_agent.py` | The compiled agent against the Go control plane and PostgreSQL: SIGHUP reload, Windows-style restart reload, rejected version, `http://` refused | macOS arm64 native |
 | `tests/test_installer.py` (XTCP) | Admin settings validated, secrets write-only (also in the audit log), generated secret key shown once, agent routes scoped to the calling host (204 for a public-entry host); installer on an XTCP host: macOS upgrade from a public-entry install, `frpc.toml` 0600, frpc plist and unit, back to the public entry removes frpc, digest mismatch and rejected configuration change nothing. With genuine archives, the real frpc 0.72.0 is downloaded, checked and verifies the configuration | macOS native; Linux mode with stubbed `systemctl` |
+| `egress/agent/xtcp_test.go` | XTCP mapping sync against an in-process frpc (admin API with basic auth, proxy-only reload as in frpc 0.72, registration errors): a fresh install confirmed without reload, a legacy frpc adopted with one restart, a second port hot-reloaded without restarting the primary proxy, an unchanged generation never reloaded, reassignment and release, frps refusing a proxy (restore and retry), a reload that loads nothing, `frpc verify` rejection and a malformed CA never touching frpc (no secret in the message), frps settings change → restart, agent restart and offline catch-up to the latest generation, an old control plane (404) and a public-entry host, options from the installation only, the Windows restart command | macOS arm64 native (`-race`); `go vet` for all six targets |
+| `egress/agent/xtcp_real_test.go` | The same sync against the official frps and frpc 0.72.0 run natively (`CCPROXY_FRP_DIR`): adoption, hot reload confirmed by live status, a refused registration restored, release; and the installer's `add_frpc_admin` producing byte-identical files to the agent | macOS arm64 native with frp 0.72.0 darwin-arm64 |
+| `controlplane/xtcp_sync_test.go` (PostgreSQL) | Generations follow assign, reassign, release and XTCP re-enable (never reused); 304 for an unchanged generation; readiness only with a confirmed registration and a confirmed sing-box listener; pending after fetch or reload alone; stale and unpublished acknowledgements ignored; failure message names the exit without credentials; another host can neither fetch nor acknowledge; additive schema | macOS arm64 native, PostgreSQL 14 |
+| `controlplane/test/shared-egress/run-e2e.sh` (Docker) | Real frps/frpc 0.72.0 and sing-box 1.14.4 with this checkout's control plane and agent: a legacy single-port XTCP host shows `upgrade_needed`, the agent adopts it, a second shared user's port becomes ready with no installer rerun while the first visitor stays connected (time to ready printed), scoped keys, frps refusing a proxy reported and retried, release removes the retired proxy, an agent restart reloads nothing | Linux arm64 (Docker Desktop) |
 | `tests/test_installer.py` | Against the Go control plane over real TLS: agent downloads need a host token (not the admin token) and match the digest; exit status 22/7 of the copied command; rendered `exit.sh` end to end for macOS (plists checked with `plutil`) and Linux mode (`--iface` units), rerun, uninstall, wrong token, digest mismatch, redirect plus `.curlrc` `location`, untrusted root. With `CCPROXY_TEST_SINGBOX_ARCHIVES`, the genuine sing-box 1.14.4 archives are downloaded and verified | macOS native with BSD tools; Linux mode with stubbed `systemctl` |
 | `controlplane/test/xtcp/run-e2e.sh` (Docker, systemd, internet) | Real Go control plane and PostgreSQL, real frps 0.72.0 on TCP 7003 (TLS, test CA, token), a systemd Linux exit host installed with the copied command (agent, sing-box and frpc from GitHub, verified), real frpc visitor (QUIC) and sing-box client from the aifree client config. Checks: registration, services enabled at boot, proxied IPv4 equals the exit host's egress IPv4, 20 MB transfer with no bytes at frps, blocked hole punching fails with no relay, recovery after a container reboot, uninstall | Linux arm64 (Docker Desktop) |
 | `controlplane/test/shared-egress/run-e2e.sh` (Docker, internet) | Real Go control plane on a PostgreSQL test schema, real sing-box 1.14.4 and frp 0.72.0 (pinned, verified). Two shared users on a public-entry host and two on an XTCP host reach their own listeners concurrently from the same egress IPv4; a single-port XTCP host upgrades with its first mapping and visitor unchanged; a user's visitor key does not open another user's proxy; allocation conflicts and mode switches; releasing or revoking one holder leaves the other working | Linux arm64 (Docker Desktop) |

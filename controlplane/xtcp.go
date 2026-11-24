@@ -24,6 +24,8 @@ package main
 //	DELETE /admin/hosts/{name}/xtcp     back to the public-entry transport
 //	GET    /install/xtcp/frpc.toml      (host agent token) rendered frpc configuration, or 204 for a public-entry host
 //	GET    /install/xtcp/ca.pem         (host agent token) the CA that verifies frps, or 204
+//	GET    /agent/xtcp                  (host agent token) the desired frpc configuration for agent sync, or 204
+//	                                    (xtcp_sync.go: generations, confirmation and readiness)
 //	GET    /admin/users/{name}/xtcp-visitor  the visitor configuration for one user's mapping (scoped secret key;
 //	                                    the frps token stays write-only and is read from FRP_AUTH_TOKEN)
 //
@@ -69,7 +71,7 @@ const xtcpDeliverySQL = `ALTER TABLE host_xtcp ADD COLUMN IF NOT EXISTS delivere
 const xtcpMappingSecretSQL = `ALTER TABLE host_xtcp ADD COLUMN IF NOT EXISTS mapping_secret text NOT NULL DEFAULT ''`
 
 func ensureXTCPTable(ctx context.Context, tx pgx.Tx) error {
-	for _, statement := range []string{xtcpTableSQL, xtcpDeliverySQL, xtcpMappingSecretSQL} {
+	for _, statement := range append([]string{xtcpTableSQL, xtcpDeliverySQL, xtcpMappingSecretSQL}, xtcpSyncSQL...) {
 		if _, err := tx.Exec(ctx, statement); err != nil {
 			return err
 		}
@@ -117,12 +119,15 @@ type xtcpSettings struct {
 	// Fingerprint of the frpc configuration last served to the host's installer, and when.
 	DeliveredSHA256 string   `db:"delivered_sha256"`
 	DeliveredAt     *float64 `db:"delivered_at"`
+	// The configuration last published to the host's agent (xtcp_sync.go).
+	DesiredGeneration int64  `db:"desired_generation"`
+	DesiredSHA256     string `db:"desired_sha256"`
 }
 
 func getXTCP(ctx context.Context, db database, hostName string) (xtcpSettings, bool, error) {
 	x, err := rowOf[xtcpSettings](ctx, db, `SELECT host, server_addr, server_port, tls_server_name, ca_pem,
-		auth_token, proxy_name, secret_key, mapping_secret, local_port, updated_at, delivered_sha256, delivered_at
-		FROM host_xtcp WHERE host = $1`, hostName)
+		auth_token, proxy_name, secret_key, mapping_secret, local_port, updated_at, delivered_sha256, delivered_at,
+		desired_generation, desired_sha256 FROM host_xtcp WHERE host = $1`, hostName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return x, false, nil
 	}
@@ -440,6 +445,7 @@ func (a *api) xtcpRoutes() {
 	a.bind("DELETE /admin/hosts/{name}/xtcp", "admin", "xtcp_disable", a.xtcpDelete)
 	a.bind("GET /install/xtcp/frpc.toml", "agent", "", a.xtcpFrpcConfig)
 	a.bind("GET /install/xtcp/ca.pem", "agent", "", a.xtcpCA)
+	a.bind("GET /agent/xtcp", "agent", "", a.agentXTCP)
 	a.bind("GET /admin/users/{name}/xtcp-visitor", "admin", "", a.xtcpVisitor)
 }
 
@@ -459,15 +465,18 @@ func (a *api) xtcpGet(r *apiRequest) (response, error) {
 	return response{status: 200, body: view}, err
 }
 
-// xtcpFullView adds the mappings (without secrets) and whether the host's installer has fetched the current
-// configuration: "current", "outdated" (run the install command again), or "unknown" (never fetched since tracking).
+// xtcpFullView adds the mappings (without secrets, each with its sync status), the host's sync state with its
+// agent (xtcp_sync.go), and whether the host's installer has fetched the current configuration: "current",
+// "outdated" (run the install command again), or "unknown" (never fetched since tracking).
 func xtcpFullView(ctx context.Context, db database, x xtcpSettings) (object, error) {
 	view := xtcpView(x)
 	mappings, err := xtcpMappings(ctx, db, x)
 	if err != nil {
 		return nil, err
 	}
-	view["mappings"] = mappings
+	if err := xtcpSyncView(ctx, db, x, mappings, view); err != nil {
+		return nil, err
+	}
 	view["delivered_at"] = x.DeliveredAt
 	switch {
 	case x.DeliveredSHA256 == "":
