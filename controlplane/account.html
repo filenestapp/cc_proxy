@@ -1,0 +1,1139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#14213D">
+<title>用户中心 · aifree</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2314213D'/%3E%3Ccircle cx='28' cy='38' r='10.5' fill='none' stroke='%23F2643D' stroke-width='6'/%3E%3Cpath d='M39 30V49' fill='none' stroke='%23F2643D' stroke-width='6' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='18' r='4.5' fill='%23F2643D'/%3E%3C/svg%3E">
+<style>
+:root{
+  --navy:#14213D;--navy-deep:#0B1426;--navy-2:#1D2D50;
+  --coral:#F2643D;--coral-deep:#C2451F;
+  --paper:#FAF7F2;--mist:#E7E3DA;--slate:#5B6577;--paper-text:#F5F1EA;--muted-on-navy:#B9C0CE;
+  --ok:#1F7A4D;--ok-bg:#E5F3EA;--warn:#8A5A00;--warn-bg:#FDF1D8;--bad:#B3261E;--bad-bg:#FBE9E7;
+  --font:"Inter",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC","Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --wrap:1040px;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;min-height:100vh;display:flex;flex-direction:column;background:var(--paper);color:var(--navy);font-family:var(--font);font-size:16px;line-height:1.65}
+[hidden]{display:none!important}
+svg{display:block}
+a{color:var(--coral-deep);text-underline-offset:3px}
+a:hover{text-decoration-thickness:2px}
+:focus-visible{outline:3px solid var(--coral);outline-offset:3px;border-radius:4px}
+h1,h2,h3{line-height:1.25;letter-spacing:-.01em;margin:0 0 .5em}
+h1{font-size:clamp(1.5rem,3.6vw,2rem);font-weight:800}
+h2{font-size:1.2rem;font-weight:750}
+h3{font-size:1.05rem;font-weight:700}
+p{margin:0 0 1em}
+.wrap{max-width:var(--wrap);margin:0 auto;padding:0 20px;width:100%}
+.skip{position:absolute;left:-9999px;top:0;background:var(--coral);color:var(--navy);padding:8px 14px;z-index:10;font-weight:700}
+.skip:focus{left:12px;top:12px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+main:focus{outline:none}
+.mono{font-family:var(--mono);font-size:.92em}
+.num{font-variant-numeric:tabular-nums}
+.muted{color:var(--slate)}
+
+/* header */
+.top{background:var(--navy);color:var(--paper-text)}
+.nav{display:flex;align-items:center;gap:16px;min-height:64px}
+.nav .brand{display:flex;flex:none}
+.nav .actions{display:flex;gap:10px;align-items:center;margin-left:auto;min-width:0}
+.nav .who{color:var(--muted-on-navy);font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:240px}
+.linkbtn{background:none;border:0;padding:6px 4px;font:inherit;color:var(--paper-text);cursor:pointer;font-size:.95rem}
+.linkbtn:hover{text-decoration:underline}
+@media (max-width:600px){.nav .who{display:none}}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:10px 20px;border-radius:999px;font:inherit;font-weight:700;font-size:.98rem;text-decoration:none;border:2px solid transparent;line-height:1.2;white-space:nowrap;cursor:pointer}
+.btn:disabled{opacity:.55;cursor:progress}
+.btn-primary{background:var(--coral);color:var(--navy)}
+.btn-primary:hover:not(:disabled){background:#FF7A55}
+.btn-navy{background:var(--navy);color:var(--paper-text)}
+.btn-navy:hover:not(:disabled){background:var(--navy-2)}
+.btn-ghost{border-color:rgba(245,241,234,.55);color:var(--paper-text);background:none}
+.btn-ghost:hover{border-color:var(--paper-text)}
+.btn-outline{border-color:var(--navy);color:var(--navy);background:none}
+.btn-outline:hover:not(:disabled){background:var(--navy);color:var(--paper-text)}
+.btn-danger{border-color:var(--bad);color:var(--bad);background:none}
+.btn-danger:hover:not(:disabled){background:var(--bad);color:#fff}
+.btn-sm{min-height:36px;padding:6px 14px;font-size:.88rem}
+.btn-block{width:100%}
+
+/* auth */
+.auth{flex:1;padding-top:48px;padding-bottom:64px}
+.auth .card{max-width:440px;margin:0 auto}
+.card{background:#fff;border:1px solid var(--mist);border-radius:20px;padding:28px}
+.auth h1{margin-bottom:.3em}
+.auth .lead{color:var(--slate);margin-bottom:1.4em}
+.field{margin-bottom:16px}
+.field label{display:block;font-weight:600;font-size:.93rem;margin-bottom:6px}
+.field input{width:100%;min-height:46px;padding:10px 14px;border:1.5px solid #CFC9BD;border-radius:12px;font:inherit;color:var(--navy);background:#fff}
+.field input:focus{border-color:var(--navy);outline:none;box-shadow:0 0 0 3px rgba(242,100,61,.35)}
+.field .hint{font-size:.83rem;color:var(--slate);margin-top:4px}
+.alt{margin:18px 0 0;font-size:.93rem;color:var(--slate);text-align:center}
+.alt a{font-weight:600}
+.row-between{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+
+/* notices */
+.notice{border-radius:12px;padding:12px 16px;margin:0 0 16px;font-size:.94rem;border:1px solid transparent}
+.notice:empty{display:none}
+.notice.err{background:var(--bad-bg);color:var(--bad);border-color:#F2C6C1}
+.notice.ok{background:var(--ok-bg);color:var(--ok);border-color:#BFE0CC}
+.notice.info{background:#EEF1F7;color:var(--navy);border-color:#D5DBE8}
+.notice.warn{background:var(--warn-bg);color:var(--warn);border-color:#F1DCAE}
+.notice p{margin:0}
+.notice .actions{margin-top:10px;display:flex;gap:10px;flex-wrap:wrap}
+
+/* dashboard */
+.dash{flex:1;padding-top:36px;padding-bottom:64px}
+.dash-head{margin-bottom:20px}
+.dash-head p{color:var(--slate);margin:0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.grid .span{grid-column:1/-1}
+@media (max-width:820px){.grid{grid-template-columns:1fr}}
+.panel h2{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.panel .sub{color:var(--slate);font-size:.92rem;margin-top:-6px}
+dl.kv{display:grid;grid-template-columns:max-content 1fr;gap:8px 18px;margin:0 0 18px}
+dl.kv dt{color:var(--slate);font-size:.92rem}
+dl.kv dd{margin:0;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.pill{display:inline-block;font-size:.8rem;font-weight:700;padding:2px 10px;border-radius:999px;background:#EEF1F7;color:var(--navy);vertical-align:middle}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.pill.bad{background:var(--bad-bg);color:var(--bad)}
+.btns{display:flex;gap:10px;flex-wrap:wrap}
+.empty{color:var(--slate);font-size:.94rem;margin:0}
+
+.plans{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media (max-width:900px){.plans{grid-template-columns:1fr}}
+.plan{display:flex;flex-direction:column;border:1px solid var(--mist);border-radius:16px;padding:20px;background:var(--paper)}
+.plan.featured{border:2px solid var(--coral);background:#fff}
+.plan .name{font-weight:800;font-size:1.08rem;margin:0}
+.plan .desc{color:var(--slate);font-size:.9rem;margin:.3em 0 .8em;flex:1}
+.plan .price{margin:0 0 14px;display:flex;align-items:baseline;gap:6px}
+.plan .amt{font-size:1.9rem;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.plan .unit{color:var(--slate);font-size:.9rem}
+
+table.list{width:100%;border-collapse:collapse;font-size:.93rem}
+table.list th{text-align:left;font-weight:600;color:var(--slate);font-size:.85rem;padding:8px 10px;border-bottom:1px solid var(--mist)}
+table.list td{padding:10px;border-bottom:1px solid #F0ECE4;vertical-align:middle}
+table.list tr:last-child td{border-bottom:0}
+table.list td.act{text-align:right}
+@media (max-width:640px){
+  table.list thead{display:none}
+  table.list,table.list tbody,table.list tr,table.list td{display:block;width:100%}
+  table.list tr{border:1px solid var(--mist);border-radius:12px;padding:8px 12px;margin-bottom:10px}
+  table.list td{border:0;padding:4px 0;display:flex;justify-content:space-between;gap:12px;text-align:right}
+  table.list td::before{content:attr(data-label);color:var(--slate);font-size:.85rem;text-align:left}
+  table.list td.act{justify-content:flex-end}
+  table.list td.act::before{content:none}
+}
+.dl-links{display:flex;gap:10px;flex-wrap:wrap}
+
+footer{background:var(--navy-deep);color:var(--muted-on-navy);padding:24px 0;font-size:.87rem}
+footer a{color:var(--muted-on-navy)}
+footer a:hover{color:#fff}
+footer .row-between{gap:8px 20px}
+</style>
+</head>
+<body>
+<a class="skip" href="#main" data-t="skip">跳到正文</a>
+<header class="top">
+  <nav class="wrap nav" data-t-aria="nav" aria-label="账户导航">
+    <a class="brand" href="https://aifree.sg/" id="home-link" data-t-aria="home" aria-label="aifree 首页">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 64" width="125" height="40" role="img" aria-label="aifree"><rect width="64" height="64" rx="14" fill="#F2643D"/><circle cx="28" cy="38" r="10.5" fill="none" stroke="#14213D" stroke-width="6"/><path d="M39 30V49" fill="none" stroke="#14213D" stroke-width="6" stroke-linecap="round"/><circle cx="39" cy="18" r="4.5" fill="#14213D"/><g transform="translate(80 0)"><g fill="none" stroke="#F5F1EA" stroke-width="6" stroke-linecap="round"><circle cx="11" cy="37" r="8"/><path d="M19 29V45M31 29V45M43 45V20a7 7 0 0 1 7-7h3M37 29h13M59 45V38c0-5 4-9 10-9M73 37h16a8 8 0 1 0-2.34 5.66M93 37h16a8 8 0 1 0-2.34 5.66"/></g><circle cx="31" cy="17" r="4" fill="#F2643D"/></g></svg>
+    </a>
+    <div class="actions">
+      <span class="who" id="who"></span>
+      <button type="button" class="linkbtn" id="lang-toggle" lang="en">EN</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="logout" hidden data-t="logout">退出登录</button>
+    </div>
+  </nav>
+</header>
+
+<main id="main" tabindex="-1">
+  <div class="wrap" id="booting"><p class="muted" style="padding:48px 0" data-t="loading">加载中…</p></div>
+
+  <!-- signed-out views -->
+  <section class="auth wrap" id="view-login" hidden>
+    <div class="card">
+      <h1 data-t="login_title">登录</h1>
+      <p class="lead" data-t="login_lead">登录 aifree 用户中心，管理订阅、设备和账单。</p>
+      <div class="notice" role="alert" aria-live="assertive"></div>
+      <form novalidate>
+        <div class="field"><label for="login-email" data-t="email">邮箱</label><input id="login-email" name="email" type="email" autocomplete="email" required></div>
+        <div class="field"><label for="login-password" data-t="password">密码</label><input id="login-password" name="password" type="password" autocomplete="current-password" required></div>
+        <button class="btn btn-primary btn-block" type="submit" data-t="login_submit">登录</button>
+      </form>
+      <p class="alt"><a href="/account/forgot" data-nav data-t="forgot_link">忘记密码？</a></p>
+      <p class="alt"><span data-t="no_account">还没有账号？</span> <a href="/account/register" data-nav data-t="register_link">注册</a></p>
+    </div>
+  </section>
+
+  <section class="auth wrap" id="view-register" hidden>
+    <div class="card">
+      <h1 data-t="register_title">注册 aifree</h1>
+      <p class="lead" data-t="register_lead">注册后我们会发一封验证邮件。验证邮箱后才能订阅。</p>
+      <div class="notice" role="alert" aria-live="assertive"></div>
+      <form novalidate>
+        <div class="field"><label for="reg-email" data-t="email">邮箱</label><input id="reg-email" name="email" type="email" autocomplete="email" required></div>
+        <div class="field"><label for="reg-password" data-t="password">密码</label><input id="reg-password" name="password" type="password" autocomplete="new-password" minlength="8" required aria-describedby="reg-hint"><div class="hint" id="reg-hint" data-t="password_hint">至少 8 个字符。</div></div>
+        <div class="field"><label for="reg-password2" data-t="password_again">再次输入密码</label><input id="reg-password2" name="password2" type="password" autocomplete="new-password" minlength="8" required></div>
+        <button class="btn btn-primary btn-block" type="submit" data-t="register_submit">创建账号</button>
+      </form>
+      <p class="alt"><span data-t="have_account">已有账号？</span> <a href="/account/login" data-nav data-t="login_link">登录</a></p>
+      <p class="alt" style="font-size:.85rem"><span data-t="agree_prefix">注册即表示你同意</span><a href="https://aifree.sg/terms/" data-t="terms" data-site="terms">服务条款</a><span data-t="and">和</span><a href="https://aifree.sg/privacy/" data-t="privacy" data-site="privacy">隐私政策</a><span data-t="agree_suffix">。</span></p>
+    </div>
+  </section>
+
+  <section class="auth wrap" id="view-forgot" hidden>
+    <div class="card">
+      <h1 data-t="forgot_title">找回密码</h1>
+      <p class="lead" data-t="forgot_lead">输入注册邮箱，我们会发一封重置密码的邮件，链接 1 小时内有效。</p>
+      <div class="notice" role="alert" aria-live="assertive"></div>
+      <form novalidate>
+        <div class="field"><label for="forgot-email" data-t="email">邮箱</label><input id="forgot-email" name="email" type="email" autocomplete="email" required></div>
+        <button class="btn btn-primary btn-block" type="submit" data-t="forgot_submit">发送重置邮件</button>
+      </form>
+      <p class="alt"><a href="/account/login" data-nav data-t="back_login">返回登录</a></p>
+    </div>
+  </section>
+
+  <section class="auth wrap" id="view-reset" hidden>
+    <div class="card">
+      <h1 data-t="reset_title">设置新密码</h1>
+      <p class="lead" data-t="reset_lead">设置新密码后，所有设备上的登录都会失效，需要重新登录。</p>
+      <div class="notice" role="alert" aria-live="assertive"></div>
+      <form novalidate>
+        <div class="field"><label for="reset-password" data-t="new_password">新密码</label><input id="reset-password" name="password" type="password" autocomplete="new-password" minlength="8" required aria-describedby="reset-hint"><div class="hint" id="reset-hint" data-t="password_hint">至少 8 个字符。</div></div>
+        <div class="field"><label for="reset-password2" data-t="password_again">再次输入密码</label><input id="reset-password2" name="password2" type="password" autocomplete="new-password" minlength="8" required></div>
+        <button class="btn btn-primary btn-block" type="submit" data-t="reset_submit">保存新密码</button>
+      </form>
+      <p class="alt"><a href="/account/login" data-nav data-t="back_login">返回登录</a></p>
+    </div>
+  </section>
+
+  <section class="auth wrap" id="view-verify" hidden>
+    <div class="card">
+      <h1 data-t="verify_title">验证邮箱</h1>
+      <div class="notice info" role="status" aria-live="polite"></div>
+      <div class="btns" id="verify-actions" hidden>
+        <a class="btn btn-primary" href="/account" data-nav data-t="go_dashboard">进入用户中心</a>
+      </div>
+      <div class="btns" id="verify-failed" hidden>
+        <a class="btn btn-outline" href="/account" data-nav data-t="go_resend">登录后重新发送</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- signed-in dashboard -->
+  <section class="dash wrap" id="view-dash" hidden>
+    <div class="dash-head">
+      <h1 data-t="dash_title">用户中心</h1>
+      <p id="dash-email" class="mono"></p>
+    </div>
+
+    <div class="notice" id="dash-notice" role="status" aria-live="polite"></div>
+    <div class="notice warn" id="verify-banner" hidden>
+      <p data-t="unverified_banner">你的邮箱还没有验证。请打开注册时收到的验证邮件，验证后才能订阅。</p>
+      <div class="actions"><button type="button" class="btn btn-navy btn-sm" id="resend" data-t="resend">重新发送验证邮件</button></div>
+    </div>
+    <div class="notice info" id="checkout-banner" role="status" aria-live="polite" hidden></div>
+
+    <div class="grid">
+      <article class="card panel span" id="panel-sub" aria-labelledby="h-sub">
+        <h2 id="h-sub" data-t="sub_title">我的订阅</h2>
+        <div id="sub-body"><p class="empty" data-t="loading">加载中…</p></div>
+      </article>
+
+      <article class="card panel span" id="panel-plans" aria-labelledby="h-plans" hidden>
+        <h2 id="h-plans" data-t="plans_title">选择套餐</h2>
+        <p class="sub" data-t="plans_sub">按月订阅、自动续费，可随时在账单管理中取消，取消后当期结束前仍可使用。结账由 Stripe 处理。</p>
+        <div class="notice" id="plans-notice" role="alert"></div>
+        <div class="plans" id="plans"></div>
+      </article>
+
+      <article class="card panel span" aria-labelledby="h-devices">
+        <h2 id="h-devices" data-t="devices_title">我的设备</h2>
+        <p class="sub" data-t="devices_sub">用 aifree 桌面客户端登录过的设备。吊销后该设备需要重新登录。</p>
+        <div class="notice" id="devices-notice" role="alert"></div>
+        <div id="devices"><p class="empty" data-t="loading">加载中…</p></div>
+      </article>
+
+      <article class="card panel span" aria-labelledby="h-orders">
+        <h2 id="h-orders" data-t="orders_title">订单与收据</h2>
+        <div class="notice" id="orders-notice" role="alert"></div>
+        <div id="orders"><p class="empty" data-t="loading">加载中…</p></div>
+      </article>
+
+      <article class="card panel" aria-labelledby="h-download">
+        <h2 id="h-download" data-t="download_title">下载客户端</h2>
+        <p data-t="download_lead">在电脑上安装 aifree 桌面客户端，用本账号的邮箱和密码登录即可使用。</p>
+        <div class="dl-links">
+          <a class="btn btn-outline btn-sm" data-site="download#macos" href="https://aifree.sg/download/#macos">macOS</a>
+          <a class="btn btn-outline btn-sm" data-site="download#windows" href="https://aifree.sg/download/#windows">Windows</a>
+          <a class="btn btn-outline btn-sm" data-site="download#linux" href="https://aifree.sg/download/#linux">Linux</a>
+        </div>
+      </article>
+
+      <article class="card panel" aria-labelledby="h-mail">
+        <h2 id="h-mail" data-t="mail_title">企业邮箱</h2>
+        <div id="mail-body"></div>
+      </article>
+
+      <article class="card panel span" aria-labelledby="h-security">
+        <h2 id="h-security" data-t="security_title">修改密码</h2>
+        <p class="sub" data-t="security_sub">修改后，其他设备和浏览器上的登录会失效。</p>
+        <div class="notice" id="password-notice" role="alert" aria-live="assertive"></div>
+        <form id="password-form" novalidate style="max-width:440px">
+          <div class="field"><label for="pw-current" data-t="current_password">当前密码</label><input id="pw-current" type="password" autocomplete="current-password" required></div>
+          <div class="field"><label for="pw-new" data-t="new_password">新密码</label><input id="pw-new" type="password" autocomplete="new-password" minlength="8" required aria-describedby="pw-hint"><div class="hint" id="pw-hint" data-t="password_hint">至少 8 个字符。</div></div>
+          <div class="field"><label for="pw-new2" data-t="password_again">再次输入密码</label><input id="pw-new2" type="password" autocomplete="new-password" minlength="8" required></div>
+          <button class="btn btn-navy" type="submit" data-t="change_password">修改密码</button>
+        </form>
+      </article>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap row-between">
+    <span>© 2026 aifree</span>
+    <span>
+      <a data-site="terms" href="https://aifree.sg/terms/" data-t="terms">服务条款</a> ·
+      <a data-site="privacy" href="https://aifree.sg/privacy/" data-t="privacy">隐私政策</a> ·
+      <a href="mailto:support@aifree.sg">support@aifree.sg</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+"use strict";
+(function () {
+  var SITE = "https://aifree.sg";
+  var WEBMAIL = "https://mail.aifree.sg";
+  var PENDING_KEY = "aifree.pendingPlan";
+
+  var T = {
+    zh: {
+      title: "用户中心 · aifree", skip: "跳到正文", nav: "账户导航", home: "aifree 首页",
+      loading: "加载中…", logout: "退出登录", email: "邮箱", password: "密码", new_password: "新密码",
+      current_password: "当前密码", password_again: "再次输入密码", password_hint: "至少 8 个字符。",
+      login_title: "登录", login_lead: "登录 aifree 用户中心，管理订阅、设备和账单。", login_submit: "登录",
+      forgot_link: "忘记密码？", no_account: "还没有账号？", register_link: "注册",
+      register_title: "注册 aifree", register_lead: "注册后我们会发一封验证邮件。验证邮箱后才能订阅。",
+      register_submit: "创建账号", have_account: "已有账号？", login_link: "登录",
+      agree_prefix: "注册即表示你同意", terms: "服务条款", and: "和", privacy: "隐私政策", agree_suffix: "。",
+      forgot_title: "找回密码", forgot_lead: "输入注册邮箱，我们会发一封重置密码的邮件，链接 1 小时内有效。",
+      forgot_submit: "发送重置邮件", back_login: "返回登录",
+      forgot_sent: "如果该邮箱已注册，你会在几分钟内收到重置邮件。没收到请检查垃圾邮件。",
+      reset_title: "设置新密码", reset_lead: "设置新密码后，所有设备上的登录都会失效，需要重新登录。",
+      reset_submit: "保存新密码", reset_done: "密码已更新，请用新密码登录。",
+      reset_missing: "重置链接不完整。请从邮件里重新打开链接，或重新申请重置。",
+      verify_title: "验证邮箱", verifying: "正在验证…", verify_done: "邮箱已验证，现在可以订阅了。",
+      verify_missing: "验证链接不完整。请从邮件里重新打开链接。",
+      go_dashboard: "进入用户中心", go_resend: "登录后重新发送",
+      mismatch: "两次输入的密码不一致。", required: "请填写所有字段。",
+      dash_title: "用户中心",
+      unverified_banner: "你的邮箱还没有验证。请打开注册时收到的验证邮件，验证后才能订阅。",
+      resend: "重新发送验证邮件", resent: "验证邮件已发送，请查收。",
+      registered: "账号已创建。验证邮件已发到 {email}，请查收。",
+      checkout_continue: "注册或登录后继续订阅 {plan}。",
+      checkout_need_verify: "验证邮箱后才能订阅 {plan}。验证完成后回到这里继续。",
+      checkout_redirect: "正在跳转到 Stripe 结账…",
+      checkout_processing: "付款已提交，正在确认订阅，通常需要几秒钟…",
+      checkout_success: "订阅已生效。",
+      checkout_slow: "付款仍在处理中。确认后订阅会自动出现，稍后刷新本页即可。",
+      checkout_cancel: "你已取消结账，没有产生扣款。",
+      sub_title: "我的订阅", sub_none: "你还没有订阅。选择下面的套餐开始使用。",
+      plan: "套餐", status: "状态", period: "当前周期", renews: "续费日期", ends: "到期日期",
+      team_seat: "团队席位", proxy: "独享 IP", egress_ip: "出口 IP",
+      manage_billing: "管理订阅与账单", manage_hint: "升级、降级、更换支付方式或取消订阅，都在 Stripe 账单页面完成。",
+      cancel_note: "已取消自动续费，{date} 之后不再扣款，到期前仍可使用。",
+      past_due_note: "最近一次扣款失败。请在账单管理中更新支付方式，否则宽限期结束后订阅会停止。",
+      pending_note: "订阅正在开通中。",
+      plans_title: "选择套餐", plans_sub: "按月订阅、自动续费，可随时在账单管理中取消，取消后当期结束前仍可使用。结账由 Stripe 处理。",
+      plans_unavailable: "套餐暂时无法加载，请稍后刷新。",
+      subscribe: "订阅", per_month: "元 / 月", featured: "用量更高",
+      plan_desc_standard: "AI 团队版标准席位，附带一个独享住宅 IP。席位付款后人工开通。",
+      plan_desc_premium: "AI 团队版高级席位，用量额度更高，附带一个独享住宅 IP。席位付款后人工开通。",
+      plan_desc_residential_ip: "已经有自己的 AI 账号，只需要一个干净稳定的出口。付款后自动分配。",
+      plan_name_residential_ip: "海外住宅 IP",
+      devices_title: "我的设备", devices_sub: "用 aifree 桌面客户端登录过的设备。吊销后该设备需要重新登录。",
+      devices_none: "还没有设备登录过。", device: "设备", platform: "系统", added: "首次登录", last_seen: "最近在线",
+      revoke: "吊销", revoked: "已吊销", revoke_confirm: "吊销设备“{name}”？该设备会立即退出登录。",
+      device_revoked: "设备“{name}”已吊销。", active_state: "使用中",
+      orders_title: "订单与收据", orders_none: "还没有订单。", order_date: "日期", amount: "金额", receipt: "收据", view_receipt: "查看收据",
+      download_title: "下载客户端", download_lead: "在电脑上安装 aifree 桌面客户端，用本账号的邮箱和密码登录即可使用。",
+      mail_title: "企业邮箱", mail_none: "订阅后可以申请一个 @aifree.sg 邮箱，由我们人工开通，开通后会邮件通知你。",
+      mail_address: "地址", open_webmail: "打开网页邮箱", mail_disabled_note: "邮箱已停用。重新订阅后会恢复。",
+      mail_hint: "用开通时收到的初始密码登录网页邮箱。",
+      security_title: "修改密码", security_sub: "修改后，其他设备和浏览器上的登录会失效。", change_password: "修改密码",
+      password_changed: "密码已修改。",
+      never: "—", unavailable: "暂时无法加载，请稍后刷新。",
+      s_pending: "开通中", s_active: "生效中", s_past_due: "待付款", s_cancelled: "已结束", s_expired: "已过期",
+      o_pending: "待支付", o_paid: "已支付", o_failed: "失败", o_refunded: "已退款",
+      m_active: "正常", m_disabled: "已停用",
+      p_ready: "已分配", p_waiting_ip: "等待分配", p_none: "未分配",
+      t_todo: "等待开通", t_done: "已开通",
+      e_invalid_email: "邮箱格式不正确。",
+      e_weak_password: "密码至少需要 8 个字符。",
+      e_email_taken: "这个邮箱已经注册过了，请直接登录或找回密码。",
+      e_invalid_credentials: "邮箱或密码不正确。",
+      e_invalid_token: "链接已失效或已经用过。请重新申请。",
+      e_email_unverified: "请先验证邮箱，再进行此操作。",
+      e_suspended: "账号已被停用。如有疑问请联系 support@aifree.sg。",
+      e_rate_limited: "操作太频繁，请稍后再试。",
+      e_already_verified: "邮箱已经验证过了。",
+      e_csrf: "页面已过期，请刷新后重试。",
+      e_subscription_exists: "你已经有一个订阅。如需更换套餐，请使用“管理订阅与账单”。",
+      e_no_active_subscription: "当前没有有效订阅。",
+      e_no_entitlement: "当前订阅不包含此项服务。",
+      e_quota_exceeded: "已达到数量上限。",
+      e_address_taken: "这个邮箱地址已被占用。",
+      e_invalid_local_part: "邮箱名不符合要求。",
+      e_mail_unavailable: "邮件服务暂时不可用，请稍后再试。",
+      e_stripe_unavailable: "支付服务暂时不可用，请稍后再试。",
+      e_unauthorized: "登录已过期，请重新登录。",
+      e_network: "网络连接失败，请检查网络后重试。",
+      e_server: "服务暂时出错，请稍后再试。",
+      e_generic: "请求没有成功，请检查输入后重试。"
+    },
+    en: {
+      title: "Account · aifree", skip: "Skip to content", nav: "Account navigation", home: "aifree home",
+      loading: "Loading…", logout: "Sign out", email: "Email", password: "Password", new_password: "New password",
+      current_password: "Current password", password_again: "Repeat password", password_hint: "At least 8 characters.",
+      login_title: "Sign in", login_lead: "Sign in to manage your subscription, devices and billing.", login_submit: "Sign in",
+      forgot_link: "Forgot password?", no_account: "No account yet?", register_link: "Create one",
+      register_title: "Create your aifree account", register_lead: "We'll send a verification email. You need a verified email to subscribe.",
+      register_submit: "Create account", have_account: "Already registered?", login_link: "Sign in",
+      agree_prefix: "By creating an account you agree to the ", terms: "Terms", and: " and ", privacy: "Privacy Policy", agree_suffix: ".",
+      forgot_title: "Reset your password", forgot_lead: "Enter your email and we'll send a reset link. It works for one hour.",
+      forgot_submit: "Send reset email", back_login: "Back to sign in",
+      forgot_sent: "If that email is registered, a reset link is on its way. Check your spam folder if it doesn't arrive.",
+      reset_title: "Choose a new password", reset_lead: "After the change, every device is signed out and needs to sign in again.",
+      reset_submit: "Save new password", reset_done: "Password updated. Sign in with your new password.",
+      reset_missing: "This reset link is incomplete. Open it again from the email or request a new one.",
+      verify_title: "Verify your email", verifying: "Verifying…", verify_done: "Your email is verified. You can subscribe now.",
+      verify_missing: "This verification link is incomplete. Open it again from the email.",
+      go_dashboard: "Go to your account", go_resend: "Sign in to resend",
+      mismatch: "The passwords don't match.", required: "Please fill in every field.",
+      dash_title: "Your account",
+      unverified_banner: "Your email isn't verified yet. Open the verification email we sent when you registered; you need it before subscribing.",
+      resend: "Resend verification email", resent: "Verification email sent.",
+      registered: "Account created. We sent a verification email to {email}.",
+      checkout_continue: "Create an account or sign in to continue with {plan}.",
+      checkout_need_verify: "Verify your email to subscribe to {plan}, then come back here.",
+      checkout_redirect: "Redirecting to Stripe checkout…",
+      checkout_processing: "Payment received. Confirming your subscription, this usually takes a few seconds…",
+      checkout_success: "Your subscription is active.",
+      checkout_slow: "Your payment is still processing. The subscription will appear once confirmed; refresh this page in a minute.",
+      checkout_cancel: "Checkout cancelled. You have not been charged.",
+      sub_title: "Subscription", sub_none: "You don't have a subscription yet. Pick a plan below to get started.",
+      plan: "Plan", status: "Status", period: "Current period", renews: "Renews on", ends: "Ends on",
+      team_seat: "Team seat", proxy: "Dedicated IP", egress_ip: "Exit IP",
+      manage_billing: "Manage subscription & billing", manage_hint: "Upgrade, downgrade, change your card or cancel on the Stripe billing page.",
+      cancel_note: "Auto-renewal is off. You won't be charged after {date} and can keep using the service until then.",
+      past_due_note: "Your last payment failed. Update your payment method in billing, or the subscription stops after the grace period.",
+      pending_note: "Your subscription is being set up.",
+      plans_title: "Choose a plan", plans_sub: "Monthly, renews automatically. Cancel any time in billing and keep access until the period ends. Checkout is handled by Stripe.",
+      plans_unavailable: "Plans couldn't be loaded. Please refresh in a moment.",
+      subscribe: "Subscribe", per_month: "CNY / month", featured: "Higher usage",
+      plan_desc_standard: "A standard AI team seat plus one dedicated residential IP. Seat set up by hand after payment.",
+      plan_desc_premium: "A premium AI team seat with higher usage, plus one dedicated residential IP. Seat set up by hand after payment.",
+      plan_desc_residential_ip: "Already have your own AI account? Just a clean, stable exit. Assigned automatically after payment.",
+      plan_name_residential_ip: "Residential IP",
+      devices_title: "Devices", devices_sub: "Devices signed in with the aifree desktop client. Revoking signs that device out.",
+      devices_none: "No devices have signed in yet.", device: "Device", platform: "System", added: "First sign-in", last_seen: "Last seen",
+      revoke: "Revoke", revoked: "Revoked", revoke_confirm: "Revoke “{name}”? It will be signed out right away.",
+      device_revoked: "“{name}” has been revoked.", active_state: "Active",
+      orders_title: "Orders & receipts", orders_none: "No orders yet.", order_date: "Date", amount: "Amount", receipt: "Receipt", view_receipt: "View receipt",
+      download_title: "Download the client", download_lead: "Install the aifree desktop client and sign in with this account's email and password.",
+      mail_title: "Business email", mail_none: "Subscribers can request an @aifree.sg mailbox. We set it up by hand and email you when it's ready.",
+      mail_address: "Address", open_webmail: "Open webmail", mail_disabled_note: "This mailbox is disabled. It comes back when you resubscribe.",
+      mail_hint: "Sign in to webmail with the initial password you received.",
+      security_title: "Change password", security_sub: "Other devices and browsers will be signed out.", change_password: "Change password",
+      password_changed: "Password changed.",
+      never: "—", unavailable: "Couldn't load this right now. Please refresh in a moment.",
+      s_pending: "Setting up", s_active: "Active", s_past_due: "Payment due", s_cancelled: "Ended", s_expired: "Expired",
+      o_pending: "Pending", o_paid: "Paid", o_failed: "Failed", o_refunded: "Refunded",
+      m_active: "Active", m_disabled: "Disabled",
+      p_ready: "Assigned", p_waiting_ip: "Waiting for an IP", p_none: "Not assigned",
+      t_todo: "Being set up", t_done: "Ready",
+      e_invalid_email: "That email address doesn't look right.",
+      e_weak_password: "Passwords need at least 8 characters.",
+      e_email_taken: "This email is already registered. Sign in or reset your password.",
+      e_invalid_credentials: "Wrong email or password.",
+      e_invalid_token: "This link has expired or was already used. Request a new one.",
+      e_email_unverified: "Verify your email first.",
+      e_suspended: "This account is suspended. Contact support@aifree.sg if you think this is a mistake.",
+      e_rate_limited: "Too many attempts. Please wait a while and try again.",
+      e_already_verified: "Your email is already verified.",
+      e_csrf: "This page is out of date. Refresh and try again.",
+      e_subscription_exists: "You already have a subscription. Use “Manage subscription & billing” to change plans.",
+      e_no_active_subscription: "You don't have an active subscription.",
+      e_no_entitlement: "Your subscription doesn't include this.",
+      e_quota_exceeded: "You've reached the limit.",
+      e_address_taken: "That address is already taken.",
+      e_invalid_local_part: "That mailbox name isn't allowed.",
+      e_mail_unavailable: "The mail service is unavailable. Please try again later.",
+      e_stripe_unavailable: "Payments are temporarily unavailable. Please try again later.",
+      e_unauthorized: "Your session has expired. Please sign in again.",
+      e_network: "Network error. Check your connection and try again.",
+      e_server: "Something went wrong on our side. Please try again later.",
+      e_generic: "That didn't work. Check what you entered and try again."
+    }
+  };
+
+  var linkToken = { verify: "", reset: "" };
+  function captureLinkToken() {
+    var page = location.pathname.replace(/\/+$/, "").replace(/^\/account\//, "");
+    var q = new URLSearchParams(location.search);
+    if ((page !== "verify" && page !== "reset") || !q.has("token")) return;
+    linkToken[page] = q.get("token") || "";
+    q.delete("token");
+    var rest = q.toString();
+    history.replaceState(null, "", location.pathname + (rest ? "?" + rest : ""));
+  }
+
+  var state = { lang: "zh", me: null, csrf: "", view: "", plans: null, polling: false };
+
+  function pickLang() {
+    var q = new URLSearchParams(location.search).get("lang");
+    if (q === "en" || q === "zh") return q;
+    try { var s = localStorage.getItem("aifree.lang"); if (s === "en" || s === "zh") return s; } catch (e) {}
+    return "zh";
+  }
+  function t(key, vars) {
+    var s = (T[state.lang] && T[state.lang][key]);
+    if (s == null) s = T.zh[key];
+    if (s == null) s = key;
+    if (vars) s = s.replace(/\{(\w+)\}/g, function (_, k) { return vars[k] == null ? "" : String(vars[k]); });
+    return s;
+  }
+  function applyLang() {
+    document.documentElement.lang = state.lang === "en" ? "en" : "zh-CN";
+    document.title = t("title");
+    document.querySelectorAll("[data-t]").forEach(function (el) { el.textContent = t(el.getAttribute("data-t")); });
+    document.querySelectorAll("[data-t-aria]").forEach(function (el) { el.setAttribute("aria-label", t(el.getAttribute("data-t-aria"))); });
+    var base = SITE + (state.lang === "en" ? "/en/" : "/");
+    document.getElementById("home-link").href = base;
+    document.querySelectorAll("[data-site]").forEach(function (el) {
+      var parts = el.getAttribute("data-site").split("#");
+      el.href = base + parts[0] + "/" + (parts[1] ? "#" + parts[1] : "");
+    });
+    var toggle = document.getElementById("lang-toggle");
+    toggle.textContent = state.lang === "en" ? "中文" : "EN";
+    toggle.lang = state.lang === "en" ? "zh-CN" : "en";
+    toggle.setAttribute("aria-label", state.lang === "en" ? "切换到中文" : "Switch to English");
+  }
+
+  // ---------- API ----------
+  function ApiError(status, code, message) { this.status = status; this.code = code || ""; this.message = message || ""; }
+  function api(method, path, body) {
+    var headers = { "Accept": "application/json" };
+    var init = { method: method, headers: headers, credentials: "same-origin", cache: "no-store" };
+    if (method !== "GET" && method !== "HEAD") {
+      headers["Content-Type"] = "application/json";
+      headers["X-CSRF-Token"] = state.csrf || "";
+      init.body = JSON.stringify(body || {});
+    }
+    return fetch(path, init).then(function (res) {
+      if (res.status === 204) return null;
+      return res.text().then(function (text) {
+        var data = null;
+        if (text) { try { data = JSON.parse(text); } catch (e) { data = null; } }
+        if (!res.ok) {
+          var code = data && data.code;
+          if (!code && res.status === 401) code = "unauthorized";
+          throw new ApiError(res.status, code, data && data.error);
+        }
+        return data;
+      });
+    }, function () { throw new ApiError(0, "network"); });
+  }
+  function errorText(err) {
+    if (err instanceof ApiError) {
+      if (err.code && T.zh["e_" + err.code]) return t("e_" + err.code);
+      if (err.status >= 500) return t("e_server");
+    }
+    return t("e_generic");
+  }
+  // Contract endpoints may return the object bare or wrapped in a key.
+  function unwrap(data, key) {
+    if (data && typeof data === "object" && !Array.isArray(data) && Object.prototype.hasOwnProperty.call(data, key)) return data[key];
+    return data;
+  }
+
+  // ---------- helpers ----------
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      var v = attrs[k];
+      if (v == null || v === false) return;
+      if (k === "text") node.textContent = v;
+      else if (k === "class") node.className = v;
+      else if (k.slice(0, 2) === "on") node.addEventListener(k.slice(2), v);
+      else node.setAttribute(k, v === true ? "" : v);
+    });
+    (children || []).forEach(function (c) { if (c != null) node.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
+    return node;
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); return node; }
+  function notice(node, kind, text) {
+    node.className = "notice" + (kind ? " " + kind : "");
+    node.textContent = text || "";
+  }
+  function fmtDate(sec, withTime) {
+    if (!sec) return t("never");
+    var opts = withTime ? { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" } : { year: "numeric", month: "short", day: "numeric" };
+    return new Date(sec * 1000).toLocaleString(state.lang === "en" ? "en-GB" : "zh-CN", opts);
+  }
+  function fmtMoney(amount, currency) {
+    var value = (amount || 0) / 100;
+    var cur = (currency || "cny").toUpperCase();
+    var n = value.toLocaleString(state.lang === "en" ? "en-GB" : "zh-CN", { minimumFractionDigits: value % 1 ? 2 : 0, maximumFractionDigits: 2 });
+    if (cur === "CNY") return state.lang === "en" ? "CNY " + n : n + " 元";
+    return cur + " " + n;
+  }
+  function planName(code, fallback) {
+    if (code === "residential_ip") return t("plan_name_residential_ip");
+    if (code === "standard") return "Standard";
+    if (code === "premium") return "Premium";
+    return fallback || code || "";
+  }
+  function platformName(p) {
+    return { macos: "macOS", darwin: "macOS", windows: "Windows", linux: "Linux", ios: "iOS", android: "Android" }[String(p || "").toLowerCase()] || p || t("never");
+  }
+  function pill(label, kind) { return el("span", { class: "pill" + (kind ? " " + kind : ""), text: label }); }
+  function busy(button, on) { if (button) button.disabled = !!on; }
+  function pendingPlan(value) {
+    try {
+      if (value === undefined) {
+        var raw = localStorage.getItem(PENDING_KEY);
+        if (!raw) return "";
+        var p = JSON.parse(raw);
+        if (!p || Date.now() - p.at > 86400000) { localStorage.removeItem(PENDING_KEY); return ""; }
+        return p.plan;
+      }
+      if (value) localStorage.setItem(PENDING_KEY, JSON.stringify({ plan: value, at: Date.now() }));
+      else localStorage.removeItem(PENDING_KEY);
+    } catch (e) {}
+    return "";
+  }
+  var PLAN_CODES = { standard: 1, premium: 1, residential_ip: 1 };
+
+  // ---------- routing ----------
+  var VIEWS = ["login", "register", "forgot", "reset", "verify", "dash"];
+  function show(view) {
+    state.view = view;
+    document.getElementById("booting").hidden = true;
+    VIEWS.forEach(function (v) { document.getElementById("view-" + v).hidden = v !== view; });
+    var signedIn = !!state.me;
+    document.getElementById("logout").hidden = !signedIn;
+    document.getElementById("who").textContent = signedIn ? state.me.customer.email : "";
+    var main = document.getElementById("main");
+    if (document.activeElement && document.activeElement !== document.body) main.focus({ preventScroll: true });
+    window.scrollTo(0, 0);
+  }
+  function navigate(path, replace) {
+    var url = path;
+    if (state.lang === "en" && new URLSearchParams(location.search).get("lang") === "en" && path.indexOf("lang=") < 0) {
+      url += (path.indexOf("?") < 0 ? "?" : "&") + "lang=en";
+    }
+    history[replace ? "replaceState" : "pushState"](null, "", url);
+    return route();
+  }
+  function route() { return Promise.resolve(routeView()); }
+  function routeView() {
+    var path = location.pathname.replace(/\/+$/, "") || "/account";
+    var q = new URLSearchParams(location.search);
+    var sub = path.replace(/^\/account/, "").replace(/^\//, "");
+    switch (sub) {
+      case "login": return state.me ? navigate("/account", true) : showForm("login");
+      case "register": return state.me ? navigate("/account", true) : showForm("register");
+      case "forgot": return showForm("forgot");
+      case "reset": return showReset(linkToken.reset);
+      case "verify": var token = linkToken.verify; linkToken.verify = ""; return runVerify(token);
+      case "checkout": return checkoutIntent(q.get("plan"));
+      default:
+        if (!state.me) return showForm("login");
+        return showDashboard();
+    }
+  }
+  function showForm(view, message, kind) {
+    var section = document.getElementById("view-" + view);
+    var box = section.querySelector(".notice");
+    notice(box, message ? (kind || "info") : "", message || "");
+    var plan = pendingPlan();
+    if (!message && plan && (view === "login" || view === "register")) notice(box, "info", t("checkout_continue", { plan: planName(plan) }));
+    show(view);
+    var first = section.querySelector("input");
+    if (first && !first.value) first.focus({ preventScroll: true });
+  }
+
+  // ---------- session ----------
+  function loadMe() {
+    return api("GET", "/v1/account/me").then(function (data) {
+      state.me = data; state.csrf = data.csrf || state.csrf;
+      if (data.customer && !localStorageLang() && data.customer.locale === "en" && !new URLSearchParams(location.search).get("lang")) {
+        state.lang = "en"; applyLang();
+      }
+      return data;
+    }, function (err) {
+      if (err.status === 401 && err.code === "unauthorized") { state.me = null; state.csrf = ""; return null; }
+      throw err;
+    });
+  }
+  function localStorageLang() { try { return localStorage.getItem("aifree.lang"); } catch (e) { return null; } }
+  function signedOut(message) {
+    state.me = null; state.csrf = "";
+    navigate("/account/login", true);
+    if (message) notice(document.querySelector("#view-login .notice"), "err", message);
+  }
+  function handleAuthError(err) {
+    if (err instanceof ApiError && err.status === 401 && err.code === "unauthorized") { signedOut(t("e_unauthorized")); return true; }
+    return false;
+  }
+
+  // ---------- forms ----------
+  function formValues(form) {
+    var out = {};
+    Array.prototype.forEach.call(form.querySelectorAll("input"), function (i) { out[i.name || i.id] = i.value; });
+    return out;
+  }
+  function bindForm(view, handler) {
+    var section = document.getElementById("view-" + view);
+    var form = section.querySelector("form");
+    var box = section.querySelector(".notice");
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var values = formValues(form);
+      var empty = Array.prototype.some.call(form.querySelectorAll("input[required]"), function (i) { return !i.value; });
+      if (empty) { notice(box, "err", t("required")); return; }
+      var button = form.querySelector("button[type=submit]");
+      busy(button, true); notice(box, "", "");
+      Promise.resolve(handler(values, box, form)).catch(function (err) {
+        notice(box, "err", errorText(err));
+      }).then(function () { busy(button, false); });
+    });
+  }
+
+  bindForm("login", function (v) {
+    return api("POST", "/v1/account/login", { email: v.email.trim(), password: v.password }).then(function (data) {
+      state.csrf = data.csrf;
+      return loadMe();
+    }).then(function () { document.getElementById("login-password").value = ""; return afterSignIn(); });
+  });
+
+  bindForm("register", function (v, box) {
+    if (v.password !== v.password2) { notice(box, "err", t("mismatch")); return; }
+    return api("POST", "/v1/account/register", { email: v.email.trim(), password: v.password, locale: state.lang === "en" ? "en" : "zh-CN" })
+      .then(function (data) {
+        return loadMe().then(function () {
+          document.getElementById("reg-password").value = ""; document.getElementById("reg-password2").value = "";
+          return navigate("/account", true).then(function () {
+            var msg = t("registered", { email: data.customer.email });
+            if (pendingPlan()) msg += " " + t("checkout_need_verify", { plan: planName(pendingPlan()) });
+            notice(document.getElementById("dash-notice"), "ok", msg);
+          });
+        });
+      });
+  });
+
+  bindForm("forgot", function (v, box) {
+    return api("POST", "/v1/account/password/forgot", { email: v.email.trim() }).then(function () {
+      notice(box, "ok", t("forgot_sent"));
+    });
+  });
+
+  bindForm("reset", function (v, box) {
+    if (v.password !== v.password2) { notice(box, "err", t("mismatch")); return; }
+    return api("POST", "/v1/account/password/reset", { token: linkToken.reset, new_password: v.password }).then(function () {
+      linkToken.reset = "";
+      document.getElementById("reset-password").value = ""; document.getElementById("reset-password2").value = "";
+      state.me = null; state.csrf = "";
+      navigate("/account/login", true);
+      notice(document.querySelector("#view-login .notice"), "ok", t("reset_done"));
+    });
+  });
+
+  function showReset(token) {
+    var form = document.querySelector("#view-reset form");
+    form.hidden = !token;
+    showForm("reset", token ? "" : t("reset_missing"), "err");
+  }
+
+  function runVerify(token) {
+    var box = document.querySelector("#view-verify .notice");
+    var ok = document.getElementById("verify-actions"), failed = document.getElementById("verify-failed");
+    ok.hidden = true; failed.hidden = true;
+    show("verify");
+    if (!token) { notice(box, "err", t("verify_missing")); failed.hidden = false; return Promise.resolve(); }
+    notice(box, "info", t("verifying"));
+    return api("POST", "/v1/account/verify", { token: token }).then(function () {
+      notice(box, "ok", t("verify_done"));
+      ok.hidden = false;
+      return loadMe().then(function () {
+        if (state.me && pendingPlan()) return navigate("/account/checkout?plan=" + encodeURIComponent(pendingPlan()), true);
+      }).catch(function () {});
+    }, function (err) {
+      notice(box, "err", errorText(err));
+      failed.hidden = false;
+    });
+  }
+
+  function afterSignIn() {
+    var plan = pendingPlan();
+    if (plan) return navigate("/account/checkout?plan=" + encodeURIComponent(plan), true);
+    return navigate("/account", true);
+  }
+
+  // ---------- checkout ----------
+  function checkoutIntent(plan) {
+    if (!PLAN_CODES[plan]) return navigate("/account", true);
+    pendingPlan(plan);
+    if (!state.me) return navigate("/account/register", true);
+    return navigate("/account", true).then(function () {
+      if (!state.me.customer.email_verified) {
+        notice(document.getElementById("dash-notice"), "warn", t("checkout_need_verify", { plan: planName(plan) }));
+        return;
+      }
+      pendingPlan("");
+      return startCheckout(plan, null, document.getElementById("dash-notice"));
+    });
+  }
+  function startCheckout(plan, button, box) {
+    busy(button, true);
+    notice(box, "info", t("checkout_redirect"));
+    return api("POST", "/v1/account/checkout", { plan: plan }).then(function (data) {
+      if (!data || !data.url) throw new ApiError(500, "");
+      location.assign(data.url);
+    }).catch(function (err) {
+      busy(button, false);
+      if (handleAuthError(err)) return;
+      notice(box, "err", errorText(err));
+    });
+  }
+  function openPortal(button) {
+    busy(button, true);
+    var box = document.getElementById("dash-notice");
+    return api("POST", "/v1/account/portal", {}).then(function (data) {
+      if (!data || !data.url) throw new ApiError(500, "");
+      location.assign(data.url);
+    }).catch(function (err) {
+      busy(button, false);
+      if (handleAuthError(err)) return;
+      notice(box, "err", errorText(err));
+    });
+  }
+  function checkoutReturn() {
+    var q = new URLSearchParams(location.search);
+    var result = q.get("checkout");
+    if (!result) return;
+    q.delete("checkout");
+    var rest = q.toString();
+    history.replaceState(null, "", location.pathname + (rest ? "?" + rest : ""));
+    var banner = document.getElementById("checkout-banner");
+    banner.hidden = false;
+    if (result === "cancel") { notice(banner, "info", t("checkout_cancel")); return; }
+    if (result !== "success") { banner.hidden = true; return; }
+    pendingPlan("");
+    notice(banner, "info", t("checkout_processing"));
+    state.polling = true;
+    var started = Date.now();
+    (function poll() {
+      api("GET", "/v1/account/subscription").then(function (data) {
+        var sub = unwrap(data, "subscription");
+        if (sub && (sub.status === "active" || sub.status === "past_due")) {
+          state.polling = false;
+          notice(banner, "ok", t("checkout_success"));
+          renderSubscription(sub);
+          return;
+        }
+        next();
+      }, function (err) {
+        if (handleAuthError(err)) { state.polling = false; return; }
+        next();
+      });
+      function next() {
+        if (Date.now() - started >= 30000) { state.polling = false; notice(banner, "warn", t("checkout_slow")); return; }
+        setTimeout(poll, 2000);
+      }
+    })();
+  }
+
+  // ---------- dashboard ----------
+  function showDashboard() {
+    var me = state.me;
+    document.getElementById("dash-email").textContent = me.customer.email;
+    document.getElementById("verify-banner").hidden = !!me.customer.email_verified;
+    ["dash-notice", "devices-notice", "plans-notice", "password-notice"].forEach(function (id) { notice(document.getElementById(id), "", ""); });
+    var cb = document.getElementById("checkout-banner");
+    if (!state.polling) cb.hidden = true;
+    show("dash");
+    renderSubscription(me.subscription);
+    renderMailbox(me.mailbox);
+    loadDevices();
+    loadOrders();
+    api("GET", "/v1/account/subscription").then(function (data) {
+      var sub = unwrap(data, "subscription");
+      if (sub !== undefined) renderSubscription(sub);
+    }, function (err) { handleAuthError(err); });
+    checkoutReturn();
+    return Promise.resolve();
+  }
+
+  function subKind(status) {
+    return { active: "ok", past_due: "warn", pending: "", cancelled: "bad", expired: "bad" }[status] || "";
+  }
+  function renderSubscription(sub) {
+    state.lastSub = sub;
+    var body = clear(document.getElementById("sub-body"));
+    var open = sub && (sub.status === "pending" || sub.status === "active" || sub.status === "past_due");
+    document.getElementById("panel-plans").hidden = !!open;
+    if (!open) loadPlans();
+    if (!sub) { body.appendChild(el("p", { class: "empty", text: t("sub_none") })); return; }
+
+    var kv = el("dl", { class: "kv" });
+    function row(label, value) { kv.appendChild(el("dt", { text: label })); kv.appendChild(el("dd", null, [value])); }
+    row(t("plan"), planName(sub.plan));
+    row(t("status"), pill(t("s_" + sub.status), subKind(sub.status)));
+    if (sub.current_period_end) {
+      row(t("period"), el("span", { class: "num", text: fmtDate(sub.current_period_start) + " – " + fmtDate(sub.current_period_end) }));
+      if (open) row(sub.cancel_at_period_end ? t("ends") : t("renews"), el("span", { class: "num", text: fmtDate(sub.current_period_end) }));
+    }
+    if (sub.team_seat) row(t("team_seat"), pill(t("t_" + sub.team_seat), sub.team_seat === "done" ? "ok" : "warn"));
+    if (sub.proxy && sub.proxy.state) {
+      row(t("proxy"), pill(t("p_" + sub.proxy.state), sub.proxy.state === "ready" ? "ok" : sub.proxy.state === "waiting_ip" ? "warn" : ""));
+      if (sub.proxy.egress_ip) row(t("egress_ip"), el("span", { class: "mono", text: sub.proxy.egress_ip }));
+    }
+    body.appendChild(kv);
+
+    if (sub.status === "past_due") body.appendChild(el("div", { class: "notice warn" }, [el("p", { text: t("past_due_note") })]));
+    else if (sub.status === "pending") body.appendChild(el("div", { class: "notice info" }, [el("p", { text: t("pending_note") })]));
+    if (open && sub.cancel_at_period_end) body.appendChild(el("div", { class: "notice info" }, [el("p", { text: t("cancel_note", { date: fmtDate(sub.current_period_end) }) })]));
+
+    var btn = el("button", { type: "button", class: "btn btn-navy", text: t("manage_billing") });
+    btn.addEventListener("click", function () { openPortal(btn); });
+    body.appendChild(el("div", { class: "btns" }, [btn]));
+    body.appendChild(el("p", { class: "muted", style: "font-size:.88rem;margin:10px 0 0", text: t("manage_hint") }));
+  }
+
+  function loadPlans() {
+    var box = document.getElementById("plans-notice");
+    if (state.plans) { renderPlans(state.plans); return; }
+    api("GET", "/v1/account/plans").then(function (data) {
+      state.plans = unwrap(data, "plans") || [];
+      notice(box, "", "");
+      renderPlans(state.plans);
+    }, function () {
+      clear(document.getElementById("plans"));
+      notice(box, "err", t("plans_unavailable"));
+    });
+  }
+  function renderPlans(plans) {
+    var wrap = clear(document.getElementById("plans"));
+    var box = document.getElementById("plans-notice");
+    plans.forEach(function (p) {
+      var featured = p.code === "premium";
+      var btn = el("button", { type: "button", class: "btn btn-block " + (featured ? "btn-primary" : "btn-outline"), text: t("subscribe") + " " + planName(p.code, p.name) });
+      btn.addEventListener("click", function () {
+        if (!state.me.customer.email_verified) { notice(box, "err", t("e_email_unverified")); return; }
+        startCheckout(p.code, btn, box);
+      });
+      var amount = (p.amount || 0) / 100;
+      wrap.appendChild(el("article", { class: "plan" + (featured ? " featured" : "") }, [
+        el("h3", { class: "name", text: planName(p.code, p.name) }),
+        el("p", { class: "desc", text: T.zh["plan_desc_" + p.code] ? t("plan_desc_" + p.code) : "" }),
+        el("p", { class: "price" }, [
+          el("span", { class: "amt", text: String(amount) }),
+          el("span", { class: "unit", text: (p.currency || "cny").toLowerCase() === "cny" ? t("per_month") : (p.currency || "").toUpperCase() + " / " + (p.interval || "month") })
+        ]),
+        btn
+      ]));
+    });
+  }
+
+  function loadDevices() {
+    var wrap = document.getElementById("devices"), box = document.getElementById("devices-notice");
+    api("GET", "/v1/account/devices").then(function (data) {
+      renderDevices(unwrap(data, "devices") || []);
+    }, function (err) {
+      if (handleAuthError(err)) return;
+      clear(wrap).appendChild(el("p", { class: "empty", text: err.status === 404 || err.status >= 500 || err.status === 0 ? t("unavailable") : errorText(err) }));
+    });
+  }
+  function renderDevices(devices) {
+    var wrap = clear(document.getElementById("devices"));
+    var box = document.getElementById("devices-notice");
+    if (!devices.length) { wrap.appendChild(el("p", { class: "empty", text: t("devices_none") })); return; }
+    var tbody = el("tbody");
+    devices.forEach(function (d) {
+      var action;
+      if (d.active === false) action = pill(t("revoked"), "");
+      else {
+        action = el("button", { type: "button", class: "btn btn-danger btn-sm", text: t("revoke") });
+        action.addEventListener("click", function () {
+          if (!window.confirm(t("revoke_confirm", { name: d.name }))) return;
+          busy(action, true);
+          api("POST", "/v1/account/devices/" + encodeURIComponent(d.name) + "/revoke", {}).then(function () {
+            notice(box, "ok", t("device_revoked", { name: d.name }));
+            loadDevices();
+          }, function (err) {
+            busy(action, false);
+            if (handleAuthError(err)) return;
+            notice(box, "err", errorText(err));
+          });
+        });
+      }
+      tbody.appendChild(el("tr", null, [
+        el("td", { "data-label": t("device") }, [el("strong", { text: d.name })]),
+        el("td", { "data-label": t("platform"), text: platformName(d.platform) }),
+        el("td", { "data-label": t("added"), class: "num", text: fmtDate(d.created_at) }),
+        el("td", { "data-label": t("last_seen"), class: "num", text: fmtDate(d.last_seen_at, true) }),
+        el("td", { class: "act" }, [action])
+      ]));
+    });
+    wrap.appendChild(el("table", { class: "list" }, [
+      el("thead", null, [el("tr", null, [
+        el("th", { scope: "col", text: t("device") }), el("th", { scope: "col", text: t("platform") }),
+        el("th", { scope: "col", text: t("added") }), el("th", { scope: "col", text: t("last_seen") }),
+        el("th", { scope: "col" }, [el("span", { class: "sr", text: t("revoke") })])
+      ])]),
+      tbody
+    ]));
+  }
+
+  function loadOrders() {
+    var wrap = document.getElementById("orders");
+    api("GET", "/v1/account/orders").then(function (data) {
+      renderOrders(unwrap(data, "orders") || []);
+    }, function (err) {
+      if (handleAuthError(err)) return;
+      clear(wrap).appendChild(el("p", { class: "empty", text: t("unavailable") }));
+    });
+  }
+  function orderKind(s) { return { paid: "ok", pending: "warn", failed: "bad", refunded: "" }[s] || ""; }
+  function renderOrders(orders) {
+    var wrap = clear(document.getElementById("orders"));
+    if (!orders.length) { wrap.appendChild(el("p", { class: "empty", text: t("orders_none") })); return; }
+    var tbody = el("tbody");
+    orders.forEach(function (o) {
+      var receipt = o.receipt_url && /^https:\/\//.test(o.receipt_url)
+        ? el("a", { href: o.receipt_url, target: "_blank", rel: "noopener noreferrer", text: t("view_receipt") })
+        : document.createTextNode(t("never"));
+      tbody.appendChild(el("tr", null, [
+        el("td", { "data-label": t("order_date"), class: "num", text: fmtDate(o.paid_at || o.created_at) }),
+        el("td", { "data-label": t("amount"), class: "num", text: fmtMoney(o.amount, o.currency) }),
+        el("td", { "data-label": t("status") }, [pill(t("o_" + o.status), orderKind(o.status))]),
+        el("td", { "data-label": t("receipt"), class: "act" }, [receipt])
+      ]));
+    });
+    wrap.appendChild(el("table", { class: "list" }, [
+      el("thead", null, [el("tr", null, [
+        el("th", { scope: "col", text: t("order_date") }), el("th", { scope: "col", text: t("amount") }),
+        el("th", { scope: "col", text: t("status") }), el("th", { scope: "col", class: "act", style: "text-align:right", text: t("receipt") })
+      ])]),
+      tbody
+    ]));
+  }
+
+  function renderMailbox(mb) {
+    var body = clear(document.getElementById("mail-body"));
+    if (!mb) { body.appendChild(el("p", { class: "empty", text: t("mail_none") })); return; }
+    var kv = el("dl", { class: "kv" });
+    kv.appendChild(el("dt", { text: t("mail_address") }));
+    kv.appendChild(el("dd", { class: "mono", text: mb.address }));
+    kv.appendChild(el("dt", { text: t("status") }));
+    kv.appendChild(el("dd", null, [pill(t("m_" + mb.status), mb.status === "active" ? "ok" : "bad")]));
+    body.appendChild(kv);
+    if (mb.status === "disabled") { body.appendChild(el("p", { class: "muted", text: t("mail_disabled_note") })); return; }
+    var url = mb.webmail_url && /^https:\/\//.test(mb.webmail_url) ? mb.webmail_url : WEBMAIL;
+    body.appendChild(el("p", { class: "muted", style: "font-size:.9rem", text: t("mail_hint") }));
+    body.appendChild(el("a", { class: "btn btn-outline btn-sm", href: url, target: "_blank", rel: "noopener noreferrer", text: t("open_webmail") }));
+  }
+
+  // ---------- dashboard actions ----------
+  document.getElementById("resend").addEventListener("click", function () {
+    var btn = this, box = document.getElementById("dash-notice");
+    busy(btn, true);
+    api("POST", "/v1/account/verify/resend", {}).then(function () {
+      notice(box, "ok", t("resent"));
+    }, function (err) {
+      if (handleAuthError(err)) return;
+      if (err.code === "already_verified") { document.getElementById("verify-banner").hidden = true; loadMe(); }
+      notice(box, err.code === "already_verified" ? "ok" : "err", errorText(err));
+    }).then(function () { busy(btn, false); });
+  });
+
+  document.getElementById("password-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var box = document.getElementById("password-notice");
+    var cur = document.getElementById("pw-current"), n1 = document.getElementById("pw-new"), n2 = document.getElementById("pw-new2");
+    if (!cur.value || !n1.value || !n2.value) { notice(box, "err", t("required")); return; }
+    if (n1.value !== n2.value) { notice(box, "err", t("mismatch")); return; }
+    var btn = this.querySelector("button[type=submit]");
+    busy(btn, true);
+    api("POST", "/v1/account/password", { current_password: cur.value, new_password: n1.value }).then(function () {
+      cur.value = n1.value = n2.value = "";
+      notice(box, "ok", t("password_changed"));
+    }, function (err) {
+      if (handleAuthError(err)) return;
+      notice(box, "err", errorText(err));
+    }).then(function () { busy(btn, false); });
+  });
+
+  document.getElementById("logout").addEventListener("click", function () {
+    var btn = this;
+    busy(btn, true);
+    api("POST", "/v1/account/logout", {}).catch(function () {}).then(function () {
+      busy(btn, false);
+      state.me = null; state.csrf = ""; state.plans = null;
+      navigate("/account/login");
+    });
+  });
+
+  document.getElementById("lang-toggle").addEventListener("click", function () {
+    state.lang = state.lang === "en" ? "zh" : "en";
+    try { localStorage.setItem("aifree.lang", state.lang); } catch (e) {}
+    var q = new URLSearchParams(location.search);
+    if (q.has("lang")) { q.set("lang", state.lang); history.replaceState(null, "", location.pathname + "?" + q.toString()); }
+    applyLang();
+    if (state.view === "dash") {
+      renderSubscription(state.lastSub !== undefined ? state.lastSub : state.me.subscription);
+      renderMailbox(state.me.mailbox);
+      if (state.plans) renderPlans(state.plans);
+      loadDevices(); loadOrders();
+    }
+  });
+
+  document.addEventListener("click", function (ev) {
+    var a = ev.target.closest && ev.target.closest("a[data-nav]");
+    if (!a || ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    ev.preventDefault();
+    navigate(a.getAttribute("href"));
+  });
+  window.addEventListener("popstate", function () { route(); });
+
+  // ---------- boot ----------
+  // Verify and reset links carry a one-time token. Move it into memory and out of the
+  // address bar before the first request, so it never reaches a Referer header,
+  // browser history or a shoulder-surfer after a failed attempt.
+  captureLinkToken();
+  state.lang = pickLang();
+  applyLang();
+  loadMe().then(route, function (err) {
+    document.getElementById("booting").hidden = false;
+    document.querySelector("#booting p").textContent = errorText(err);
+  });
+})();
+</script>
+</body>
+</html>
