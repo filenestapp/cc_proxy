@@ -37,7 +37,7 @@ func run(ctx context.Context, args []string) error {
 	cmd := args[0]
 	flags := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	dsn := flags.String("db", os.Getenv("DATABASE_URL"), "PostgreSQL URL (defaults to DATABASE_URL)")
-	var settingsPath, adminName, listen, certFile, keyFile string
+	var settingsPath, adminName, listen, certFile, keyFile, publicURL string
 	var port int
 	var trusted []string
 	switch cmd {
@@ -50,6 +50,7 @@ func run(ctx context.Context, args []string) error {
 		flags.IntVar(&port, "port", 8443, "listen port")
 		flags.StringVar(&certFile, "tls-cert", "", "TLS certificate file")
 		flags.StringVar(&keyFile, "tls-key", "", "TLS private key file")
+		flags.StringVar(&publicURL, "public-url", os.Getenv("CP_PUBLIC_URL"), "public HTTPS URL used in exit-host install commands (defaults to CP_PUBLIC_URL or https://cp.aifree.sg)")
 		flags.Func("trusted-proxy", "trusted reverse proxy address or CIDR, repeatable", func(value string) error {
 			trusted = append(trusted, value)
 			return nil
@@ -74,6 +75,13 @@ func run(ctx context.Context, args []string) error {
 	}
 	if (certFile == "") != (keyFile == "") {
 		return errors.New("--tls-cert and --tls-key must be supplied together")
+	}
+	if cmd == "serve" {
+		var err error
+		publicURL, err = controlPlanePublicURL(publicURL)
+		if err != nil {
+			return err
+		}
 	}
 
 	openCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -110,7 +118,7 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	}
 	trusted = append(trusted, strings.Split(os.Getenv("CP_TRUSTED_PROXIES"), ",")...)
-	return serve(ctx, s, net.JoinHostPort(listen, strconv.Itoa(port)), certFile, keyFile, trusted)
+	return serve(ctx, s, net.JoinHostPort(listen, strconv.Itoa(port)), certFile, keyFile, publicURL, trusted)
 }
 
 func initialize(ctx context.Context, s *store, path, name string) error {
@@ -155,7 +163,7 @@ func initialize(ctx context.Context, s *store, path, name string) error {
 	return nil
 }
 
-func serve(ctx context.Context, s *store, address, cert, key string, trusted []string) error {
+func serve(ctx context.Context, s *store, address, cert, key, publicURL string, trusted []string) error {
 	admin := os.Getenv("CP_ADMIN_TOKEN")
 	if admin == "" {
 		var hasAdmin bool
@@ -177,7 +185,7 @@ func serve(ctx context.Context, s *store, address, cert, key string, trusted []s
 	defer listener.Close()
 
 	httpd := &http.Server{
-		Handler: newAPI(s, admin, os.Getenv("CP_PROBE_TOKEN"), proxies), ReadHeaderTimeout: 5 * time.Second,
+		Handler: newAPIWithPublicURL(s, admin, os.Getenv("CP_PROBE_TOKEN"), proxies, publicURL), ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout: 20 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second,
 	}
 	workerCtx, cancel := context.WithCancel(ctx)
@@ -186,9 +194,15 @@ func serve(ctx context.Context, s *store, address, cert, key string, trusted []s
 		defer close(done)
 		s.runAlerts(workerCtx)
 	}()
+	billingDone := make(chan struct{})
+	go func() {
+		defer close(billingDone)
+		s.runSubscriptionExpiry(workerCtx)
+	}()
 	defer func() {
 		cancel()
 		<-done
+		<-billingDone
 	}()
 
 	fmt.Printf("control plane listening on %s\n", listener.Addr())

@@ -84,7 +84,8 @@ CREATE TABLE IF NOT EXISTS customers (
     email_verified_at double precision,
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
     locale text NOT NULL DEFAULT '',
-    created_at double precision NOT NULL
+    created_at double precision NOT NULL,
+    stripe_customer_id text UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS customer_sessions (
