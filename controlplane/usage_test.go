@@ -627,7 +627,7 @@ func TestUsageLegacyNamesThatCannotBeToldApartStayUnresolved(t *testing.T) {
 	if hosts := r["hosts"].([]any); len(hosts) != 1 || hosts[0].(map[string]any)["unresolved_upload"] != float64(7) {
 		t.Fatalf("host summary: %v", hosts)
 	}
-	// An unknown credential is no evidence either: it falls back to the names and the hour.
+	// An unknown credential leaves the name-matched bytes unresolved.
 	unknown := strings.Repeat("ab", 32)
 	if _, out := e.report(e.hk, usageBody("c-hk", 3, usageBase, "", dev{name: "alice/mac", cred: unknown, up: 1})); fmt.Sprint(out["unresolved"]) != "[alice/mac]" {
 		t.Fatalf("an unknown credential must not pick a device: %v", out)
@@ -670,5 +670,23 @@ func TestUsageCredentialsMustMatchTheirNamesAndExit(t *testing.T) {
 	users := cfg["inbounds"].([]any)[0].(map[string]any)["users"].([]any)
 	if users[0].(map[string]any)["name"] != "alice/mac" {
 		t.Fatalf("rendered VLESS user name changed: %v", users[0])
+	}
+}
+
+func TestUsageUnknownCredentialDoesNotCountForTheOnlyMatchingName(t *testing.T) {
+	e := newUsageEnv(t)
+	e.fetchConfig(e.hk)
+	id := e.deviceID("alice", "mac")
+	unrecorded := strings.Repeat("ab", 32)
+	code, out := e.report(e.hk, usageBody("review-hk", 1, usageBase, "",
+		dev{name: "alice/mac", cred: unrecorded, up: 7, down: 3}))
+	if code != 200 || fmt.Sprint(out["unresolved"]) != "[alice/mac]" {
+		t.Fatalf("unknown credential must remain unresolved: HTTP %d %v", code, out)
+	}
+	if up, down, ambiguous := e.deviceBytes(id); up != 0 || down != 0 || !ambiguous {
+		t.Fatalf("device totals: %d/%d ambiguous=%v, want 0/0 ambiguous=true", up, down, ambiguous)
+	}
+	if _, unresolved := e.hostCounters("hk"); unresolved != [2]int64{7, 3} {
+		t.Fatalf("unresolved bytes on hk: %v, want [7 3]", unresolved)
 	}
 }

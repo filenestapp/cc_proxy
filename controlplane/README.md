@@ -156,13 +156,12 @@ IDs, so the names alone cannot say which device moved a byte. The agent therefor
 VLESS UUID behind each connection. It takes the UUID from the config file only after the running sing-box proves it
 loaded that file (its Clash API lists the file's confirmation marker, checked within one sing-box instance). The
 control plane records the hash of every credential it serves, so a delayed batch lands on the original device, even
-when both accounts existed in the same hour. The UUID itself never leaves the exit. The rendered server config does
-not change, so ETags and agents are unaffected.
+when both accounts existed in the same hour. Usage reports carry the credential hash. The server configuration
+keeps its existing VLESS user names and ETags.
 
-A report entry without a known hash, such as one from before the running config could be proved, is matched by
-names and time. It goes to a device only if exactly one device served under those names on that exit existed before
-the reported hour ended, allowing 5 minutes of clock difference. Otherwise the bytes are counted on the exit as
-unresolved, not on any device, and each candidate device shows that hour as incomplete.
+A name-only report entry goes to a device when exactly one device served under those names on that exit existed
+before the reported hour ended, allowing 5 minutes of clock difference. With multiple candidates or an unrecognized
+credential, the bytes are counted as unresolved on the exit, and each candidate device shows that hour as incomplete.
 
 **Period boundaries.** Bytes count in the UTC hour in which the exit observed them, and Singapore periods are made of
 whole UTC hours. A long connection's traffic is split at each update, which arrives every 250 ms. A connection that
@@ -174,7 +173,7 @@ disconnect counts in the hour in which it was recovered.
 | Status | Meaning |
 | --- | --- |
 | Measured | A collector covered the device; 0 B is a measured zero |
-| Incomplete | Measured, with the reason listed: collection started during the period; sing-box ended while the collector was away (`gap`); more than 1000 connections closed during a disconnection (`overflow`); a reload cut live connections, so up to 250 ms of each is not counted (`cut`); traffic reported under its names could not be told apart from a recreated device's (`unresolved`) |
+| Incomplete | Measured, with the reason listed: collection started during the period; sing-box ended while the collector was away (`gap`); more than 1000 connections closed during a disconnection (`overflow`); a reload cut live connections, so up to 250 ms of each is not counted (`cut`); traffic reported under its names could not be attributed to a device (`unresolved`) |
 | Not measured | No collector covered the device, for example on an exit whose agent does not report usage, or before history began |
 
 **Integrity.** An exit can add traffic only under its own name and only for devices its configuration carried

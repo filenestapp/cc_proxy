@@ -13,10 +13,10 @@ package main
 // recreated with the same names in the same hour. The rendered server configuration is unchanged; usage_devices
 // keeps the names each ID had, so history survives deletion.
 //
-// Without a credential. A report entry without a known credential hash resolves only when exactly one device this
-// host served under those names could have existed during the reported hour (it was created before the hour ended,
-// with usageClockMargin for clock differences). With two candidates the bytes stay unresolved on the host and every
-// candidate's hour is marked incomplete; they are never guessed onto either device.
+// Without a credential. A name-only report entry resolves only when exactly one device this host served under
+// those names could have existed during the reported hour. The lookup allows usageClockMargin for clock differences.
+// With multiple candidates or an unrecognized credential, the bytes stay unresolved on the host and the candidate
+// hours are marked incomplete.
 //
 // Scope. Each host writes only rows keyed by its own name, and only for devices that its configuration carried
 // (usage_served and usage_credentials, recorded when the host fetches its configuration). Names the host was never
@@ -360,20 +360,21 @@ func (r usageResolver) resolve(d usageDeviceInput, hour int64) (usageOutcome, []
 		}
 		return usageResolved, []int64{identity.ID}
 	}
-	// No credential, or one this host was never recorded serving: only the names and the hour are evidence.
+	// Use the name and hour to find plausible devices. An unrecognized credential cannot confirm a device.
 	var plausible []int64
 	for _, identity := range r.byName[d.Name] {
 		if identity.CreatedAt < float64(hour+3600+usageClockMargin) {
 			plausible = append(plausible, identity.ID)
 		}
 	}
-	switch len(plausible) {
-	case 0:
+	switch {
+	case len(plausible) == 0:
 		return usageRejected, nil
-	case 1:
+	case len(plausible) == 1 && d.Credential == "":
 		return usageResolved, plausible
+	default:
+		return usageUnresolved, plausible
 	}
-	return usageUnresolved, plausible
 }
 
 func (s *store) usageResolver(ctx context.Context, tx pgx.Tx, host string, entries []usageDeviceInput) (usageResolver, error) {
@@ -655,8 +656,8 @@ func (r *usageRow) classify() {
 		r.Reasons = append(r.Reasons, "more than 1000 connections closed while the collector was disconnected")
 	}
 	if r.Ambiguous {
-		r.Reasons = append(r.Reasons, "an exit reported traffic under this device's names in an hour when another device "+
-			"had the same names; it is counted as unresolved on the exit, not on either device")
+		r.Reasons = append(r.Reasons, "an exit reported traffic under this device's names without enough evidence "+
+			"to identify the device; the bytes are counted as unresolved on the exit")
 	}
 	if r.Cut > 0 {
 		r.Reasons = append(r.Reasons, fmt.Sprintf("%d connection(s) were cut by a sing-box reload; the last 250 ms of each is not counted", r.Cut))
