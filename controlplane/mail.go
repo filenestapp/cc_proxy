@@ -124,15 +124,7 @@ func (m *cloudMailConnection) login(ctx context.Context) (string, error) {
 }
 
 func (m *cloudMailSender) loadAccount(ctx context.Context) error {
-	var response struct {
-		Code int `json:"code"`
-		Data struct {
-			List []struct {
-				AccountID int64  `json:"accountId"`
-				Email     string `json:"email"`
-			} `json:"list"`
-		} `json:"data"`
-	}
+	var response cloudMailResponse
 	status, err := m.request(ctx, http.MethodGet, "/api/account/list?size=100", nil, m.token, &response)
 	if err != nil {
 		return err
@@ -143,8 +135,24 @@ func (m *cloudMailSender) loadAccount(ctx context.Context) error {
 	if response.Code != 200 {
 		return errors.New("cloud-mail account lookup was rejected")
 	}
-	for _, account := range response.Data.List {
-		if strings.EqualFold(account.Email, m.email) {
+	type senderAccount struct {
+		AccountID int64  `json:"accountId"`
+		Email     string `json:"email"`
+	}
+	var accounts []senderAccount
+	if bytes.HasPrefix(response.Data, []byte("{")) {
+		var page struct {
+			List []senderAccount `json:"list"`
+		}
+		if err := json.Unmarshal(response.Data, &page); err != nil {
+			return err
+		}
+		accounts = page.List
+	} else if err := json.Unmarshal(response.Data, &accounts); err != nil {
+		return err
+	}
+	for _, account := range accounts {
+		if account.AccountID > 0 && strings.EqualFold(account.Email, m.email) {
 			m.accountID = account.AccountID
 			return nil
 		}
