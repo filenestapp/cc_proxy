@@ -3,17 +3,13 @@ name: exit-agent
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ["egress/agent/**", "controlplane/install/**", "controlplane/installer*.go", ".github/workflows/exit-agent.yml"]
-  pull_request:
-    paths: ["egress/agent/**", "controlplane/install/**", "controlplane/installer*.go", ".github/workflows/exit-agent.yml"]
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
