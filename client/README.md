@@ -38,7 +38,7 @@ cd src-tauri && npx @tauri-apps/cli@2.12.6 build --bundles app    # macOS；Wind
 
 The desktop app shows the control plane URL, username, password, and optional device name at sign-in. The home screen shows the tunnel state, connection control, verified public exit IP, account, and device. While connected, the app checks its public IPv4 over HTTPS through the active exit using ident.me or ipify.
 
-Use **Language** in the header to choose **System**, **English**, or **Simplified Chinese**. System is the default. The app uses the first supported system language and falls back to English. The app remembers language and appearance choices across restarts.
+Use the globe and flag in the header to choose **System**, **English**, or **Simplified Chinese**. Use the adjacent appearance icon to choose **System**, **Light**, or **Dark**. System is the default for both. The app uses the first supported system language and falls back to English. It remembers both choices across restarts.
 
 The system tray icon shows connection status. Close the window to keep the app and tunnel running in a supported tray. Select **Open CC Proxy** to bring the window back or **Quit CC Proxy** to exit and stop the tunnel. The macOS and Windows hover tooltip shows the current status and verified public exit IP. On Linux, open the tray menu for this information.
 
