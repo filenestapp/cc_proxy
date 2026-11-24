@@ -154,15 +154,34 @@ func getHTTP(t *testing.T, h http.Handler, path, token, host string) (int, []byt
 	return rec.Code, body
 }
 
-func TestConfiguredPublicURLDrivesInstallCommands(t *testing.T) {
+func TestInstallCommandsDefaultToConfiguredPublicURL(t *testing.T) {
 	h := newAPIWithPublicURL(nil, testAdminToken, "", nil, "https://cp.aifree.sg")
-	code, body := getHTTP(t, h, "/admin/install-commands?cp=https://wrong.example&iface=eth1", testAdminToken, customerHost)
+	code, body := getHTTP(t, h, "/admin/install-commands?iface=eth1", testAdminToken, customerHost)
 	if code != 404 {
 		t.Fatalf("customer host served admin route: %d %s", code, body)
 	}
-	code, body = getHTTP(t, h, "/admin/install-commands?cp=https://wrong.example&iface=eth1", testAdminToken, controlPlaneHost)
-	if code != 200 || !bytes.Contains(body, []byte("https://cp.aifree.sg/install/exit.sh")) || bytes.Contains(body, []byte("wrong.example")) {
+	code, body = getHTTP(t, h, "/admin/install-commands?iface=eth1", testAdminToken, controlPlaneHost)
+	if code != 200 || !bytes.Contains(body, []byte("https://cp.aifree.sg/install/exit.sh")) {
 		t.Fatalf("install commands did not use configured public URL: %d %s", code, body)
+	}
+}
+
+func TestInstallCommandsAcceptHTTPSOverride(t *testing.T) {
+	h := newAPIWithPublicURL(nil, testAdminToken, "", nil, "https://cp.aifree.sg")
+	code, body := getHTTP(t, h, "/admin/install-commands?cp=https://ccproxy.macmini.sg/&iface=eth1", testAdminToken, controlPlaneHost)
+	if code != 200 || !bytes.Contains(body, []byte("https://ccproxy.macmini.sg/install/exit.sh")) || bytes.Contains(body, []byte("cp.aifree.sg")) {
+		t.Fatalf("install commands did not use HTTPS override: %d %s", code, body)
+	}
+	if code, _ := getHTTP(t, h, "/admin/install-commands?cp=http://ccproxy.macmini.sg", testAdminToken, controlPlaneHost); code != 400 {
+		t.Fatalf("non-HTTPS override: HTTP %d", code)
+	}
+}
+
+func TestInstallURLReportsConfiguredPublicURL(t *testing.T) {
+	h := newAPIWithPublicURL(nil, testAdminToken, "", nil, "https://cp.aifree.sg")
+	code, body := getHTTP(t, h, "/admin/install-url", testAdminToken, controlPlaneHost)
+	if code != 200 || !bytes.Contains(body, []byte(`"public_url":"https://cp.aifree.sg"`)) {
+		t.Fatalf("configured install URL: %d %s", code, body)
 	}
 }
 
@@ -219,6 +238,9 @@ func TestConsoleOffersTheThreeCommands(t *testing.T) {
 	page := string(consolePage)
 	for _, want := range []string{
 		`[["macos", "macOS"], ["linux", "Linux"], ["windows", "Windows"]]`,
+		`id="inst-cp" type="url"`,
+		`api("GET", "/admin/install-url")`,
+		`new URLSearchParams({ cp: $("#inst-cp", root).value.trim() })`,
 		`api("GET", "/admin/install-commands?" + q)`,
 		`id="install" type="button">Install command`,
 		// Switching OS or editing the URL clears the commands and disables Copy at once, and only the response to
@@ -230,8 +252,8 @@ func TestConsoleOffersTheThreeCommands(t *testing.T) {
 			t.Errorf("console lacks %q", want)
 		}
 	}
-	if strings.Contains(page, "location.origin") || strings.Contains(page, "inst-cp") {
-		t.Error("install commands must use the configured public URL, not the request origin")
+	if strings.Contains(page, "location.origin") {
+		t.Error("install commands must not use the request origin")
 	}
 	if !strings.Contains(page, `installPanel($("#install-panel", ov), transport)`) ||
 		!strings.Contains(page, `installPanel($("#install-panel", ov), transport, true)`) {

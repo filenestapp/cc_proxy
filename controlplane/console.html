@@ -876,7 +876,8 @@
   };
 
   // Install / uninstall commands for an exit host. The token is never part of a command: the installer asks for it
-  // with hidden input. Commands come from /admin/install-commands and use the server's configured public HTTPS URL.
+  // with hidden input. Commands come from /admin/install-commands. The configured public HTTPS URL is prefilled,
+  // but an administrator can override it for a reachable control plane during a DNS cutover.
   const INSTALL_OS = [["macos", "macOS"], ["linux", "Linux"], ["windows", "Windows"]];
   // transport: the host's /admin/hosts/{name}/xtcp view ({transport: "public"} for a new host). reuseToken: the host
   // may already have an installed token (the Install command dialog; not after a rotation, where it no longer works).
@@ -904,6 +905,8 @@
     let os = "macos";
     root.innerHTML = `
       <div class="install-row">
+        <div class="form-row"><label for="inst-cp">Control plane HTTPS URL</label>
+          <input id="inst-cp" type="url" inputmode="url" autocomplete="url" placeholder="https://cp.example"></div>
         <div class="form-row" id="inst-iface-row" hidden><label for="inst-iface">Interface for routed egress IPs (optional)</label>
           <input id="inst-iface" placeholder="eth0"></div>
       </div>
@@ -930,8 +933,8 @@
     }
     async function refresh() {
       const mine = invalidate(), want = os;
-      const q = want === "linux" && $("#inst-iface", root).value.trim()
-        ? "iface=" + encodeURIComponent($("#inst-iface", root).value.trim()) : "";
+      const q = new URLSearchParams({ cp: $("#inst-cp", root).value.trim() });
+      if (want === "linux" && $("#inst-iface", root).value.trim()) q.set("iface", $("#inst-iface", root).value.trim());
       let cmds, error;
       try { cmds = await api("GET", "/admin/install-commands?" + q); } catch (e) { error = e; }
       if (mine !== seq || want !== os) return;  // a newer tab or input superseded this response
@@ -956,7 +959,15 @@
       }
     });
     root.addEventListener("input", () => { invalidate(); clearTimeout(timer); timer = setTimeout(refresh, 300); });
-    refresh();
+    (async () => {
+      const mine = invalidate();
+      let config, error;
+      try { config = await api("GET", "/admin/install-url"); } catch (e) { error = e; }
+      if (mine !== seq) return;
+      if (error) { $("#inst-note", root).textContent = error.message; return; }
+      $("#inst-cp", root).value = config.public_url;
+      refresh();
+    })();
   }
   function showAgentToken(host, token, transport) {
     const ov = reveal("Host " + host + " agent token", "Paste this token when the installer asks for it.", token,

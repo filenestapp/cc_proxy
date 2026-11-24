@@ -293,8 +293,15 @@ func (a *api) installRoutes() {
 	a.bind("GET /install/exit.ps1", "", "", a.installScript("exit.ps1"))
 	a.bind("GET /install/manifest.json", "", "", a.installManifest)
 	a.bind("GET /install/agent/{platform}", "agent", "", a.installAgent)
+	a.bind("GET /admin/install-url", "admin", "", func(*apiRequest) (response, error) {
+		return ok(object{"public_url": a.publicURL}, nil)
+	})
 	a.bind("GET /admin/install-commands", "admin", "", func(r *apiRequest) (response, error) {
-		return ok(installCommands(a.publicURL, r.URL.Query().Get("iface")))
+		cp := r.URL.Query().Get("cp")
+		if cp == "" {
+			cp = a.publicURL
+		}
+		return ok(installCommands(cp, r.URL.Query().Get("iface")))
 	})
 }
 

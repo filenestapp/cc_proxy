@@ -48,7 +48,7 @@ One control-plane process serves the following public names. Route by the origin
 
 Other hosts intentionally retain the previous unrestricted routing. This keeps localhost development, direct test requests, and private deployment names working. The configured aifree hosts are the only hosts that enforce the public split.
 
-Install commands always use the configured public control-plane URL, not the browser's request URL. Set `CP_PUBLIC_URL` or pass `--public-url`; it must be an HTTPS URL and defaults to `https://cp.aifree.sg`.
+Install commands default to the configured public control-plane URL, not the browser's request URL. The administrator console pre-fills that URL and can send a validated HTTPS `cp` override when an existing control plane must remain reachable during a DNS cutover. Set `CP_PUBLIC_URL` or pass `--public-url`; it must be an HTTPS URL and defaults to `https://cp.aifree.sg`. Until the new DNS resolves, keep `CP_PUBLIC_URL=https://ccproxy.macmini.sg`.
 
 ```bash
 CP_PUBLIC_URL=https://cp.aifree.sg \
