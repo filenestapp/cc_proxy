@@ -132,7 +132,7 @@ compose exec -T probe python /app/cp_probe.py reloaded || status=1
 cpctl ips
 
 echo "== phase 3: health data behind the dashboard"
-compose exec -T -e CP_ADMIN_TOKEN cp python /src/controlplane/test/check_topology.py || status=1
+compose exec -T -e CP_ADMIN_TOKEN -e CP_URL=http://cp:8443 probe python /src/controlplane/test/check_topology.py || status=1
 
 echo "== phase 3b: the ccproxy client (Linux TUN, app mode)"
 cpctl ip-add hk-1 10.99.0.7 >/dev/null

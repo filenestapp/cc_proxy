@@ -1,33 +1,37 @@
-"""Control plane tests (v2): store rules, HTTP API, and the agent's sync loop (with a stand-in sing-box).
+"""Control plane HTTP and agent integration tests against the Go server and PostgreSQL.
 
   python3 -m unittest discover -s controlplane/tests -v
 """
 import argparse
+import atexit
 import json
 import os
+import secrets
 import shutil
 import socket
 import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "egress"))
 
 import agent as agentmod  # noqa: E402
-import server  # noqa: E402
-from store import AuthError, Conflict, NotFound, Store, check_password, hash_password  # noqa: E402
 
 ADMIN, PROBE = "admin-secret", "probe-secret"
 POLICY = {"domain_suffix": ["example-target.com"]}
 PW = "correct horse battery"
+LOGIN_MAX_FAILURES = 10
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+BUILD = None
 
 
 def read(path):
@@ -43,252 +47,79 @@ class Clock:
         return self.now
 
 
-def make_store(clock=None):
-    """Two exit hosts: hk-1 (IPs .3, .4; ports 20000-20009) and jp-1 (IP 198.51.100.3; ports 30000-30009)."""
-    s = Store(":memory:", clock=clock) if clock else Store(":memory:")
-    s.configure(client_policy=POLICY, cooldown_seconds=3600)
-    tokens = {
-        "hk-1": s.add_host("hk-1", "203.0.113.2", "www.example.com", port_min=20000, port_max=20009),
-        "jp-1": s.add_host("jp-1", "198.51.100.2", "www.example.org", port_min=30000, port_max=30009),
-    }
-    s.add_ips("hk-1", ["203.0.113.4", "203.0.113.3"])
-    s.add_ips("jp-1", ["198.51.100.3"])
-    return s, tokens
+def server_binary():
+    global BUILD
+    if BUILD is None:
+        tmp = tempfile.TemporaryDirectory(prefix="cc-controlplane-test-")
+        binary = Path(tmp.name) / "cc-controlplane"
+        subprocess.run(["go", "build", "-o", str(binary), "."], cwd=Path(HERE).parent, check=True)
+        BUILD = binary
+        atexit.register(tmp.cleanup)
+    return BUILD
 
 
-class StoreTest(unittest.TestCase):
-    def setUp(self):
-        self.clock = Clock()
-        self.s, self.agent_tokens = make_store(self.clock)
-
-    def test_passwords_are_salted_pbkdf2(self):
-        h1, h2 = hash_password(PW), hash_password(PW)
-        self.assertNotEqual(h1, h2)
-        self.assertTrue(h1.startswith("pbkdf2_sha256$"))
-        self.assertTrue(check_password(PW, h1))
-        self.assertFalse(check_password("wrong", h1))
-        self.s.add_user("a", PW)
-        stored = self.s.db.execute("SELECT password_hash FROM users").fetchone()[0]
-        self.assertNotIn(PW, stored)
-
-    def test_weak_password_and_bad_names_rejected(self):
-        with self.assertRaises(Conflict):
-            self.s.add_user("a", "short")
-        for bad in ("", "a/b", "a b", "x" * 65):
-            with self.assertRaises(Conflict):
-                self.s.add_user(bad, PW)
-
-    def test_assign_takes_lowest_free_ip_and_port(self):
-        self.s.add_user("a", PW)
-        self.s.add_user("b", PW)
-        self.assertEqual(self.s.assign("a"), ("198.51.100.3", 30000))  # lowest IP numerically, on jp-1
-        self.assertEqual(self.s.assign("b"), ("203.0.113.3", 20000))
-        self.s.add_user("c", PW)
-        self.assertEqual(self.s.assign("c", host="hk-1"), ("203.0.113.4", 20001))
-
-    def test_explicit_port_must_be_free_and_in_the_host_range(self):
-        self.s.add_user("a", PW, mode="shared")
-        self.s.add_user("b", PW, mode="shared")
-        self.assertEqual(self.s.assign("a", "203.0.113.3", 20005), ("203.0.113.3", 20005))
-        with self.assertRaises(Conflict):
-            self.s.assign("b", "203.0.113.3", 20005)  # taken
-        with self.assertRaises(Conflict):
-            self.s.assign("b", "203.0.113.3", 30000)  # jp-1's range
-        self.assertEqual(self.s.assign("b", "203.0.113.3"), ("203.0.113.3", 20000))
-
-    def test_ports_are_per_host(self):
-        self.s.update_host("jp-1", port_min=20000, port_max=20009)
-        self.s.add_user("a", PW)
-        self.s.add_user("b", PW)
-        self.s.assign("a", "203.0.113.3", 20000)
-        self.assertEqual(self.s.assign("b", "198.51.100.3", 20000), ("198.51.100.3", 20000))
-
-    def test_host_filter_and_ip_host_mismatch(self):
-        self.s.add_user("a", PW)
-        with self.assertRaises(Conflict):
-            self.s.assign("a", "198.51.100.3", host="hk-1")
-        with self.assertRaises(Conflict):
-            self.s.add_ips("jp-1", ["203.0.113.3"])  # belongs to hk-1
-
-    def test_port_range_exhaustion(self):
-        self.s.update_host("hk-1", port_min=20000, port_max=20000)
-        self.s.add_user("a", PW, mode="shared")
-        self.s.add_user("b", PW, mode="shared")
-        self.s.assign("a", "203.0.113.3")
-        with self.assertRaises(Conflict):
-            self.s.assign("b", "203.0.113.3")
-
-    def test_shrinking_a_range_below_a_bound_port_is_refused(self):
-        self.s.add_user("a", PW)
-        self.s.assign("a", "203.0.113.3", 20009)
-        with self.assertRaises(Conflict):
-            self.s.update_host("hk-1", port_max=20005)
-
-    def test_exclusive_and_shared_rules(self):
-        self.s.add_user("a", PW)
-        self.s.add_user("b", PW, mode="shared")
-        self.s.assign("a", "203.0.113.3")
-        with self.assertRaises(Conflict):
-            self.s.assign("b", "203.0.113.3")
-
-    def test_release_frees_port_and_cools_ip(self):
-        self.s.add_user("a", PW)
-        self.s.add_user("b", PW)
-        self.s.assign("a", "203.0.113.3", 20000)
-        self.s.release("a")
-        with self.assertRaises(Conflict):
-            self.s.assign("b", "203.0.113.3")
-        self.assertEqual(self.s.assign("b", "203.0.113.4", 20000), ("203.0.113.4", 20000))  # port reusable
-        self.clock.now += 3601
-        self.assertEqual(self.s.assign("a", "203.0.113.3")[0], "203.0.113.3")
-
-    def test_ban_releases_holders(self):
-        self.s.add_user("a", PW)
-        self.s.assign("a", "203.0.113.3")
-        self.assertEqual(self.s.ban_ip("203.0.113.3", "blocked"), ["a"])
-        u = self.s.list_users()[0]
-        self.assertEqual((u["egress_ip"], u["port"]), (None, None))
-        with self.assertRaises(Conflict):
-            self.s.assign("a", "203.0.113.3")
-
-    def test_host_with_users_cannot_be_deleted(self):
-        self.s.add_user("a", PW)
-        self.s.assign("a", "198.51.100.3")
-        with self.assertRaises(Conflict):
-            self.s.delete_host("jp-1")
-        self.s.release("a")
-        self.s.delete_host("jp-1")
-        self.assertEqual([h["name"] for h in self.s.list_hosts()], ["hk-1"])
-
-    def test_agent_tokens_identify_hosts_and_rotate(self):
-        self.assertEqual(self.s.host_for_agent_token(self.agent_tokens["jp-1"]), "jp-1")
-        new = self.s.rotate_agent_token("jp-1")
-        self.assertIsNone(self.s.host_for_agent_token(self.agent_tokens["jp-1"]))
-        self.assertEqual(self.s.host_for_agent_token(new), "jp-1")
-
-    def test_each_host_gets_its_own_reality_keys(self):
-        k1 = self.s.inventory("hk-1")["server"]["reality"]
-        k2 = self.s.inventory("jp-1")["server"]["reality"]
-        self.assertNotEqual(k1["private_key"], k2["private_key"])
-        self.assertNotIn(k1["private_key"], json.dumps(self.s.list_hosts()))
-
-    def test_login_creates_device_and_relogin_rotates_token(self):
-        self.s.add_user("a", PW)
-        t1, info = self.s.login("a", PW, "MacBook", "macos")
-        self.assertEqual(info["entry"], None)  # not assigned yet
-        t2, _ = self.s.login("a", PW, "MacBook", "macos")
-        self.assertIsNone(self.s.device_for_token(t1))
-        self.assertEqual(self.s.device_for_token(t2)["name"], "MacBook")
-        self.assertEqual(len(self.s.list_users()[0]["devices"]), 1)
-
-    def test_login_errors_do_not_reveal_which_part_was_wrong(self):
-        self.s.add_user("a", PW)
-        for user, pw in (("a", "wrong password"), ("nobody", PW)):
-            with self.assertRaises(AuthError) as cm:
-                self.s.login(user, pw, "x")
-            self.assertEqual(str(cm.exception), "wrong username or password")
-
-    def test_device_limit(self):
-        self.s.add_user("a", PW, max_devices=2)
-        self.s.login("a", PW, "d1")
-        self.s.login("a", PW, "d2")
-        with self.assertRaises(Conflict):
-            self.s.login("a", PW, "d3")
-        self.s.login("a", PW, "d2")  # re-login on an existing device is always allowed
-        self.s.revoke_device("a", "d1")
-        self.s.login("a", PW, "d3")
-
-    def test_same_device_name_for_two_users(self):
-        for u, ip in (("a", "203.0.113.3"), ("b", "203.0.113.4")):
-            self.s.add_user(u, PW)
-            self.s.assign(u, ip)
-        ta, _ = self.s.login("a", PW, "MacBook")
-        tb, _ = self.s.login("b", PW, "MacBook")
-        ca = self.s.client_config(self.s.device_for_token(ta), "app")["outbounds"][0]
-        cb = self.s.client_config(self.s.device_for_token(tb), "app")["outbounds"][0]
-        self.assertNotEqual(ca["uuid"], cb["uuid"])
-        self.assertEqual((ca["server_port"], cb["server_port"]), (20000, 20001))
-
-    def test_password_reset_can_sign_out_everywhere(self):
-        self.s.add_user("a", PW)
-        t, _ = self.s.login("a", PW, "d1")
-        self.s.set_password("a", "new password 123", revoke_devices=True)
-        self.assertIsNone(self.s.device_for_token(t))
-        with self.assertRaises(AuthError):
-            self.s.login("a", PW, "d1")
-        self.s.login("a", "new password 123", "d1")
-
-    def test_config_for_unassigned_user_is_a_conflict(self):
-        self.s.add_user("a", PW)
-        t, _ = self.s.login("a", PW, "d1")
-        with self.assertRaises(Conflict):
-            self.s.client_config(self.s.device_for_token(t), "app")
-
-    def test_server_config_only_contains_the_hosts_own_users(self):
-        for u, ip in (("a", "203.0.113.3"), ("b", "198.51.100.3")):
-            self.s.add_user(u, PW)
-            self.s.assign(u, ip)
-            self.s.login(u, PW, "d1")
-        hk = self.s.server_config("hk-1")
-        self.assertEqual([(i["tag"], i["listen_port"], [x["name"] for x in i["users"]]) for i in hk["inbounds"]],
-                         [("user-a", 20000, ["a/d1"])])
-        rules = [r for r in hk["route"]["rules"] if "outbound" in r]
-        self.assertEqual(rules, [{"inbound": ["user-a"], "outbound": "egress-203.0.113.3"}])
-        self.assertEqual(hk["route"]["final"], "deny")
-        jp = self.s.server_config("jp-1")
-        self.assertEqual([i["listen_port"] for i in jp["inbounds"]], [30000])
-
-    def test_client_config_points_at_the_bound_host_and_port(self):
-        self.s.add_user("a", PW)
-        self.s.assign("a", "198.51.100.3", 30004)
-        t, _ = self.s.login("a", PW, "d1")
-        cfg = self.s.client_config(self.s.device_for_token(t), "app")
-        out = cfg["outbounds"][0]
-        self.assertEqual((out["server"], out["server_port"]), ("198.51.100.2", 30004))
-        self.assertEqual(out["tls"]["reality"]["public_key"], self.s.inventory("jp-1")["server"]["reality"]["public_key"])
-        self.assertEqual(cfg["inbounds"][0]["type"], "tun")
-
-    def test_every_mutation_bumps_version_and_failures_do_not(self):
-        v = self.s.version()
-        self.s.add_user("a", PW)
-        self.assertEqual(self.s.version(), v + 1)
-        with self.assertRaises(Conflict):
-            self.s.add_user("a", PW)
-        with self.assertRaises(Conflict):
-            self.s.release("a")
-        with self.assertRaises(NotFound):
-            self.s.assign("nobody")
-        self.assertEqual(self.s.version(), v + 1)
-
-    def test_v1_database_is_refused(self):
-        path = os.path.join(tempfile.mkdtemp(), "old.db")
-        import sqlite3
-        db = sqlite3.connect(path)
-        db.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        db.execute("INSERT INTO settings VALUES('version', '3')")
-        db.commit()
-        db.close()
-        with self.assertRaises(RuntimeError):
-            Store(path)
-        Store(os.path.join(os.path.dirname(path), "new.db"))  # a fresh file works, and reopens
-        Store(os.path.join(os.path.dirname(path), "new.db"))
-        shutil.rmtree(os.path.dirname(path))
-
-
+@unittest.skipUnless(TEST_DATABASE_URL and shutil.which("psql"), "set TEST_DATABASE_URL and install psql")
 class ServerFixture(unittest.TestCase):
-    """A live API server on an ephemeral port, over make_store()."""
+    """Run the real server on its own port and PostgreSQL schema for each test."""
+
+    trusted_proxies = ""
 
     def setUp(self):
-        self.store, self.agent_tokens = make_store()
-        self.httpd = server.build_server(self.store, "127.0.0.1", 0, ADMIN, PROBE)
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-        self.base = "http://127.0.0.1:%d" % self.httpd.server_address[1]
-        self.hk = self.agent_tokens["hk-1"]
-        self.jp = self.agent_tokens["jp-1"]
+        self.create_schema()
+        self.start_server()
+        self.assertEqual(self.admin("PUT", "/admin/settings", {
+            "client_policy": POLICY, "cooldown_seconds": 3600,
+        })[0], 200)
+        self.hk = self.create_host("hk-1", "203.0.113.2", 20000, ["203.0.113.4", "203.0.113.3"])
+        self.jp = self.create_host("jp-1", "198.51.100.2", 30000, ["198.51.100.3"])
 
-    def tearDown(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
+    def create_schema(self):
+        self.schema = "cp_test_" + secrets.token_hex(8)
+        self.sql("CREATE SCHEMA " + self.schema)
+        self.addCleanup(self.sql, "DROP SCHEMA " + self.schema + " CASCADE")
+        url = urlsplit(TEST_DATABASE_URL)
+        params = dict(parse_qsl(url.query), search_path=self.schema)
+        self.dsn = urlunsplit(url._replace(query=urlencode(params)))
+
+    def sql(self, statement):
+        return subprocess.run(
+            ["psql", "-X", "-wqAt", "-v", "ON_ERROR_STOP=1", "--dbname", TEST_DATABASE_URL, "-c", statement],
+            check=True, capture_output=True, text=True,
+        ).stdout
+
+    def start_server(self, trusted_proxies=None):
+        if hasattr(self, "process"):
+            self.stop_server(self.process)
+        env = dict(os.environ, DATABASE_URL=self.dsn, CP_ADMIN_TOKEN=ADMIN, CP_PROBE_TOKEN=PROBE,
+                   CP_TRUSTED_PROXIES=self.trusted_proxies if trusted_proxies is None else trusted_proxies)
+        self.process = subprocess.Popen([str(server_binary()), "serve", "--port", "0"], env=env,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(self.stop_server, self.process)
+        ready = self.process.stdout.readline()
+        if not ready.startswith("control plane listening on "):
+            self.fail("Go server failed to start: " + self.process.stderr.read())
+        self.base = "http://" + ready.split()[-1]
+
+    @staticmethod
+    def stop_server(process):
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        process.stdout.close()
+        process.stderr.close()
+
+    def create_host(self, name, address, port, ips):
+        status, obj = self.admin("POST", "/admin/hosts", {
+            "name": name, "public_host": address, "server_name": "www.example.com",
+            "port_min": port, "port_max": port + 9,
+        })
+        self.assertEqual(status, 201, obj)
+        self.assertEqual(self.admin("POST", f"/admin/hosts/{name}/ips", {"ips": ips})[0], 201)
+        return obj["agent_token"]
 
     def req(self, method, path, token=None, body=None, headers=None):
         data = json.dumps(body).encode() if body is not None else None
@@ -349,7 +180,7 @@ class ApiTest(ServerFixture):
 
     def test_wrong_password_is_401_and_repeated_failures_are_429(self):
         self.admin("POST", "/admin/users", {"name": "alice", "password": PW})
-        for _ in range(server.LOGIN_MAX_FAILURES):
+        for _ in range(LOGIN_MAX_FAILURES):
             self.assertEqual(self.login("alice", "wrong password")[0], 401)
         self.assertEqual(self.login("alice", PW)[0], 429)  # locked even with the right password
 
@@ -441,6 +272,7 @@ class AgentFixture(ServerFixture):
     def setUp(self):
         super().setUp()
         self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
         self.fake = os.path.join(self.tmp, "sing-box")
         fake_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_singbox.py")
         with open(self.fake, "w") as f:
@@ -452,17 +284,16 @@ class AgentFixture(ServerFixture):
             self.confirm_api = "127.0.0.1:%d" % s.getsockname()[1]
         # The "systemd" service: reloaded by --reload-cmd with SIGHUP, like `systemctl reload sing-box`.
         self.service = subprocess.Popen([self.fake, "run", "-c", os.path.join(self.tmp, "config.json")])
+        self.addCleanup(self.stop_fake_service)
         deadline = time.time() + 10
         while not os.path.exists(os.path.join(self.tmp, "fake.ready")):
             self.assertLess(time.time(), deadline, "fake sing-box service did not start")
             time.sleep(0.02)
         os.environ["CP_AGENT_TOKEN"] = self.hk
 
-    def tearDown(self):
+    def stop_fake_service(self):
         self.service.kill()
-        self.service.wait()
-        super().tearDown()
-        shutil.rmtree(self.tmp)
+        self.service.wait(timeout=5)
 
     def flag(self, name, on=True):
         """Set or clear a fake_singbox.py flag file (stubborn, crash, silent)."""
@@ -519,7 +350,7 @@ class AgentTest(AgentFixture):
         a = self._agent()
         a.loop()
         before = read(os.path.join(self.tmp, "config.json"))
-        self.store.update_host("hk-1", server_name="REJECT_ME")
+        self.admin("PUT", "/admin/hosts/hk-1", {"server_name": "REJECT_ME"})
         a.loop()
         self.assertEqual(read(os.path.join(self.tmp, "config.json")), before)
         self.assertEqual(self.reload_count(), 1)
@@ -529,7 +360,7 @@ class AgentTest(AgentFixture):
         self.setup_user()
         a = self._agent()
         a.loop()
-        self.store.update_host("hk-1", server_name="REJECT_ME")
+        self.admin("PUT", "/admin/hosts/hk-1", {"server_name": "REJECT_ME"})
         checks = []
         real_run = agentmod.subprocess.run
 
