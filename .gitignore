@@ -20,3 +20,4 @@ client/desktop/src-tauri/gen/
 client/test/local-demo/out/
 egress/agent/dist/
 controlplane/test/xtcp/out/
+controlplane/test/shared-egress/out/

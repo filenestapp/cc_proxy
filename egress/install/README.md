@@ -115,6 +115,15 @@ back to frps.
 | XTCP secret key | Write-only; must match the visitor's `secretKey`. Leave it empty on the first save to generate one (shown once) |
 | sing-box entry port | The user's entry port on this host, within the host's port range |
 
+**Several users on one XTCP host.** The proxy above is the primary mapping and keeps its name, secret key and entry
+port. Every other user assigned to the host, including users who share an egress IP, gets its own proxy
+`<proxy name>-<entry port>` that forwards to that user's entry port. Its secret key is derived for that user from a
+random server-held secret that is separate from the primary secret key and never leaves the control plane. A user's
+visitor therefore opens only that user's entry port, and the primary visitor's key opens no other mapping. **Visitor config** on the
+host page (or `GET /admin/users/{name}/xtcp-visitor`) shows the user's visitor configuration; frpc reads the frps
+token from the `FRP_AUTH_TOKEN` environment variable. The exit host learns new mappings when its install command runs
+again. Until then the host page shows **Run the install command again** and only the existing proxies work.
+
 The install command does not change. With the host's agent token, the installer asks
 `GET /install/xtcp/frpc.toml` and `GET /install/xtcp/ca.pem`. A 204 means the public entry, and nothing about the
 ordinary install changes. A 200 makes the installer do the following:
@@ -279,6 +288,7 @@ TEST_DATABASE_URL=postgresql://... python3 -m unittest tests.test_installer test
 | `tests/test_installer.py` (XTCP) | Admin settings validated, secrets write-only (also in the audit log), generated secret key shown once, agent routes scoped to the calling host (204 for a public-entry host); installer on an XTCP host: macOS upgrade from a public-entry install, `frpc.toml` 0600, frpc plist and unit, back to the public entry removes frpc, digest mismatch and rejected configuration change nothing. With genuine archives, the real frpc 0.72.0 is downloaded, checked and verifies the configuration | macOS native; Linux mode with stubbed `systemctl` |
 | `tests/test_installer.py` | Against the Go control plane over real TLS: agent downloads need a host token (not the admin token) and match the digest; exit status 22/7 of the copied command; rendered `exit.sh` end to end for macOS (plists checked with `plutil`) and Linux mode (`--iface` units), rerun, uninstall, wrong token, digest mismatch, redirect plus `.curlrc` `location`, untrusted root. With `CCPROXY_TEST_SINGBOX_ARCHIVES`, the genuine sing-box 1.14.4 archives are downloaded and verified | macOS native with BSD tools; Linux mode with stubbed `systemctl` |
 | `controlplane/test/xtcp/run-e2e.sh` (Docker, systemd, internet) | Real Go control plane and PostgreSQL, real frps 0.72.0 on TCP 7003 (TLS, test CA, token), a systemd Linux exit host installed with the copied command (agent, sing-box and frpc from GitHub, verified), real frpc visitor (QUIC) and sing-box client from the CC Proxy client config. Checks: registration, services enabled at boot, proxied IPv4 equals the exit host's egress IPv4, 20 MB transfer with no bytes at frps, blocked hole punching fails with no relay, recovery after a container reboot, uninstall | Linux arm64 (Docker Desktop) |
+| `controlplane/test/shared-egress/run-e2e.sh` (Docker, internet) | Real Go control plane on a PostgreSQL test schema, real sing-box 1.14.4 and frp 0.72.0 (pinned, verified). Two shared users on a public-entry host and two on an XTCP host reach their own listeners concurrently from the same egress IPv4; a single-port XTCP host upgrades with its first mapping and visitor unchanged; a user's visitor key does not open another user's proxy; allocation conflicts and mode switches; releasing or revoking one holder leaves the other working | Linux arm64 (Docker Desktop) |
 | Docker `debian:12-slim` (linux/arm64, `NET_ADMIN`) | `ccproxy-exit-agent ips up/down` with the real `ip` tool on a dummy interface | Linux arm64 (manual run) |
 | PowerShell 7.4 parser (Docker) | `exit.ps1` as served, both Windows commands, the data block, `\z` patterns | Parse only; Windows PowerShell 5.1 and the Windows task were not run |
 

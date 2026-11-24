@@ -1022,6 +1022,28 @@
     route();
   }
 
+  function xtcpMappingList(x) {
+    const list = x.mappings || [{ proxy_name: x.proxy_name, port: x.local_port, user: "", primary: true }];
+    return list.map((m) => `<div class="mono">${esc(m.proxy_name)} → 127.0.0.1:${m.port}${m.user ? ' <span class="muted">(' + esc(m.user) + ")</span>" : m.primary ? ' <span class="muted">(no user on this port)</span>' : ""}</div>`).join("");
+  }
+  function xtcpState(x) {
+    if (x.frpc_state === "current") return '<span class="badge ok">Current</span> <span class="small muted">fetched ' + (x.delivered_at ? ago(now() - x.delivered_at) : "") + "</span>";
+    if (x.frpc_state === "outdated") return '<span class="badge warn">Run the install command again</span><div class="small muted">The proxies changed since the host last fetched its frpc configuration. Existing proxies keep working; new or moved users connect after the rerun.</div>';
+    return '<span class="badge">Unknown</span><div class="small muted">Not fetched since mapping tracking began. Run the install command again to confirm.</div>';
+  }
+  // One user's frpc visitor: only that user's proxy and scoped secret key. The frps token stays write-only.
+  async function showVisitor(user) {
+    const r = await act(() => api("GET", "/admin/users/" + enc(user) + "/xtcp-visitor"));
+    if (!r) return;
+    const { ov, close } = overlay("<h3>XTCP visitor for " + esc(user) + '</h3><p class="small muted">frpc visitor for proxy <span class="mono">' + esc(r.proxy_name) +
+      "</span>. Its secret key opens only this user's entry port " + r.bind_port + ". Set <span class=\"mono\">FRP_AUTH_TOKEN</span> to the frps token in frpc's environment, save the frps CA as frp-ca.pem, and point CC Proxy at <span class=\"mono\">" +
+      esc(r.bind_addr + ":" + r.bind_port) + '</span>.</p><pre class="secret" style="white-space:pre-wrap;max-height:50vh;overflow:auto">' + esc(r.frpc_toml) + "</pre>" +
+      '<div class="buttons"><button type="button" data-copy>Copy</button><button type="button" class="primary" data-ok>Done</button></div>');
+    $("[data-copy]", ov).onclick = async () => {
+      try { await navigator.clipboard.writeText(r.frpc_toml); toast("Copied"); } catch (e) { toast("Could not copy. Select the text and copy it manually.", true); }
+    };
+    $("[data-ok]", ov).onclick = close;
+  }
   async function hostDetail(name, token) {
     setTitle(name);
     const [hosts, ips, topo, users, xtcp] = await Promise.all([api("GET", "/admin/hosts"), api("GET", "/admin/ips?host=" + enc(name)), api("GET", "/admin/topology"), api("GET", "/admin/users"),
@@ -1047,6 +1069,7 @@
           <dt>Address</dt><dd class="mono">${esc(publicEntryLabel(h))}</dd>
           <dt>Address mode</dt><dd>${h.auto_public_host ? "Automatic" : "Manual"}</dd>
           <dt>Port range</dt><dd class="mono">${h.port_range[0]}–${h.port_range[1]}</dd>
+          <dt>Entry capacity</dt><dd>${h.users} of ${h.port_capacity} ports in use · ${h.free_ports} free${h.free_ports === 0 ? ' <span class="badge warn">Full</span>' : ""}<div class="small muted">Each user needs a distinct entry port, also when users share an egress IP.</div></dd>
           <dt>TLS server name</dt><dd class="mono">${esc(h.server_name)}</dd>
           <dt>Reality public key</dt><dd class="mono small">${esc(h.reality_public_key)}</dd>
         </dl></section>
@@ -1065,7 +1088,8 @@
           <dt>Mode</dt><dd>XTCP through frps (direct connections only, no relay fallback)</dd>
           <dt>frps</dt><dd class="mono">${esc(xtcp.server_addr)}:${xtcp.server_port} (TLS name ${esc(xtcp.tls_server_name)})</dd>
           <dt>CA</dt><dd class="small">${esc(xtcp.ca_subject || "—")}, until ${esc(xtcp.ca_not_after || "—")}<br><span class="mono">SHA-256 ${esc(xtcp.ca_sha256 || "")}</span></dd>
-          <dt>Proxy</dt><dd class="mono">${esc(xtcp.proxy_name)} → 127.0.0.1:${xtcp.local_port}</dd>
+          <dt>Proxies</dt><dd>${xtcpMappingList(xtcp)}</dd>
+          <dt>Exit host frpc</dt><dd>${xtcpState(xtcp)}</dd>
           <dt>Credentials</dt><dd>${xtcp.has_auth_token ? "frps token set" : "no frps token"}, ${xtcp.has_secret_key ? "secret key set" : "no secret key"} (never shown again)</dd>
         </dl><p class="small muted">The install command sets up frpc too. Run it again on the host after a change here.</p>`
           : '<p class="muted">Public entry: clients connect to the public address above. Configure XTCP for a host behind NAT; the install command then also installs frpc.</p>'}</div></section>
@@ -1073,16 +1097,19 @@
       <section class="section"><h2>Egress IPs (${ips.length})<span class="spacer"></span><button class="primary" id="add-ips" type="button">Add IPs</button></h2>
         ${ipTable(ips, probes, topo.now, false)}</section>
       <section class="section"><h2>Assigned users (${onHost.length})</h2><div class="table-wrap">
-        <table><thead><tr><th>User</th><th>Egress IP</th><th>Entry port</th><th>Devices</th></tr></thead><tbody>
-        ${onHost.map((u) => `<tr><td><a href="#/users/${enc(u.name)}">${esc(u.name)}</a></td>
-          <td class="mono">${esc(u.egress_ip)}</td><td class="mono">${u.port}</td>
-          <td>${u.devices.filter((device) => !device.revoked).length} / ${u.max_devices}</td></tr>`).join("") ||
-          '<tr><td colspan="4" class="empty">No users are assigned to this host.</td></tr>'}
+        <table><thead><tr><th>User</th><th>Mode</th><th>Egress IP</th><th>Entry port</th><th>Devices</th>${xtcp.transport === "xtcp" ? "<th></th>" : ""}</tr></thead><tbody>
+        ${onHost.sort((a, b) => a.port - b.port).map((u) => `<tr><td><a href="#/users/${enc(u.name)}">${esc(u.name)}</a></td>
+          <td>${u.mode === "shared" ? "Shared" : "Exclusive"}</td>
+          <td class="mono">${esc(u.egress_ip)}${onHost.filter((o) => o.egress_ip === u.egress_ip).length > 1 ? ' <span class="badge info">Shared</span>' : ""}</td><td class="mono">${u.port}</td>
+          <td>${u.devices.filter((device) => !device.revoked).length} / ${u.max_devices}</td>
+          ${xtcp.transport === "xtcp" ? `<td class="actions"><button class="link" data-visitor="${esc(u.name)}">Visitor config</button></td>` : ""}</tr>`).join("") ||
+          `<tr><td colspan="${xtcp.transport === "xtcp" ? 6 : 5}" class="empty">No users are assigned to this host.</td></tr>`}
         </tbody></table></div></section>`;
     $("#edit").onclick = async () => {
       if (await form("Edit host " + name, hostFields(h), (v) => api("PUT", "/admin/hosts/" + enc(name), hostBody(v)))) { toast("Saved. The agent will apply the change on its next sync."); route(); }
     };
     $("#install").onclick = () => showInstall(name, xtcp);
+    $$("[data-visitor]").forEach((b) => b.onclick = () => showVisitor(b.dataset.visitor));
     $("#xtcp-edit").onclick = () => editXtcp(name, h, xtcp);
     if ($("#xtcp-off")) $("#xtcp-off").onclick = async () => {
       if (!(await confirmBox("Use the public entry for " + name, "frps credentials for this host are deleted. Run the install command again on the host: it stops and removes frpc.", "Use public entry"))) return;
@@ -1137,8 +1164,12 @@
       }).join("");
       const health = probeDetails ? `<details class="probe-details"><summary>${statusBadge(status)}</summary><ul>${probeDetails}</ul></details>` :
         statusBadge(status);
-      const holders = ip.users.map((user) => `<a href="#/users/${enc(user)}">${esc(user)}</a><span class="mono">:${esc(ip.ports[user])}</span>`).join(", ") || "—";
+      const list = ip.holders || ip.users.map((user) => ({ user, port: ip.ports[user] }));
+      const holders = (list.map((h) => `<a href="#/users/${enc(h.user)}">${esc(h.user)}</a><span class="mono">:${esc(h.port)}</span>`).join(", ") || "—") +
+        (list.length > 1 ? ` <span class="badge info">Shared · ${list.length} users</span>` : "");
+      const sharable = ip.status === "available" || (ip.status === "assigned" && list.every((h) => h.mode === "shared"));
       const actions = [
+        sharable ? `<button class="link" data-ip-share="${esc(ip.ip)}" data-ip-host="${esc(ip.host)}">${ip.status === "available" ? "Assign user" : "Add holder"}</button>` : "",
         ip.status === "banned" || ip.status === "cooldown" ?
           `<button class="link" data-ip-available="${esc(ip.ip)}">${ip.status === "banned" ? "Unban" : "End cooldown"}</button>` : "",
         ip.status !== "banned" ? `<button class="link danger" data-ip-ban="${esc(ip.ip)}">Ban</button>` : "",
@@ -1152,11 +1183,37 @@
         <td>${holders}</td><td class="small">${esc(ip.note)}</td><td class="actions">${actions}</td></tr>`;
     });
     return `<div class="table-wrap"><table><thead><tr><th>IP address</th>${withHost ? "<th>Host</th>" : ""}
-      <th>Allocation</th><th>Probe health</th><th>User / port</th><th>Note</th><th scope="col">Actions</th>
+      <th>Allocation</th><th>Probe health</th><th>Users / entry ports</th><th>Note</th><th scope="col">Actions</th>
       </tr></thead><tbody>${rows.join("") || `<tr><td colspan="${withHost ? 7 : 6}" class="empty">No egress IPs match this view.</td></tr>`}
       </tbody></table></div>`;
   }
+  // Assign another user to an IP: any user for an available IP, Shared users for a shared one. A user already
+  // bound elsewhere moves in one step. The entry port is chosen automatically unless one is given.
+  async function addHolder(ip, hostName, onChange) {
+    const [users, ips, hosts] = await act(() => Promise.all([api("GET", "/admin/users"), api("GET", "/admin/ips?host=" + enc(hostName)), api("GET", "/admin/hosts")])) || [];
+    if (!users) return;
+    const row = ips.find((e) => e.ip === ip) || { holders: [] };
+    const h = hosts.find((x) => x.name === hostName) || { port_range: ["?", "?"], free_ports: 0 };
+    const holding = new Set((row.holders || []).map((x) => x.user));
+    const eligible = users.filter((u) => !holding.has(u.name) && (row.status === "available" || u.mode === "shared"));
+    if (!eligible.length) {
+      toast(row.status === "available" ? "No users to assign." : "No eligible users: switch a user to Shared mode first.", true);
+      return;
+    }
+    const r = await form((row.status === "available" ? "Assign " : "Share ") + ip, [
+      { name: "user", label: "User", type: "select", value: eligible[0].name, options: eligible.map((u) => [u.name, u.name + " · " + (u.mode === "shared" ? "Shared" : "Exclusive") + (u.egress_ip ? " · moves from " + u.egress_ip + ":" + u.port : "")]),
+        hint: row.status === "available" ? "" : "Only Shared users can join a shared IP. Change a user's egress mode on the user page." },
+      { name: "port", label: "Entry port (optional)", type: "number", placeholder: "Automatic: lowest free port", hint: "Each user needs a distinct port in " + h.port_range[0] + "–" + h.port_range[1] + " on " + hostName + " (" + h.free_ports + " free)." },
+    ], (v) => {
+      const u = users.find((x) => x.name === v.user);
+      const body = { ip };
+      if (v.port) body.port = Number(v.port);
+      return api("POST", "/admin/users/" + enc(v.user) + (u && u.egress_ip ? "/reassign" : "/assign"), body);
+    }, "Assign");
+    if (r) { toast("Assigned " + r.user + " to " + r.egress_ip + " on entry port " + r.port + "."); await onChange(); }
+  }
   function bindIpActions(onChange = route) {
+    $$("[data-ip-share]").forEach((b) => b.onclick = () => addHolder(b.dataset.ipShare, b.dataset.ipHost, onChange));
     $$("[data-ip-ban]").forEach((b) => b.onclick = async () => {
       const ip = b.dataset.ipBan;
       const r = await form("Ban " + ip, [{ name: "note", label: "Reason (optional)", placeholder: "Example: target returned HTTP 403" }],
@@ -1282,7 +1339,7 @@
     const live = u.devices.filter((d) => !d.revoked);
     const entry = u.host ? hosts.find((h) => h.name === u.host) : null;
     $("#view").innerHTML =
-      '<div class="toolbar"><a href="#/users">← All users</a><span class="spacer"></span><button id="pw">Reset password</button><button id="limit">Device limit</button><button class="danger" id="del">Delete user</button></div>' +
+      '<div class="toolbar"><a href="#/users">← All users</a><span class="spacer"></span><button id="pw">Reset password</button><button id="mode">Egress mode</button><button id="limit">Device limit</button><button class="danger" id="del">Delete user</button></div>' +
       '<div class="grid2 section"><div class="card"><h2>Egress assignment</h2><dl class="kv">' +
       "<dt>Egress host</dt><dd>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">Unassigned</span>') + "</dd>" +
       '<dt>Egress IP</dt><dd class="mono">' + esc(u.egress_ip || "—") + "</dd>" +
@@ -1302,7 +1359,7 @@
       const usable = ips.filter((e) => e.status === "available" || (e.status === "assigned" && u.mode === "shared" && e.users.every((x) => (users.find((y) => y.name === x) || {}).mode === "shared")));
       return form(title, [
         { name: "host", label: "Egress host", type: "select", value: u.host || (hosts[0] || {}).name, options: hosts.map((h) => [h.name, h.name + " · " + publicEntryLabel(h)]) },
-        { name: "ip", label: "Egress IP", type: "select", value: "", options: [["", "Automatic: lowest available IP on the selected host"]].concat(usable.filter((e) => e.ip !== u.egress_ip).map((e) => [e.ip, e.ip + " · " + e.host + (e.users.filter((x) => x !== name).length ? "(shared with " + e.users.filter((x) => x !== name).join(", ") + ")" : "")])) },
+        { name: "ip", label: "Egress IP", type: "select", value: "", options: [["", "Automatic: lowest available IP on the selected host"]].concat(usable.filter((e) => e.ip !== u.egress_ip).map((e) => [e.ip, e.ip + " · " + e.host + (e.users.filter((x) => x !== name).length ? " (shared with " + e.users.filter((x) => x !== name).join(", ") + ")" : "")])) },
         { name: "port", label: "Entry port (optional)", type: "number", placeholder: "Leave blank for automatic assignment", hint: "Choose an unused port within the host range." },
       ], async (v) => {
         const body = { host: v.host };
@@ -1332,6 +1389,22 @@
       if (!r) return;
       if (r.password) reveal("New password", "New password for " + name, r.password); else toast("Password updated.");
       route();
+    };
+    $("#mode").onclick = async () => {
+      const others = [];
+      if (u.egress_ip) {
+        const ips = await act(() => api("GET", "/admin/ips?host=" + enc(u.host)));
+        if (!ips) return;
+        const row = ips.find((e) => e.ip === u.egress_ip);
+        (row ? row.holders || [] : []).forEach((h) => { if (h.user !== name) others.push(h.user + ":" + h.port); });
+      }
+      const hint = u.mode === "shared"
+        ? (others.length ? "Exclusive is unavailable while " + others.join(", ") + " share " + u.egress_ip + ". Move or release them first." : "Exclusive keeps the current IP, entry port, and devices.")
+        : "Shared keeps the current IP, entry port, and devices, and lets other Shared users join " + (u.egress_ip || "the IP this user gets") + " on their own entry ports.";
+      const r = await form("Egress mode for " + name, [
+        { name: "mode", label: "Egress mode", type: "select", value: u.mode, options: [["exclusive", "Exclusive: dedicated egress IP"], ["shared", "Shared: other Shared users may use the same egress IP"]], hint },
+      ], (v) => v.mode === u.mode ? true : api("PUT", "/admin/users/" + enc(name), { mode: v.mode }));
+      if (r) { toast("Saved."); route(); }
     };
     $("#limit").onclick = async () => {
       if (await form("Device limit", [{ name: "max", label: "Maximum active devices", type: "number", value: u.max_devices, required: true }],

@@ -16,6 +16,7 @@ Users
   cpctl.py user-add NAME [--password P] [--shared] [--max-devices N]   generates a password if none is given
   cpctl.py passwd NAME [--password P] [--revoke-devices]
   cpctl.py user-del NAME
+  cpctl.py user-mode NAME exclusive|shared    keeps the IP, port and devices; exclusive needs no co-holder
   cpctl.py assign NAME [IP] [--port N] [--host H]    omit IP/port to take the lowest free ones
   cpctl.py reassign NAME [IP] [--port N] [--host H]  move a bound user in one step (clients stay connected)
   cpctl.py release NAME
@@ -83,6 +84,8 @@ def main(argv):
     a = sub.add_parser("passwd")
     a.add_argument("name"); a.add_argument("--password"); a.add_argument("--revoke-devices", action="store_true")
     sub.add_parser("user-del").add_argument("name")
+    a = sub.add_parser("user-mode", help="switch a user between exclusive and shared egress")
+    a.add_argument("name"); a.add_argument("mode", choices=["exclusive", "shared"])
     a = sub.add_parser("assign")
     a.add_argument("name"); a.add_argument("ip", nargs="?"); a.add_argument("--port", type=int); a.add_argument("--host")
     a = sub.add_parser("reassign")
@@ -147,6 +150,8 @@ def main(argv):
         show(call("POST", "/admin/users/%s/password" % q(args.name), body))
     elif c == "user-del":
         show(call("DELETE", "/admin/users/" + q(args.name)))
+    elif c == "user-mode":
+        show(call("PUT", "/admin/users/" + q(args.name), {"mode": args.mode}))
     elif c == "assign":
         body = {k: v for k, v in (("ip", args.ip), ("port", args.port), ("host", args.host)) if v is not None}
         show(call("POST", "/admin/users/%s/assign" % q(args.name), body))

@@ -32,12 +32,16 @@ func testCertPEM(t *testing.T, isCA bool) string {
 func testXTCP(t *testing.T) xtcpSettings {
 	return xtcpSettings{Host: "macmini-sg-208", ServerAddr: "203.0.113.10", ServerPort: 7003, TLSServerName: "203.0.113.10",
 		CAPEM: testCertPEM(t, true), AuthToken: "frps-token-0123456789abcdef", ProxyName: "ccproxy-208-direct",
-		SecretKey: "xtcp-secret-0123456789abcdef", LocalPort: 20443}
+		SecretKey: "xtcp-secret-0123456789abcdef", MappingSecret: "mapping-secret-0123456789abcdef", LocalPort: 20443}
+}
+
+func primaryOnly(x xtcpSettings) []xtcpMapping {
+	return []xtcpMapping{{ProxyName: x.ProxyName, Port: x.LocalPort, Primary: true, secretKey: x.SecretKey}}
 }
 
 func TestFrpcConfigIsDirectOnlyWithVerifiedTLS(t *testing.T) {
 	x := testXTCP(t)
-	conf := renderFrpcTOML(x, "/etc/ccproxy-exit/frp-ca.pem", "")
+	conf := renderFrpcTOML(x, primaryOnly(x), "/etc/ccproxy-exit/frp-ca.pem", "")
 	for _, want := range []string{
 		`serverAddr = "203.0.113.10"`, "serverPort = 7003", `auth.method = "token"`,
 		`auth.token = "frps-token-0123456789abcdef"`, "transport.tls.enable = true",
@@ -64,7 +68,7 @@ func TestFrpcConfigIsDirectOnlyWithVerifiedTLS(t *testing.T) {
 	if strings.Count(conf, x.AuthToken) != 1 || strings.Count(conf, x.SecretKey) != 1 {
 		t.Error("each secret appears exactly once")
 	}
-	win := renderFrpcTOML(x, `C:\ProgramData\CCProxyExit\frp-ca.pem`, `C:\ProgramData\CCProxyExit\logs\frpc.log`)
+	win := renderFrpcTOML(x, primaryOnly(x), `C:\ProgramData\CCProxyExit\frp-ca.pem`, `C:\ProgramData\CCProxyExit\logs\frpc.log`)
 	if !strings.Contains(win, `transport.tls.trustedCaFile = 'C:\ProgramData\CCProxyExit\frp-ca.pem'`) ||
 		!strings.Contains(win, `log.to = 'C:\ProgramData\CCProxyExit\logs\frpc.log'`) || !strings.Contains(win, "log.maxDays = 7") {
 		t.Errorf("Windows paths must be TOML literal strings:\n%s", win)
@@ -157,9 +161,37 @@ func TestRealFrpcAcceptsTheConfiguration(t *testing.T) {
 	ca := filepath.Join(dir, "frp-ca.pem")
 	os.WriteFile(ca, []byte(x.CAPEM), 0o644)
 	conf := filepath.Join(dir, "frpc.toml")
-	os.WriteFile(conf, []byte(renderFrpcTOML(x, ca, "")), 0o600)
+	os.WriteFile(conf, []byte(renderFrpcTOML(x, primaryOnly(x), ca, "")), 0o600)
 	out, err := exec.Command(bin, "verify", "-c", conf).CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "syntax is ok") {
 		t.Fatalf("frpc verify: %v %s", err, out)
 	}
+}
+
+// With FRPC_TEST_BIN set, the multi-proxy exit configuration and a user's visitor must pass `frpc verify`, and the
+// visitor's frps token must come from FRP_AUTH_TOKEN.
+func TestRealFrpcAcceptsSharedMappingsAndVisitor(t *testing.T) {
+	bin := os.Getenv("FRPC_TEST_BIN")
+	if bin == "" {
+		t.Skip("set FRPC_TEST_BIN to an frpc binary")
+	}
+	dir := t.TempDir()
+	x := testXTCP(t)
+	ca := filepath.Join(dir, "frp-ca.pem")
+	os.WriteFile(ca, []byte(x.CAPEM), 0o644)
+	bob := xtcpMapping{User: "bob", Port: 20000, ProxyName: userProxyName(x.ProxyName, 20000)}
+	bob.secretKey = userSecretKey(x.MappingSecret, bob.ProxyName, bob.User)
+	verify := func(name, conf string, env ...string) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		os.WriteFile(path, []byte(conf), 0o600)
+		cmd := exec.Command(bin, "verify", "-c", path)
+		cmd.Env = append(os.Environ(), env...)
+		out, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "syntax is ok") {
+			t.Fatalf("frpc verify %s: %v %s", name, err, out)
+		}
+	}
+	verify("exit.toml", renderFrpcTOML(x, append(primaryOnly(x), bob), ca, ""))
+	verify("visitor.toml", renderVisitorTOML(x, bob, "127.0.0.1", ca), "FRP_AUTH_TOKEN="+x.AuthToken)
 }
