@@ -1,6 +1,6 @@
 # aifree.sg website
 
-Static marketing site for aifree, served from Cloudflare Pages. Plain HTML and one stylesheet; no build step, no JavaScript, no cookies, no third-party requests.
+Static marketing site for aifree, served by nginx on the control-plane server (the same host as `ccproxy.macmini.sg`) behind Cloudflare. Plain HTML and one stylesheet; no build step, no JavaScript, no cookies, no third-party requests.
 
 ```text
 site/
@@ -12,7 +12,7 @@ site/
   assets/site.css         All styles
   assets/*.svg, og.png    Copies of brand files (see ../brand)
   favicon.*, apple-touch-icon.png
-  _headers                Security headers and asset caching for Cloudflare Pages
+  _headers                Security headers and asset caching (mirrored in deploy/site/aifree.sg.conf)
   robots.txt, sitemap.xml
 ```
 
@@ -37,15 +37,21 @@ The checkout route should send a signed-out visitor to register or log in first 
 python3 -m http.server 8765 -d site
 ```
 
-Open <http://localhost:8765/>. Cloudflare Pages serves `download/index.html` at `/download/` the same way.
+Open <http://localhost:8765/>. The server serves `download/index.html` at `/download/` the same way.
 
 ## Deploy
 
-Cloudflare Pages project with build command empty and output directory `site`. Attach `aifree.sg` and `www.aifree.sg` as custom domains, and redirect `www` to the apex in the Cloudflare dashboard. Or deploy by hand:
-
 ```bash
-npx wrangler pages deploy site --project-name aifree-site
+deploy/site/deploy.sh            # default target ubuntu@43.156.58.218
 ```
+
+The script copies `site/` (without `README.md` and `_headers`) to `/www/wwwroot/aifree.sg`, installs `deploy/site/aifree.sg.conf` as the BaoTa nginx vhost, tests the config and reloads nginx. If you change `_headers`, change the `add_header` lines in that file too.
+
+How it is set up (2026-11-24):
+
+- DNS: `aifree.sg` and `www.aifree.sg` are proxied `A` records to `43.156.58.218`. The zone's SSL mode is Full, and Always Use HTTPS is off so ACME HTTP-01 reaches the origin.
+- `www.aifree.sg` and plain HTTP redirect to `https://aifree.sg`.
+- Origin certificate: Let's Encrypt `aifree.sg` (ECDSA, webroot `/var/lib/aifree-site/acme`), renewed by the system certbot timer. The deploy hook `/etc/letsencrypt/renewal-hooks/deploy/aifree-site-reload-nginx` reloads nginx after renewal.
 
 ## Brand assets
 
