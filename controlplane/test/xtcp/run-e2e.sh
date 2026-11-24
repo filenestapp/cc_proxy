@@ -7,7 +7,7 @@
 #   exit     a systemd Linux host. It downloads exit.sh as the copied install command does, and the installer fetches
 #            the agent from cp and sing-box 1.14.4 and frpc 0.72.0 from GitHub (SHA-256 pinned)
 #   visitor  official frpc as the XTCP visitor (QUIC, no fallback) on 127.0.0.1:20443, and a sing-box client built
-#            from CC Proxy's own client config (/v1/config?mode=proxy) on 127.0.0.1:2080
+#            from aifree's own client config (/v1/config?mode=proxy) on 127.0.0.1:2080
 #   echo     answers with the caller's IPv4 (and /big with 20 MB)
 #
 # Checks: XTCP registration; the proxied request leaves from the exit host's egress IPv4; a 20 MB transfer does not
@@ -89,7 +89,7 @@ echo "== test CA: certificates for cp and frps"
 (
   cd "$OUT/tls"
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout ca.key -out ca.pem -days 2 \
-    -subj "/CN=CC Proxy XTCP e2e CA" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=keyCertSign" 2>/dev/null
+    -subj "/CN=aifree XTCP e2e CA" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=keyCertSign" 2>/dev/null
   for name in cp frps; do
     openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout $name.key -out $name.csr -subj "/CN=$name" 2>/dev/null
     printf 'subjectAltName=DNS:%s\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n' $name > $name.ext
@@ -174,7 +174,7 @@ check "frpc registered the xtcp proxy with frps" "docker logs ccx-frps 2>&1 | gr
 waitfor 60 "sing-box on 20443" "docker exec ccx-exit sh -c 'ss -ltn | grep -q :20443'"
 echo "PASS sing-box listens on 20443"
 
-echo "== visitor: frpc xtcp visitor (no fallback) and the CC Proxy client config"
+echo "== visitor: frpc xtcp visitor (no fallback) and the aifree client config"
 cat > "$OUT/visitor.toml" <<EOF
 serverAddr = "$IP_FRPS"
 serverPort = 7003
@@ -210,7 +210,7 @@ proxied() { docker exec ccx-visitor curl -q -sS --max-time 20 -x socks5h://127.0
 frps_bytes() { docker exec ccx-frps sh -c 'cat /sys/class/net/eth0/statistics/rx_bytes /sys/class/net/eth0/statistics/tx_bytes' | paste -sd+ - | bc; }
 waitfor 90 "first proxied request" "proxied http://$IP_ECHO:8080/ >/dev/null 2>&1"
 SEEN=$(proxied "http://$IP_ECHO:8080/")
-check "CC Proxy's observed IPv4 is the exit host's egress IPv4 ($IP_EXIT)" "[ '$SEEN' = '$IP_EXIT' ]"
+check "aifree's observed IPv4 is the exit host's egress IPv4 ($IP_EXIT)" "[ '$SEEN' = '$IP_EXIT' ]"
 check "the visitor punched a direct path" "docker exec ccx-visitor grep -Eqi 'nathole|establish|success' /tmp/visitor.log"
 before=$(frps_bytes)
 got=$(proxied -o /dev/null -w '%{size_download}' "http://$IP_ECHO:8080/big")

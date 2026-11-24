@@ -378,7 +378,7 @@ func renderFrpcTOML(x xtcpSettings, mappings []xtcpMapping, caFile, logFile stri
 		logExtra = "log.maxDays = 7\n"
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, `# frpc for CC Proxy exit host %[1]s, written by the installer from the control plane.
+	fmt.Fprintf(&out, `# frpc for aifree exit host %[1]s, written by the installer from the control plane.
 # XTCP only: the exit host and the visitor connect directly; frps on %[2]s:%[3]d only brokers the
 # rendezvous. There is no relay fallback: when hole punching fails, the visitor's connection is closed.
 serverAddr = "%[2]s"
@@ -412,7 +412,7 @@ localPort = %d
 // stored in it: frpc reads it from the FRP_AUTH_TOKEN environment variable through its template support. Because
 // frpc renders the file as a Go template, free-form names (users, hosts) stay out of it.
 func renderVisitorTOML(x xtcpSettings, m xtcpMapping, bindAddr, caFile string) string {
-	return fmt.Sprintf(`# frpc XTCP visitor for one CC Proxy user. Point CC Proxy at %[1]s:%[2]d.
+	return fmt.Sprintf(`# frpc XTCP visitor for one aifree user. Point aifree at %[1]s:%[2]d.
 # Direct connections only: there is no relay fallback.
 # Set FRP_AUTH_TOKEN to the frps token in frpc's environment, and save the frps CA as %[3]s.
 serverAddr = "%[4]s"

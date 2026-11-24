@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CC Proxy",
+  "productName": "aifree",
   "version": "0.1.0",
-  "identifier": "com.ccproxy.desktop",
+  "identifier": "sg.aifree.desktop",
   "build": {
     "frontendDist": "../ui"
   },
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "CC Proxy",
+        "title": "aifree",
         "width": 380,
         "height": 600,
         "minWidth": 340,
@@ -27,7 +27,7 @@
     "targets": "all",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "externalBin": ["binaries/ccproxy", "binaries/sing-box"],
-    "shortDescription": "CC Proxy client",
+    "shortDescription": "aifree client",
     "category": "Utility"
   }
 }

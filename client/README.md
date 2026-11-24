@@ -40,7 +40,9 @@ The desktop app shows the control plane URL, username, password, and optional de
 
 Use the globe and flag in the header to choose **System**, **English**, or **Simplified Chinese**. Use the adjacent appearance icon to choose **System**, **Light**, or **Dark**. System is the default for both. The app uses the first supported system language and falls back to English. It remembers both choices across restarts.
 
-The system tray icon shows connection status. Close the window to keep the app and tunnel running in a supported tray. Select **Open CC Proxy** to bring the window back or **Quit CC Proxy** to exit and stop the tunnel. The macOS and Windows hover tooltip shows the current status and verified public exit IP. On Linux, open the tray menu for this information.
+The system tray icon shows connection status. Close the window to keep the app and tunnel running in a supported tray. Select **Open aifree** to bring the window back or **Quit aifree** to exit and stop the tunnel. The macOS and Windows hover tooltip shows the current status and verified public exit IP. On Linux, open the tray menu for this information.
+
+The desktop bundle identifier is `sg.aifree.desktop`. macOS treats aifree as a new app, so CC Proxy keychain entries and login items are not carried over.
 
 Open **Environment check** to compare the current device's HTTPS exits, DNS, UDP and STUN observations, TLS measurements, and local network settings. The Rust implementation uses Netcheck's public report interface for IP reputation and findings. It sends observed addresses, system language, time zone, OS version, and timings. Routes, adapters, configured proxies, and certificate details are included in the local result. [Netcheck CLI reference](https://netcheck.wenbo.io/cli)
 

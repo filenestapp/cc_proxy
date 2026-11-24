@@ -87,7 +87,7 @@ impl Api {
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))
-            .user_agent(concat!("ccproxy/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("aifree/", env!("CARGO_PKG_VERSION")))
             .build();
         Ok(Api { base, agent })
     }

@@ -150,7 +150,7 @@ impl Snapshot {
     }
 
     fn tooltip(self) -> String {
-        format!("CC Proxy\n{}", self.description("\n"))
+        format!("aifree\n{}", self.description("\n"))
     }
 }
 
@@ -303,7 +303,7 @@ mod tests {
         let mut view = view(true, "running", true);
         view.public_exit = PublicExit::Checking;
         let checking = Snapshot::from_view(&view, Language::English);
-        assert_eq!(checking.tooltip(), "CC Proxy\nConnected");
+        assert_eq!(checking.tooltip(), "aifree\nConnected");
 
         view.public_exit = PublicExit::Verified(ip);
         let verified = Snapshot::from_view(&view, Language::Chinese);

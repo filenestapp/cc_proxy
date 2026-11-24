@@ -297,7 +297,7 @@ func TestXTCPMappingsPerSharedUser(t *testing.T) {
 	mappings, err := xtcpMappings(ctx, s.pool, x)
 	require(t, err)
 	single := renderFrpcTOML(x, mappings, "/etc/ccproxy-exit/frp-ca.pem", "")
-	if single != legacySinglePortFrpc(x, "/etc/ccproxy-exit/frp-ca.pem") {
+	if single != singlePortFrpc(x, "/etc/ccproxy-exit/frp-ca.pem") {
 		t.Fatalf("the single-port frpc configuration changed:\n%s", single)
 	}
 
@@ -444,9 +444,9 @@ func TestProxyNameOverlap(t *testing.T) {
 	}
 }
 
-// legacySinglePortFrpc is the configuration the previous release rendered, kept here to prove upgrades are no-ops.
-func legacySinglePortFrpc(x xtcpSettings, caFile string) string {
-	return fmt.Sprintf(`# frpc for CC Proxy exit host %[1]s, written by the installer from the control plane.
+// singlePortFrpc renders the one-mapping form for comparison with the general renderer.
+func singlePortFrpc(x xtcpSettings, caFile string) string {
+	return fmt.Sprintf(`# frpc for aifree exit host %[1]s, written by the installer from the control plane.
 # XTCP only: the exit host and the visitor connect directly; frps on %[2]s:%[3]d only brokers the
 # rendezvous. There is no relay fallback: when hole punching fails, the visitor's connection is closed.
 serverAddr = "%[2]s"
@@ -507,8 +507,8 @@ func TestXTCPUpgradeSeparatesTheMappingSecretFromThePrimaryKey(t *testing.T) {
 	handler := newAPI(s, testAdminToken, "", []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")})
 	const frpcPath = "/install/xtcp/frpc.toml?ca_file=/etc/ccproxy-exit/frp-ca.pem"
 	code, single := get(t, handler, frpcPath, token)
-	if code != 200 || string(single) != legacySinglePortFrpc(x, "/etc/ccproxy-exit/frp-ca.pem") {
-		t.Fatalf("the upgraded single-port host must render the previous configuration: HTTP %d\n%s", code, single)
+	if code != 200 || string(single) != singlePortFrpc(x, "/etc/ccproxy-exit/frp-ca.pem") {
+		t.Fatalf("the upgraded single-port host must render the one-mapping configuration: HTTP %d\n%s", code, single)
 	}
 
 	_, err = s.assign(ctx, "dave", assignment{IP: ptr("192.0.2.3")}, false)

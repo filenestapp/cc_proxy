@@ -1,4 +1,4 @@
-# CC Proxy exit-node installer for Windows. The control plane serves this file at /install/exit.ps1 with the
+# aifree exit-node installer for Windows. The control plane serves this file at /install/exit.ps1 with the
 # digests below filled in. Copy the command from the console (Egress hosts -> host -> Install command) into
 # PowerShell started with "Run as administrator". The command fetches this script over HTTPS without following
 # redirects, and runs it only when the download completed and starts with the line above.
@@ -44,12 +44,12 @@ $SingBoxExe = Join-Path $App 'sing-box.exe'
 $TokenPath = Join-Path $Data 'agent.token'
 $ConfPath = Join-Path $Data 'install.json'
 $TaskName = 'CCProxyExitAgent'
-$FirewallRule = 'CC Proxy exit node sing-box'
+$FirewallRule = 'aifree exit node sing-box'
 $FrpcExe = Join-Path $App 'frpc.exe'
 $FrpcConf = Join-Path $Data 'frpc.toml'
 $FrpCa = Join-Path $Data 'frp-ca.pem'
 $FrpcTask = 'CCProxyExitFrpc'
-$FrpcFirewallRule = 'CC Proxy exit node frpc (XTCP)'
+$FrpcFirewallRule = 'aifree exit node frpc (XTCP)'
 # Full-string patterns: .NET "$" also matches before a trailing newline, "\z" does not.
 $UrlPattern = '\Ahttps://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?\z'
 $TokenPattern = '\A[A-Za-z0-9_-]{16,256}\z'
@@ -341,7 +341,7 @@ function Install-ExitNode {
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
             -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
-            -Description 'CC Proxy exit node agent (supervises sing-box)' -Force | Out-Null
+            -Description 'aifree exit node agent (supervises sing-box)' -Force | Out-Null
 
         Get-NetFirewallRule -DisplayName $FirewallRule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
         New-NetFirewallRule -DisplayName $FirewallRule -Direction Inbound -Program $SingBoxExe -Action Allow -Profile Any | Out-Null
@@ -349,7 +349,7 @@ function Install-ExitNode {
         if ($xtcp.Status -eq 200) {
             $frpcAction = New-ScheduledTaskAction -Execute $FrpcExe -Argument ('-c "' + $FrpcConf + '"') -WorkingDirectory $Data
             Register-ScheduledTask -TaskName $FrpcTask -Action $frpcAction -Trigger $trigger -Principal $principal -Settings $settings `
-                -Description 'CC Proxy exit node frpc (XTCP proxy for sing-box, direct only)' -Force | Out-Null
+                -Description 'aifree exit node frpc (XTCP proxy for sing-box, direct only)' -Force | Out-Null
             # Hole punching needs inbound UDP to frpc from the visitor.
             Get-NetFirewallRule -DisplayName $FrpcFirewallRule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
             New-NetFirewallRule -DisplayName $FrpcFirewallRule -Direction Inbound -Program $FrpcExe -Action Allow -Profile Any | Out-Null

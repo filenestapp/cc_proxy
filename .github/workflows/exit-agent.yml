@@ -30,7 +30,7 @@ jobs:
         run: ./build.sh --verify
       - uses: actions/upload-artifact@v4
         with:
-          name: ccproxy-exit-agent
+          name: aifree-exit-agent
           path: egress/agent/dist/
           if-no-files-found: error
           retention-days: 30

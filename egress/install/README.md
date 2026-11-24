@@ -107,7 +107,7 @@ measurement and rollout.
 
 A host can use frp XTCP instead of a public entry. The exit host runs frpc next to sing-box. frpc registers one
 `xtcp` proxy with the frps rendezvous service and forwards it to sing-box on `127.0.0.1:<entry port>`. The user's
-machine runs the matching frpc visitor and points CC Proxy at the visitor's local port. frps only brokers the
+machine runs the matching frpc visitor and points aifree at the visitor's local port. frps only brokers the
 rendezvous. The two machines punch a direct UDP path (QUIC) and the data flows between them. The exit side has no
 relay option, and a visitor without `fallbackTo` closes the connection when hole punching fails. No traffic falls
 back to frps.
@@ -150,7 +150,7 @@ with everything else.
 ### macmini-sg-208 acceptance (Apple Silicon, XTCP)
 
 The MacBook already runs the visitor `ccproxy-208-visitor` on `127.0.0.1:20443` (`serverName =
-"ccproxy-208-direct"`, QUIC, no `fallbackTo`), and CC Proxy uses that local entry. The 208 side needs the same frps
+"ccproxy-208-direct"`, QUIC, no `fallbackTo`), and aifree uses that local entry. The 208 side needs the same frps
 token, secret key and CA. They are in `~/.config/ccproxy-xtcp-208/208/frpc.toml` and `coordinator-ca.pem` on the
 admin Mac; do not paste them into chat or tickets.
 
@@ -164,7 +164,7 @@ admin Mac; do not paste them into chat or tickets.
    - sing-box entry port `20443`.
 
    The page then shows "XTCP through frps (direct connections only, no relay fallback)", the CA subject, and
-   `ccproxy-208-direct → 127.0.0.1:20443`. The user that CC Proxy signs in as must be assigned to 208 on entry port
+   `ccproxy-208-direct → 127.0.0.1:20443`. The user that aifree signs in as must be assigned to 208 on entry port
    `20443`.
 2. **On 208.** First check that no frpc from the old standalone archive is running: `pgrep -fl frpc` should print
    nothing, or stop that process. frps refuses a second proxy with the same name. Then open **Install command →
@@ -183,12 +183,12 @@ admin Mac; do not paste them into chat or tickets.
    sudo lsof -nP -iTCP:20443 -sTCP:LISTEN                                        # sing-box on 20443
    ```
    The MacBook visitor log stops reporting `xtcp server for [ccproxy-208-direct] doesn't exist`.
-4. **Direct tunnel.** On the MacBook, start or restart the visitor and use CC Proxy. Its log
+4. **Direct tunnel.** On the MacBook, start or restart the visitor and use aifree. Its log
    (`~/.config/ccproxy-xtcp-208/macbook/frpc.log`) shows `establishing nat hole connection successful` with a
    `remoteAddr` that is 208's public address, not `43.156.58.218`. `grep -i fallback
    ~/.config/ccproxy-xtcp-208/macbook/frpc.toml` prints nothing. If hole punching fails, the visitor logs `make hole
    error` or `open tunnel error` and the connection closes; nothing is relayed.
-5. **Public IPv4.** On 208, run `curl -4 https://api.ipify.org`. On the MacBook, with CC Proxy connected and
+5. **Public IPv4.** On 208, run `curl -4 https://api.ipify.org`. On the MacBook, with aifree connected and
    `api.ipify.org` in the proxied split rule, open `https://api.ipify.org` (or run `curl -4 https://api.ipify.org`
    in a proxied app). Both addresses must be the same: 208's outbound IPv4.
 6. **Boot recovery,** only if someone can unlock or recover 208 when FileVault prompts after a restart. After the
@@ -231,7 +231,7 @@ must be able to reach the chosen TLS 1.3 server. A manual handshake target can b
    the node awake and powered back on after an outage, run `sudo pmset -a sleep 0 autorestart 1`.
 3. Refresh the host page after the first heartbeat. Confirm the Mac's LAN IPv4 appears under **Egress IPs**. Reserve
    the address in the router's DHCP and assign a test user to it. Add `api.ipify.org` under **Settings → Proxied domains**
-   so the client routes the IPv4 test in step 5 through CC Proxy.
+   so the client routes the IPv4 test in step 5 through aifree.
 4. Check the services:
    ```bash
    sudo launchctl print system/com.ccproxy.exit.agent | grep -E 'state|pid'
@@ -241,7 +241,7 @@ must be able to reach the chosen TLS 1.3 server. A manual handshake target can b
    In the console, the host shows a fresh heartbeat, **in sync**, apply state **confirmed**, and sing-box
    **running**. The egress probes for the Mac's LAN IP succeed.
 5. Check the observed public IPv4. On the Mac, run `curl -4 https://api.ipify.org`. On a client signed in as the
-   test user, outside the home network, open `https://api.ipify.org` through CC Proxy. Both should show the same
+   test user, outside the home network, open `https://api.ipify.org` through aifree. Both should show the same
    address: the router's public IPv4. If the client shows its own network's address instead, check the split rule
    from step 2.
 6. Check boot recovery, **only if you can unlock or recover the Mac when a reboot stops at a prompt**: someone on
@@ -296,7 +296,7 @@ TEST_DATABASE_URL=postgresql://... python3 -m unittest tests.test_installer test
 | `tests/test_go_agent.py` | The compiled agent against the Go control plane and PostgreSQL: SIGHUP reload, Windows-style restart reload, rejected version, `http://` refused | macOS arm64 native |
 | `tests/test_installer.py` (XTCP) | Admin settings validated, secrets write-only (also in the audit log), generated secret key shown once, agent routes scoped to the calling host (204 for a public-entry host); installer on an XTCP host: macOS upgrade from a public-entry install, `frpc.toml` 0600, frpc plist and unit, back to the public entry removes frpc, digest mismatch and rejected configuration change nothing. With genuine archives, the real frpc 0.72.0 is downloaded, checked and verifies the configuration | macOS native; Linux mode with stubbed `systemctl` |
 | `tests/test_installer.py` | Against the Go control plane over real TLS: agent downloads need a host token (not the admin token) and match the digest; exit status 22/7 of the copied command; rendered `exit.sh` end to end for macOS (plists checked with `plutil`) and Linux mode (`--iface` units), rerun, uninstall, wrong token, digest mismatch, redirect plus `.curlrc` `location`, untrusted root. With `CCPROXY_TEST_SINGBOX_ARCHIVES`, the genuine sing-box 1.14.4 archives are downloaded and verified | macOS native with BSD tools; Linux mode with stubbed `systemctl` |
-| `controlplane/test/xtcp/run-e2e.sh` (Docker, systemd, internet) | Real Go control plane and PostgreSQL, real frps 0.72.0 on TCP 7003 (TLS, test CA, token), a systemd Linux exit host installed with the copied command (agent, sing-box and frpc from GitHub, verified), real frpc visitor (QUIC) and sing-box client from the CC Proxy client config. Checks: registration, services enabled at boot, proxied IPv4 equals the exit host's egress IPv4, 20 MB transfer with no bytes at frps, blocked hole punching fails with no relay, recovery after a container reboot, uninstall | Linux arm64 (Docker Desktop) |
+| `controlplane/test/xtcp/run-e2e.sh` (Docker, systemd, internet) | Real Go control plane and PostgreSQL, real frps 0.72.0 on TCP 7003 (TLS, test CA, token), a systemd Linux exit host installed with the copied command (agent, sing-box and frpc from GitHub, verified), real frpc visitor (QUIC) and sing-box client from the aifree client config. Checks: registration, services enabled at boot, proxied IPv4 equals the exit host's egress IPv4, 20 MB transfer with no bytes at frps, blocked hole punching fails with no relay, recovery after a container reboot, uninstall | Linux arm64 (Docker Desktop) |
 | `controlplane/test/shared-egress/run-e2e.sh` (Docker, internet) | Real Go control plane on a PostgreSQL test schema, real sing-box 1.14.4 and frp 0.72.0 (pinned, verified). Two shared users on a public-entry host and two on an XTCP host reach their own listeners concurrently from the same egress IPv4; a single-port XTCP host upgrades with its first mapping and visitor unchanged; a user's visitor key does not open another user's proxy; allocation conflicts and mode switches; releasing or revoking one holder leaves the other working | Linux arm64 (Docker Desktop) |
 | Docker `debian:12-slim` (linux/arm64, `NET_ADMIN`) | `ccproxy-exit-agent ips up/down` with the real `ip` tool on a dummy interface | Linux arm64 (manual run) |
 | PowerShell 7.4 parser (Docker) | `exit.ps1` as served, both Windows commands, the data block, `\z` patterns | Parse only; Windows PowerShell 5.1 and the Windows task were not run |

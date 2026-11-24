@@ -1,4 +1,4 @@
-//! Shared client logic for the cc_proxy CLI and desktop app.
+//! Shared client logic for the aifree CLI and desktop app.
 //!
 //! * [`api`]: the control plane's client API (sign in, fetch config, sign out).
 //! * [`session`]: where the signed-in session and the current sing-box config live on disk.

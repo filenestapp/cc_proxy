@@ -3,7 +3,7 @@ name = "ccproxy-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "cc_proxy desktop client (macOS, Windows, Linux)"
+description = "aifree desktop client (macOS, Windows, Linux)"
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
