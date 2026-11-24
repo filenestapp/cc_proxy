@@ -26,7 +26,7 @@ Track the candidate and the applied configuration separately. Keep a failed relo
 
 ## CC-03 [P1] Keep probes off the configuration and heartbeat loop
 
-The agent runs up to 16 HTTP probes concurrently, then waits for the entire batch before sending a heartbeat or starting the next synchronization cycle. With 200 IPs, one target, and the default 10-second timeout, a timed-out batch can take about 130 seconds. The default stale-agent threshold is 120 seconds, and configuration updates also wait for the probe batch. [Probe batch and report](../controlplane/agent.py#L90) · [Main loop](../controlplane/agent.py#L177) · [Alert defaults](../controlplane/alerts.py#L33)
+The agent runs up to 16 HTTP probes concurrently, then waits for the entire batch before sending a heartbeat or starting the next synchronization cycle. With 200 IPs, one target, and the default 10-second timeout, a timed-out batch can take about 130 seconds. The default stale-agent threshold is 120 seconds, and configuration updates also wait for the probe batch. [Probe batch and report](../controlplane/agent.py#L90) · [Main loop](../controlplane/agent.py#L177) · [Alert defaults](https://github.com/filenestapp/cc_proxy/blob/26b3b044c798c3cf16f3013b3bc6d774730b9419/controlplane/alerts.py#L33)
 
 Schedule probes independently with bounded concurrency and bounded result buffering. Keep heartbeats and configuration updates running on their own cadence. Report completed probes without requiring the whole batch to finish.
 
@@ -46,7 +46,7 @@ Enforce the supported address family on the server before selecting a user's bou
 
 ## CC-05 [P2] Change a user's exit assignment atomically
 
-Updating a bound user currently takes `release` followed by `assign`. The review confirmed that a subscription poll between those operations receives `409`. The desktop app treats that response as a deliberate removal, stops the tunnel, and stops polling while disconnected. A successful subsequent assignment then requires the user to reconnect. [Assignment guard](../controlplane/store.py#L447) · [Subscription conflict](../controlplane/store.py#L622) · [Desktop handling](../client/desktop/src-tauri/src/main.rs#L219)
+Updating a bound user currently takes `release` followed by `assign`. The review confirmed that a subscription poll between those operations receives `409`. The desktop app treats that response as a deliberate removal, stops the tunnel, and stops polling while disconnected. A successful subsequent assignment then requires the user to reconnect. [Assignment guard](https://github.com/filenestapp/cc_proxy/blob/26b3b044c798c3cf16f3013b3bc6d774730b9419/controlplane/store.py#L447) · [Subscription conflict](https://github.com/filenestapp/cc_proxy/blob/26b3b044c798c3cf16f3013b3bc6d774730b9419/controlplane/store.py#L622) · [Desktop handling](../client/desktop/src-tauri/src/main.rs#L219)
 
 Expose a single reassignment operation through the admin API and CLI. Validate the replacement host, IP, and port before committing the change. Update the binding and any applicable cooldown together in one transaction. Preserve the explicit release action and its existing client behavior.
 
@@ -56,7 +56,7 @@ Expose a single reassignment operation through the admin API and CLI. Validate t
 
 ## CC-06 [P2] Recheck the password revision before issuing a device token
 
-`Store.login` verifies the password outside the write transaction. The transaction then reloads the user and issues a token without checking whether the verified password hash is still current. A concurrent password reset with device revocation can complete in that interval. [Login transaction](../controlplane/store.py#L535) · [Password reset](../controlplane/store.py#L407)
+`Store.login` verifies the password outside the write transaction. The transaction then reloads the user and issues a token without checking whether the verified password hash is still current. A concurrent password reset with device revocation can complete in that interval. [Login transaction](https://github.com/filenestapp/cc_proxy/blob/26b3b044c798c3cf16f3013b3bc6d774730b9419/controlplane/store.py#L535) · [Password reset](https://github.com/filenestapp/cc_proxy/blob/26b3b044c798c3cf16f3013b3bc6d774730b9419/controlplane/store.py#L407)
 
 Keep the expensive password verification outside the write lock if practical. Inside the token-issuance transaction, confirm that the verified credential revision still matches the current account before creating or rotating a device token.
 
@@ -76,7 +76,7 @@ Associate each request with a session identity or generation. Check that it is s
 
 ## CC-08 [P2] Apply per-source login limits correctly behind a reverse proxy
 
-The login limiter uses the TCP peer address. In the documented reverse-proxy deployment, that address can be the proxy for every request. Users behind the proxy then share a single address counter and can be locked out by another user's failed logins. [Login limiter key](../controlplane/server.py#L245) · [Deployment notes](../controlplane/README.md#L193)
+The login limiter uses the TCP peer address. In the documented reverse-proxy deployment, that address can be the proxy for every request. Users behind the proxy then share a single address counter and can be locked out by another user's failed logins. [Login limiter key](https://github.com/filenestapp/cc_proxy/blob/26b3b044c798c3cf16f3013b3bc6d774730b9419/controlplane/server.py#L245) · [Deployment notes](https://github.com/filenestapp/cc_proxy/blob/26b3b044c798c3cf16f3013b3bc6d774730b9419/controlplane/README.md#L193)
 
 Enforce the per-source limit at the ingress proxy, or derive the client address only from explicitly trusted proxies. Keep per-account rate limiting. For direct requests, use the actual transport peer address and disregard untrusted forwarding headers.
 

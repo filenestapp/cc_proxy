@@ -259,6 +259,12 @@
   .modal .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   .modal .err { color: var(--bad); font-size: 13px; min-height: 1.3em; }
   .secret { font-family: var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px; overflow-wrap: anywhere; user-select: all; }
+  .os-tabs { display: flex; gap: 6px; margin: 10px 0 4px; }
+  .os-tabs button[aria-selected="true"] { background: var(--accent, #2563eb); color: #fff; border-color: transparent; }
+  .install-row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+  .install-row .form-row { flex: 1 1 200px; margin: 0; }
+  .install-cmd { display: flex; gap: 6px; align-items: flex-start; }
+  .install-cmd pre { flex: 1; min-width: 0; }
   pre.snippet { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; margin: 8px 0 0; }
   .toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px; z-index: 30; max-width: calc(100vw - 32px); }
   .toast { background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.2); max-width: 420px; }
@@ -272,6 +278,11 @@
   .appearance { flex: none; width: auto; font-size: 12px; }
   .login .appearance { float: right; }
   .badge.info { background: var(--idle-soft); color: var(--ink); }
+  .usage-nav { display: flex; align-items: center; gap: 6px; }
+  .usage-nav b { min-width: 13ch; text-align: center; font-variant-numeric: tabular-nums; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .usage-why { color: var(--muted); font-size: 12px; margin-top: 3px; max-width: 420px; }
+  td.nowrap { white-space: nowrap; }
   .badge { font-weight: 550; }
   .actions button:focus-visible { outline-offset: 0; }
   @media (max-width: 540px) {
@@ -303,6 +314,7 @@
       <a href="#/hosts" data-nav="hosts"><span data-icon="server"></span>Hosts</a>
       <a href="#/ips" data-nav="ips"><span data-icon="ips"></span>Egress IPs</a>
       <a href="#/users" data-nav="users"><span data-icon="users"></span>Users</a>
+      <a href="#/usage" data-nav="usage"><span data-icon="chart"></span>Usage</a>
       <a href="#/alerts" data-nav="alerts"><span data-icon="bell"></span>Alerts <span class="count" id="alert-count" hidden></span></a>
       <hr class="nav-divider">
       <a href="#/settings" data-nav="settings"><span data-icon="settings"></span>Settings</a>
@@ -339,6 +351,7 @@
     log: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6m-6 4h6m-6 4h4"/>',
     shield: '<path d="m12 2 8 3v6c0 6-4 9-8 11-4-2-8-5-8-11V5z"/><path d="m9 12 2 2 4-4"/>',
     refresh: '<path d="M20 10a8 8 0 1 0-1 7M20 4v6h-6"/>',
+    chart: '<path d="M4 20V4M4 20h16"/><path d="M8 16v-5m4 5V8m4 8v-3"/>',
   };
   const icon = (name) => '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round">' + ICONS[name] + "</svg>";
   $$("[data-icon]").forEach((item) => { item.innerHTML = icon(item.dataset.icon); });
@@ -466,6 +479,7 @@
       try { await navigator.clipboard.writeText(secret); toast("Copied"); } catch (e) { toast("Could not copy. Select the value and copy it manually.", true); }
     };
     $("[data-ok]", ov).onclick = close;
+    return ov;
   }
 
   // ---- auth -----------------------------------------------------------------------------------------------
@@ -639,7 +653,7 @@
     return `<button class="map-node ${health.tone}" data-node="${esc(host.name)}" data-tone="${health.tone}"
       type="button" aria-controls="host-inspector" aria-expanded="${host.name === selected}">
       <span class="node-top"><b>${esc(host.name)}</b>${statusBadge(health)}</span>
-      <span class="node-address mono">${esc(endpoint(host.public_host, entry?.port))}</span>
+      <span class="node-address mono">${esc(publicEntryLabel(host, entry?.port))}</span>
       <span class="node-metric">${best ? '<strong>' + ms(best.latency_ms) + '</strong><span>' + esc(best.source) + '</span>' :
         '<span>No current latency</span>'}</span>
       <span class="node-footer"><span><b>${node.ips.length}</b> ${node.ips.length === 1 ? "IP" : "IPs"}</span>
@@ -861,24 +875,115 @@
     if (current(token)) refreshEvery(10, load, token);
   };
 
-  function agentCommand(token) {
-    return "CP_AGENT_TOKEN=" + token + " python3 controlplane/agent.py \\\n  --cp " + location.origin + " --iface eth0 \\\n  --reload-cmd \"systemctl reload sing-box\" --status-cmd \"systemctl is-active --quiet sing-box\"";
+  // Install / uninstall commands for an exit host. The token is never part of a command: the installer asks for it
+  // with hidden input. Commands come from /admin/install-commands, which accepts only an https control plane URL.
+  const INSTALL_OS = [["macos", "macOS"], ["linux", "Linux"], ["windows", "Windows"]];
+  // transport: the host's /admin/hosts/{name}/xtcp view ({transport: "public"} for a new host). reuseToken: the host
+  // may already have an installed token (the Install command dialog; not after a rotation, where it no longer works).
+  function installHelp(transport, reuseToken) {
+    const token = reuseToken
+      ? "then the installer asks for the agent token (hidden; press Enter to reuse the token already installed on this host)"
+      : "then the installer asks for the agent token (hidden)";
+    if (transport && transport.transport === "xtcp") {
+      const x = transport;
+      const frpc = `This host uses XTCP: the installer also downloads the pinned frpc and starts it at boot. frpc registers proxy ${x.proxy_name} with frps ${x.server_addr}:${x.server_port} (TLS verified) and forwards it to sing-box on 127.0.0.1:${x.local_port}. Clients connect directly through their XTCP visitor, so no inbound port forwarding is needed.`;
+      return {
+        macos: `Run in Terminal on the Mac. sudo asks for the Mac password, ${token}. ${frpc} The Mac Agent registers its default interface's IPv4 when the egress pool is empty.`,
+        linux: `Run on the host. sudo asks for your password, ${token}. ${frpc} Name an interface only when the provider routes extra egress IPs to this host.`,
+        windows: `Run in PowerShell started with "Run as administrator"; ${token.replace("then the installer", "the installer")}. ${frpc} frpc runs as the CCProxyExitFrpc task, with a firewall rule for its UDP hole punching.`,
+      };
+    }
+    return {
+      macos: `Run in Terminal on the Mac. sudo asks for the Mac password, ${token}. The Mac Agent registers its default interface's IPv4 when the egress pool is empty. Forward the TCP entry port range to the Mac.`,
+      linux: `Run on the host. sudo asks for your password, ${token}. Name an interface only when the provider routes extra egress IPs to this host; otherwise its existing address is the egress IP.`,
+      windows: `Run in PowerShell started with "Run as administrator"; ${token.replace("then the installer", "the installer")}.`,
+    };
   }
-  function showAgentToken(host, token) {
-    reveal("Host " + host + " agent token", "Use this token to start the agent on the egress host.", token,
-      '<p class="small muted" style="margin:12px 0 0">Run on the egress host with its network interface name:</p><pre class="snippet">' + esc(agentCommand(token)) + "</pre>");
+
+  function installPanel(root, transport = { transport: "public" }, reuseToken = false) {
+    let os = "macos";
+    root.innerHTML = `
+      <div class="install-row">
+        <div class="form-row"><label for="inst-cp">Control plane URL the host uses</label>
+          <input id="inst-cp" value="${esc(location.origin)}" placeholder="https://cp.example:8443"></div>
+        <div class="form-row" id="inst-iface-row" hidden><label for="inst-iface">Interface for routed egress IPs (optional)</label>
+          <input id="inst-iface" placeholder="eth0"></div>
+      </div>
+      <div class="os-tabs" role="tablist" aria-label="Operating system">${INSTALL_OS.map(([k, l]) =>
+        `<button type="button" role="tab" data-os="${k}" aria-selected="${k === os}">${l}</button>`).join("")}</div>
+      <p class="small muted" id="inst-how"></p>
+      <div class="install-cmd"><pre class="snippet" id="inst-cmd"></pre><button type="button" data-copy-cmd="inst-cmd">Copy</button></div>
+      <p class="small muted" style="margin:10px 0 0">Uninstall (stops the services and removes the files and the stored token):</p>
+      <div class="install-cmd"><pre class="snippet" id="inst-uninstall"></pre><button type="button" data-copy-cmd="inst-uninstall">Copy</button></div>
+      <p class="small muted" id="inst-note"></p>`;
+    const how = installHelp(transport, reuseToken);
+    let timer;
+    let seq = 0;  // only the response to the latest request may fill the commands
+    // Any change makes the shown commands stale at once: clear them and disable Copy until the new ones arrive, so a
+    // quick Copy after switching OS or editing the URL can never copy the previous command.
+    function invalidate() {
+      seq++;
+      $("#inst-cmd", root).textContent = $("#inst-uninstall", root).textContent = "";
+      root.querySelectorAll("[data-copy-cmd]").forEach((b) => { b.disabled = true; });
+      $("#inst-note", root).textContent = "Loading the command…";
+      $("#inst-iface-row", root).hidden = os !== "linux";
+      $("#inst-how", root).textContent = how[os];
+      return seq;
+    }
+    async function refresh() {
+      const mine = invalidate(), want = os;
+      const q = "cp=" + encodeURIComponent($("#inst-cp", root).value.trim()) +
+        (want === "linux" && $("#inst-iface", root).value.trim() ? "&iface=" + encodeURIComponent($("#inst-iface", root).value.trim()) : "");
+      let cmds, error;
+      try { cmds = await api("GET", "/admin/install-commands?" + q); } catch (e) { error = e; }
+      if (mine !== seq || want !== os) return;  // a newer tab or input superseded this response
+      if (error) { $("#inst-note", root).textContent = error.message; return; }
+      $("#inst-cmd", root).textContent = cmds[want].install;
+      $("#inst-uninstall", root).textContent = cmds[want].uninstall;
+      $("#inst-note", root).textContent = "";
+      root.querySelectorAll("[data-copy-cmd]").forEach((b) => { b.disabled = false; });
+    }
+    root.addEventListener("click", async (e) => {
+      const tab = e.target.closest("[data-os]");
+      if (tab) {
+        os = tab.dataset.os;
+        root.querySelectorAll("[data-os]").forEach((b) => b.setAttribute("aria-selected", String(b === tab)));
+        refresh();
+      }
+      const copy = e.target.closest("[data-copy-cmd]");
+      if (copy) {
+        const text = $("#" + copy.dataset.copyCmd, root).textContent;
+        if (copy.disabled || !text) return;
+        try { await navigator.clipboard.writeText(text); toast("Command copied"); } catch (err) { toast("Could not copy. Select the command and copy it manually.", true); }
+      }
+    });
+    root.addEventListener("input", () => { invalidate(); clearTimeout(timer); timer = setTimeout(refresh, 300); });
+    refresh();
   }
+  function showAgentToken(host, token, transport) {
+    const ov = reveal("Host " + host + " agent token", "Paste this token when the installer asks for it.", token,
+      '<h4 style="margin:16px 0 0">Install on the exit host</h4><div id="install-panel"></div>');
+    installPanel($("#install-panel", ov), transport);
+  }
+  function showInstall(host, transport) {
+    const { ov, close } = overlay("<h3>Install or update the agent on " + esc(host) + '</h3><p class="small muted">The installer asks for the host\'s agent token. Lost it? Rotate the token; the old one stops working at once.</p><div id="install-panel"></div><div class="buttons"><button type="button" class="primary" data-ok>Done</button></div>');
+    installPanel($("#install-panel", ov), transport, true);
+    $("[data-ok]", ov).onclick = close;
+  }
+  function publicEntryLabel(host, port) {
+    return host.public_host ? endpoint(host.public_host, port) : "Waiting for Agent IPv4";
+  }
+
   const hostFields = (h = {}) => [
-    { name: "public_host", label: "Public entry address", value: h.public_host, required: true, placeholder: "192.0.2.2 or hostname", hint: "Clients connect to this address." },
-    { name: "server_name", label: "Reality TLS server name (SNI)", value: h.server_name, required: true, placeholder: "www.example.com", hint: "A public site that supports TLS 1.3." },
-    { name: "handshake_server", label: "Handshake target (optional)", value: h.handshake_server || "", placeholder: "Defaults to the TLS server name." },
+    { name: "public_host", label: "Public entry address", value: h.auto_public_host ? "" : h.public_host, placeholder: "Automatic or IPv4/hostname", hint: "Leave blank to update from Agent heartbeats. Clients must reach the entry port." },
+    { name: "server_name", label: "Reality TLS server name (SNI)", value: h.server_name ?? "google.com", required: true, placeholder: "google.com", hint: "A public site reachable from the exit host over TLS 1.3." },
+    { name: "handshake_server", label: "Handshake target (optional)", value: h.handshake_server === h.server_name ? "" : h.handshake_server, placeholder: "Defaults to the TLS server name." },
     { name: "port_min", label: "First user entry port", type: "number", value: h.port_range ? h.port_range[0] : 20000, required: true },
     { name: "port_max", label: "Last user entry port", type: "number", value: h.port_range ? h.port_range[1] : 29999, required: true, hint: "Allow this port range through the host firewall." },
   ];
   function hostBody(v) {
-    const b = { public_host: v.public_host, server_name: v.server_name, port_min: Number(v.port_min), port_max: Number(v.port_max) };
-    if (v.handshake_server) b.handshake_server = v.handshake_server;
-    return b;
+    return { public_host: v.public_host, server_name: v.server_name, handshake_server: v.handshake_server,
+      port_min: Number(v.port_min), port_max: Number(v.port_max) };
   }
 
   PAGES.hosts = async (args, token) => {
@@ -890,7 +995,7 @@
     const agents = Object.fromEntries(topo.agents.map((a) => [a.name, a]));
     $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + hosts.length + ' hosts</span><span class="spacer"></span><button class="primary" id="add-host">Add host</button></div>' +
       '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Public entry</th><th>Port range</th><th>Egress IPs</th><th>Users</th><th>Agent</th><th>TLS server name</th></tr></thead><tbody>' +
-      (hosts.map((h) => "<tr><td><a href=\"#/hosts/" + enc(h.name) + '"><b>' + esc(h.name) + "</b></a></td><td class=\"mono\">" + esc(h.public_host) + '</td><td class="mono">' + h.port_range[0] + "–" + h.port_range[1] + "</td><td>" + h.ips + "</td><td>" + h.users + "</td><td>" + statusBadge(agentHealth(agents[h.name])) + '</td><td class="mono small">' + esc(h.server_name) + "</td></tr>").join("") ||
+      (hosts.map((h) => "<tr><td><a href=\"#/hosts/" + enc(h.name) + '"><b>' + esc(h.name) + "</b></a></td><td class=\"mono\">" + esc(publicEntryLabel(h)) + '</td><td class="mono">' + h.port_range[0] + "–" + h.port_range[1] + "</td><td>" + h.ips + "</td><td>" + h.users + "</td><td>" + statusBadge(agentHealth(agents[h.name])) + '</td><td class="mono small">' + esc(h.server_name) + "</td></tr>").join("") ||
         '<tr><td colspan="7" class="empty">No egress hosts yet.</td></tr>') + "</tbody></table></div>";
     $("#add-host").onclick = async () => {
       const r = await form("Add egress host", [{ name: "name", label: "Host name", required: true, placeholder: "hk-1" }, ...hostFields()],
@@ -899,9 +1004,57 @@
     };
   };
 
+  // XTCP settings. The frps token and the secret key are write-only: leave them empty to keep the stored values.
+  async function editXtcp(name, h, x) {
+    const on = x.transport === "xtcp";
+    const fields = [
+      { name: "server_addr", label: "frps address", value: x.server_addr || "", required: true, placeholder: "203.0.113.10" },
+      { name: "server_port", label: "frps port", type: "number", value: x.server_port || 7003, required: true },
+      { name: "tls_server_name", label: "frps TLS server name", value: x.tls_server_name || "", placeholder: "Defaults to the frps address", hint: "The name in the frps certificate; it is always verified." },
+      { name: "ca_pem", label: on ? "CA certificate (PEM; leave empty to keep)" : "CA certificate (PEM)", type: "textarea", value: "", required: !on, placeholder: "-----BEGIN CERTIFICATE-----" },
+      { name: "auth_token", label: on ? "frps token (leave empty to keep)" : "frps token", type: "password", value: "", required: !on },
+      { name: "proxy_name", label: "XTCP proxy name", value: x.proxy_name || "ccproxy-" + name + "-direct", required: true, hint: "The visitor's serverName must match." },
+      { name: "secret_key", label: on ? "XTCP secret key (leave empty to keep)" : "XTCP secret key (leave empty to generate)", type: "password", value: "", hint: "Must match the visitor's secretKey." },
+      { name: "local_port", label: "sing-box entry port on the host", type: "number", value: x.local_port || "", required: true, hint: "The user's entry port, within " + h.port_range[0] + "–" + h.port_range[1] + "." },
+    ];
+    const r = await form((on ? "Edit" : "Configure") + " XTCP for " + name, fields, (v) => {
+      const b = { server_addr: v.server_addr, server_port: Number(v.server_port), proxy_name: v.proxy_name, local_port: Number(v.local_port) };
+      if (v.tls_server_name) b.tls_server_name = v.tls_server_name;
+      for (const k of ["ca_pem", "auth_token", "secret_key"]) if (v[k]) b[k] = v[k];
+      return api("PUT", "/admin/hosts/" + enc(name) + "/xtcp", b);
+    }, "Save");
+    if (!r) return;
+    if (r.secret_key) reveal("XTCP secret key for " + name, "Put this secretKey in the visitor's frpc configuration.", r.secret_key);
+    else toast("Saved. Run the install command again on the host.");
+    route();
+  }
+
+  function xtcpMappingList(x) {
+    const list = x.mappings || [{ proxy_name: x.proxy_name, port: x.local_port, user: "", primary: true }];
+    return list.map((m) => `<div class="mono">${esc(m.proxy_name)} → 127.0.0.1:${m.port}${m.user ? ' <span class="muted">(' + esc(m.user) + ")</span>" : m.primary ? ' <span class="muted">(no user on this port)</span>' : ""}</div>`).join("");
+  }
+  function xtcpState(x) {
+    if (x.frpc_state === "current") return '<span class="badge ok">Current</span> <span class="small muted">fetched ' + (x.delivered_at ? ago(now() - x.delivered_at) : "") + "</span>";
+    if (x.frpc_state === "outdated") return '<span class="badge warn">Run the install command again</span><div class="small muted">The proxies changed since the host last fetched its frpc configuration. Existing proxies keep working; new or moved users connect after the rerun.</div>';
+    return '<span class="badge">Unknown</span><div class="small muted">Not fetched since mapping tracking began. Run the install command again to confirm.</div>';
+  }
+  // One user's frpc visitor: only that user's proxy and scoped secret key. The frps token stays write-only.
+  async function showVisitor(user) {
+    const r = await act(() => api("GET", "/admin/users/" + enc(user) + "/xtcp-visitor"));
+    if (!r) return;
+    const { ov, close } = overlay("<h3>XTCP visitor for " + esc(user) + '</h3><p class="small muted">frpc visitor for proxy <span class="mono">' + esc(r.proxy_name) +
+      "</span>. Its secret key opens only this user's entry port " + r.bind_port + ". Set <span class=\"mono\">FRP_AUTH_TOKEN</span> to the frps token in frpc's environment, save the frps CA as frp-ca.pem, and point CC Proxy at <span class=\"mono\">" +
+      esc(r.bind_addr + ":" + r.bind_port) + '</span>.</p><pre class="secret" style="white-space:pre-wrap;max-height:50vh;overflow:auto">' + esc(r.frpc_toml) + "</pre>" +
+      '<div class="buttons"><button type="button" data-copy>Copy</button><button type="button" class="primary" data-ok>Done</button></div>');
+    $("[data-copy]", ov).onclick = async () => {
+      try { await navigator.clipboard.writeText(r.frpc_toml); toast("Copied"); } catch (e) { toast("Could not copy. Select the text and copy it manually.", true); }
+    };
+    $("[data-ok]", ov).onclick = close;
+  }
   async function hostDetail(name, token) {
     setTitle(name);
-    const [hosts, ips, topo, users] = await Promise.all([api("GET", "/admin/hosts"), api("GET", "/admin/ips?host=" + enc(name)), api("GET", "/admin/topology"), api("GET", "/admin/users")]);
+    const [hosts, ips, topo, users, xtcp] = await Promise.all([api("GET", "/admin/hosts"), api("GET", "/admin/ips?host=" + enc(name)), api("GET", "/admin/topology"), api("GET", "/admin/users"),
+      api("GET", "/admin/hosts/" + enc(name) + "/xtcp").catch(() => ({ transport: "public" }))]);
     if (!current(token)) return;
     const h = hosts.find((x) => x.name === name);
     if (!h) { $("#view").innerHTML = '<div class="empty">Host not found. <a href="#/hosts">Back to list</a></div>'; return; }
@@ -914,13 +1067,16 @@
       <div class="toolbar"><a href="#/hosts">All hosts</a>
         ${node ? statusBadge(node.health) : ""}<span class="spacer"></span>
         <button class="primary" id="edit" type="button">Edit host</button>
+        <button id="install" type="button">Install command</button>
         <button id="rotate" type="button">Rotate agent token</button>
         <button class="danger" id="del" type="button">Delete host</button>
       </div>
       <div class="grid2 section">
         <section class="card"><h2>Public entry</h2><dl class="kv">
-          <dt>Address</dt><dd class="mono">${esc(h.public_host)}</dd>
+          <dt>Address</dt><dd class="mono">${esc(publicEntryLabel(h))}</dd>
+          <dt>Address mode</dt><dd>${h.auto_public_host ? "Automatic" : "Manual"}</dd>
           <dt>Port range</dt><dd class="mono">${h.port_range[0]}–${h.port_range[1]}</dd>
+          <dt>Entry capacity</dt><dd>${h.users} of ${h.port_capacity} ports in use · ${h.free_ports} free${h.free_ports === 0 ? ' <span class="badge warn">Full</span>' : ""}<div class="small muted">Each user needs a distinct entry port, also when users share an egress IP.</div></dd>
           <dt>TLS server name</dt><dd class="mono">${esc(h.server_name)}</dd>
           <dt>Reality public key</dt><dd class="mono small">${esc(h.reality_public_key)}</dd>
         </dl></section>
@@ -932,23 +1088,44 @@
           <dt>Current config</dt><dd class="mono small">${esc(topo.server_config_etags[name] || "—")}</dd>
         </dl>${agent?.apply_error && !agent.in_sync ? '<p class="line">' + esc(agent.apply_error) + "</p>" : ""}</section>
       </div>
+      <section class="section" id="transport"><h2>Transport<span class="spacer"></span>
+          <button id="xtcp-edit" type="button">${xtcp.transport === "xtcp" ? "Edit XTCP" : "Configure XTCP"}</button>
+          ${xtcp.transport === "xtcp" ? '<button class="danger" id="xtcp-off" type="button">Use public entry</button>' : ""}</h2>
+        <div class="card">${xtcp.transport === "xtcp" ? `<dl class="kv">
+          <dt>Mode</dt><dd>XTCP through frps (direct connections only, no relay fallback)</dd>
+          <dt>frps</dt><dd class="mono">${esc(xtcp.server_addr)}:${xtcp.server_port} (TLS name ${esc(xtcp.tls_server_name)})</dd>
+          <dt>CA</dt><dd class="small">${esc(xtcp.ca_subject || "—")}, until ${esc(xtcp.ca_not_after || "—")}<br><span class="mono">SHA-256 ${esc(xtcp.ca_sha256 || "")}</span></dd>
+          <dt>Proxies</dt><dd>${xtcpMappingList(xtcp)}</dd>
+          <dt>Exit host frpc</dt><dd>${xtcpState(xtcp)}</dd>
+          <dt>Credentials</dt><dd>${xtcp.has_auth_token ? "frps token set" : "no frps token"}, ${xtcp.has_secret_key ? "secret key set" : "no secret key"} (never shown again)</dd>
+        </dl><p class="small muted">The install command sets up frpc too. Run it again on the host after a change here.</p>`
+          : '<p class="muted">Public entry: clients connect to the public address above. Configure XTCP for a host behind NAT; the install command then also installs frpc.</p>'}</div></section>
       <section class="section"><h2>Entry probes</h2><div class="card">${entryProbes(node?.entry, topo.now)}</div></section>
       <section class="section"><h2>Egress IPs (${ips.length})<span class="spacer"></span><button class="primary" id="add-ips" type="button">Add IPs</button></h2>
         ${ipTable(ips, probes, topo.now, false)}</section>
       <section class="section"><h2>Assigned users (${onHost.length})</h2><div class="table-wrap">
-        <table><thead><tr><th>User</th><th>Egress IP</th><th>Entry port</th><th>Devices</th></tr></thead><tbody>
-        ${onHost.map((u) => `<tr><td><a href="#/users/${enc(u.name)}">${esc(u.name)}</a></td>
-          <td class="mono">${esc(u.egress_ip)}</td><td class="mono">${u.port}</td>
-          <td>${u.devices.filter((device) => !device.revoked).length} / ${u.max_devices}</td></tr>`).join("") ||
-          '<tr><td colspan="4" class="empty">No users are assigned to this host.</td></tr>'}
+        <table><thead><tr><th>User</th><th>Mode</th><th>Egress IP</th><th>Entry port</th><th>Devices</th>${xtcp.transport === "xtcp" ? "<th></th>" : ""}</tr></thead><tbody>
+        ${onHost.sort((a, b) => a.port - b.port).map((u) => `<tr><td><a href="#/users/${enc(u.name)}">${esc(u.name)}</a></td>
+          <td>${u.mode === "shared" ? "Shared" : "Exclusive"}</td>
+          <td class="mono">${esc(u.egress_ip)}${onHost.filter((o) => o.egress_ip === u.egress_ip).length > 1 ? ' <span class="badge info">Shared</span>' : ""}</td><td class="mono">${u.port}</td>
+          <td>${u.devices.filter((device) => !device.revoked).length} / ${u.max_devices}</td>
+          ${xtcp.transport === "xtcp" ? `<td class="actions"><button class="link" data-visitor="${esc(u.name)}">Visitor config</button></td>` : ""}</tr>`).join("") ||
+          `<tr><td colspan="${xtcp.transport === "xtcp" ? 6 : 5}" class="empty">No users are assigned to this host.</td></tr>`}
         </tbody></table></div></section>`;
     $("#edit").onclick = async () => {
       if (await form("Edit host " + name, hostFields(h), (v) => api("PUT", "/admin/hosts/" + enc(name), hostBody(v)))) { toast("Saved. The agent will apply the change on its next sync."); route(); }
     };
+    $("#install").onclick = () => showInstall(name, xtcp);
+    $$("[data-visitor]").forEach((b) => b.onclick = () => showVisitor(b.dataset.visitor));
+    $("#xtcp-edit").onclick = () => editXtcp(name, h, xtcp);
+    if ($("#xtcp-off")) $("#xtcp-off").onclick = async () => {
+      if (!(await confirmBox("Use the public entry for " + name, "frps credentials for this host are deleted. Run the install command again on the host: it stops and removes frpc.", "Use public entry"))) return;
+      if (await act(() => api("DELETE", "/admin/hosts/" + enc(name) + "/xtcp"), "Saved. Run the install command again on the host.")) route();
+    };
     $("#rotate").onclick = async () => {
-      if (!(await confirmBox("Rotate agent token", "The previous token expires immediately. Update the agent with the new token and restart it to restore reporting.", "Rotate"))) return;
+      if (!(await confirmBox("Rotate agent token", "The previous token expires immediately. Then run the install command again on the host and paste the new token: the rerun keeps the configuration and restarts the agent.", "Rotate"))) return;
       const r = await act(() => api("POST", "/admin/hosts/" + enc(name) + "/rotate-token"));
-      if (r) showAgentToken(name, r.agent_token);
+      if (r) showAgentToken(name, r.agent_token, xtcp);
     };
     $("#del").onclick = async () => {
       if (!(await confirmBox("Delete host " + name, "This removes the host and its egress IPs. Release all user assignments first.", "Delete"))) return;
@@ -994,8 +1171,12 @@
       }).join("");
       const health = probeDetails ? `<details class="probe-details"><summary>${statusBadge(status)}</summary><ul>${probeDetails}</ul></details>` :
         statusBadge(status);
-      const holders = ip.users.map((user) => `<a href="#/users/${enc(user)}">${esc(user)}</a><span class="mono">:${esc(ip.ports[user])}</span>`).join(", ") || "—";
+      const list = ip.holders || ip.users.map((user) => ({ user, port: ip.ports[user] }));
+      const holders = (list.map((h) => `<a href="#/users/${enc(h.user)}">${esc(h.user)}</a><span class="mono">:${esc(h.port)}</span>`).join(", ") || "—") +
+        (list.length > 1 ? ` <span class="badge info">Shared · ${list.length} users</span>` : "");
+      const sharable = ip.status === "available" || (ip.status === "assigned" && list.every((h) => h.mode === "shared"));
       const actions = [
+        sharable ? `<button class="link" data-ip-share="${esc(ip.ip)}" data-ip-host="${esc(ip.host)}">${ip.status === "available" ? "Assign user" : "Add holder"}</button>` : "",
         ip.status === "banned" || ip.status === "cooldown" ?
           `<button class="link" data-ip-available="${esc(ip.ip)}">${ip.status === "banned" ? "Unban" : "End cooldown"}</button>` : "",
         ip.status !== "banned" ? `<button class="link danger" data-ip-ban="${esc(ip.ip)}">Ban</button>` : "",
@@ -1009,11 +1190,37 @@
         <td>${holders}</td><td class="small">${esc(ip.note)}</td><td class="actions">${actions}</td></tr>`;
     });
     return `<div class="table-wrap"><table><thead><tr><th>IP address</th>${withHost ? "<th>Host</th>" : ""}
-      <th>Allocation</th><th>Probe health</th><th>User / port</th><th>Note</th><th scope="col">Actions</th>
+      <th>Allocation</th><th>Probe health</th><th>Users / entry ports</th><th>Note</th><th scope="col">Actions</th>
       </tr></thead><tbody>${rows.join("") || `<tr><td colspan="${withHost ? 7 : 6}" class="empty">No egress IPs match this view.</td></tr>`}
       </tbody></table></div>`;
   }
+  // Assign another user to an IP: any user for an available IP, Shared users for a shared one. A user already
+  // bound elsewhere moves in one step. The entry port is chosen automatically unless one is given.
+  async function addHolder(ip, hostName, onChange) {
+    const [users, ips, hosts] = await act(() => Promise.all([api("GET", "/admin/users"), api("GET", "/admin/ips?host=" + enc(hostName)), api("GET", "/admin/hosts")])) || [];
+    if (!users) return;
+    const row = ips.find((e) => e.ip === ip) || { holders: [] };
+    const h = hosts.find((x) => x.name === hostName) || { port_range: ["?", "?"], free_ports: 0 };
+    const holding = new Set((row.holders || []).map((x) => x.user));
+    const eligible = users.filter((u) => !holding.has(u.name) && (row.status === "available" || u.mode === "shared"));
+    if (!eligible.length) {
+      toast(row.status === "available" ? "No users to assign." : "No eligible users: switch a user to Shared mode first.", true);
+      return;
+    }
+    const r = await form((row.status === "available" ? "Assign " : "Share ") + ip, [
+      { name: "user", label: "User", type: "select", value: eligible[0].name, options: eligible.map((u) => [u.name, u.name + " · " + (u.mode === "shared" ? "Shared" : "Exclusive") + (u.egress_ip ? " · moves from " + u.egress_ip + ":" + u.port : "")]),
+        hint: row.status === "available" ? "" : "Only Shared users can join a shared IP. Change a user's egress mode on the user page." },
+      { name: "port", label: "Entry port (optional)", type: "number", placeholder: "Automatic: lowest free port", hint: "Each user needs a distinct port in " + h.port_range[0] + "–" + h.port_range[1] + " on " + hostName + " (" + h.free_ports + " free)." },
+    ], (v) => {
+      const u = users.find((x) => x.name === v.user);
+      const body = { ip };
+      if (v.port) body.port = Number(v.port);
+      return api("POST", "/admin/users/" + enc(v.user) + (u && u.egress_ip ? "/reassign" : "/assign"), body);
+    }, "Assign");
+    if (r) { toast("Assigned " + r.user + " to " + r.egress_ip + " on entry port " + r.port + "."); await onChange(); }
+  }
   function bindIpActions(onChange = route) {
+    $$("[data-ip-share]").forEach((b) => b.onclick = () => addHolder(b.dataset.ipShare, b.dataset.ipHost, onChange));
     $$("[data-ip-ban]").forEach((b) => b.onclick = async () => {
       const ip = b.dataset.ipBan;
       const r = await form("Ban " + ip, [{ name: "note", label: "Reason (optional)", placeholder: "Example: target returned HTTP 403" }],
@@ -1139,11 +1346,11 @@
     const live = u.devices.filter((d) => !d.revoked);
     const entry = u.host ? hosts.find((h) => h.name === u.host) : null;
     $("#view").innerHTML =
-      '<div class="toolbar"><a href="#/users">← All users</a><span class="spacer"></span><button id="pw">Reset password</button><button id="limit">Device limit</button><button class="danger" id="del">Delete user</button></div>' +
+      '<div class="toolbar"><a href="#/users">← All users</a><span class="spacer"></span><button id="pw">Reset password</button><button id="mode">Egress mode</button><button id="limit">Device limit</button><button class="danger" id="del">Delete user</button></div>' +
       '<div class="grid2 section"><div class="card"><h2>Egress assignment</h2><dl class="kv">' +
       "<dt>Egress host</dt><dd>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">Unassigned</span>') + "</dd>" +
       '<dt>Egress IP</dt><dd class="mono">' + esc(u.egress_ip || "—") + "</dd>" +
-      '<dt>Client entry</dt><dd class="mono">' + (entry ? esc(entry.public_host) + ":" + u.port : "—") + "</dd>" +
+      '<dt>Client entry</dt><dd class="mono">' + (entry ? esc(publicEntryLabel(entry, u.port)) : "—") + "</dd>" +
       "<dt>Mode</dt><dd>" + (u.mode === "shared" ? "Shared" : "Exclusive") + "</dd></dl>" +
       '<div class="toolbar" style="margin:14px 0 0">' + (u.egress_ip ? '<button id="reassign">Change egress</button><button class="danger" id="release">Release egress</button>' : '<button class="primary" id="assign">Assign egress</button>') + "</div></div>" +
       '<div class="card"><h2>Account</h2><dl class="kv"><dt>Username</dt><dd class="mono">' + esc(u.name) + "</dd><dt>Devices</dt><dd>" + live.length + " / " + u.max_devices + " active</dd></dl>" +
@@ -1158,8 +1365,8 @@
       if (!ips) return;
       const usable = ips.filter((e) => e.status === "available" || (e.status === "assigned" && u.mode === "shared" && e.users.every((x) => (users.find((y) => y.name === x) || {}).mode === "shared")));
       return form(title, [
-        { name: "host", label: "Egress host", type: "select", value: u.host || (hosts[0] || {}).name, options: hosts.map((h) => [h.name, h.name + " · " + h.public_host]) },
-        { name: "ip", label: "Egress IP", type: "select", value: "", options: [["", "Automatic: lowest available IP on the selected host"]].concat(usable.filter((e) => e.ip !== u.egress_ip).map((e) => [e.ip, e.ip + " · " + e.host + (e.users.filter((x) => x !== name).length ? "(shared with " + e.users.filter((x) => x !== name).join(", ") + ")" : "")])) },
+        { name: "host", label: "Egress host", type: "select", value: u.host || (hosts[0] || {}).name, options: hosts.map((h) => [h.name, h.name + " · " + publicEntryLabel(h)]) },
+        { name: "ip", label: "Egress IP", type: "select", value: "", options: [["", "Automatic: lowest available IP on the selected host"]].concat(usable.filter((e) => e.ip !== u.egress_ip).map((e) => [e.ip, e.ip + " · " + e.host + (e.users.filter((x) => x !== name).length ? " (shared with " + e.users.filter((x) => x !== name).join(", ") + ")" : "")])) },
         { name: "port", label: "Entry port (optional)", type: "number", placeholder: "Leave blank for automatic assignment", hint: "Choose an unused port within the host range." },
       ], async (v) => {
         const body = { host: v.host };
@@ -1169,7 +1376,12 @@
         return api("POST", "/admin/users/" + enc(name) + (u.egress_ip ? "/reassign" : "/assign"), body);
       }, "Assign");
     };
-    const afterAssign = (r) => { if (r) { toast("Assigned: " + r.egress_ip + ", entry " + r.entry.host + ":" + r.entry.port + ". The client will switch automatically."); route(); } };
+    const afterAssign = (r) => {
+      if (!r) return;
+      const entry = r.entry ? endpoint(r.entry.host, r.entry.port) : "waiting for Agent IPv4";
+      toast("Assigned " + r.egress_ip + " · " + entry);
+      route();
+    };
     if ($("#assign")) $("#assign").onclick = async () => afterAssign(await assignForm("Assign egress for " + name));
     if ($("#reassign")) $("#reassign").onclick = async () => afterAssign(await assignForm("Change egress for " + name));
     if ($("#release")) $("#release").onclick = async () => {
@@ -1184,6 +1396,22 @@
       if (!r) return;
       if (r.password) reveal("New password", "New password for " + name, r.password); else toast("Password updated.");
       route();
+    };
+    $("#mode").onclick = async () => {
+      const others = [];
+      if (u.egress_ip) {
+        const ips = await act(() => api("GET", "/admin/ips?host=" + enc(u.host)));
+        if (!ips) return;
+        const row = ips.find((e) => e.ip === u.egress_ip);
+        (row ? row.holders || [] : []).forEach((h) => { if (h.user !== name) others.push(h.user + ":" + h.port); });
+      }
+      const hint = u.mode === "shared"
+        ? (others.length ? "Exclusive is unavailable while " + others.join(", ") + " share " + u.egress_ip + ". Move or release them first." : "Exclusive keeps the current IP, entry port, and devices.")
+        : "Shared keeps the current IP, entry port, and devices, and lets other Shared users join " + (u.egress_ip || "the IP this user gets") + " on their own entry ports.";
+      const r = await form("Egress mode for " + name, [
+        { name: "mode", label: "Egress mode", type: "select", value: u.mode, options: [["exclusive", "Exclusive: dedicated egress IP"], ["shared", "Shared: other Shared users may use the same egress IP"]], hint },
+      ], (v) => v.mode === u.mode ? true : api("PUT", "/admin/users/" + enc(name), { mode: v.mode }));
+      if (r) { toast("Saved."); route(); }
     };
     $("#limit").onclick = async () => {
       if (await form("Device limit", [{ name: "max", label: "Maximum active devices", type: "number", value: u.max_devices, required: true }],
@@ -1240,7 +1468,7 @@
       (opts.hint ? '<div class="hint">' + opts.hint + "</div>" : "") + "</div>";
     $("#view").innerHTML = '<div class="grid2">' +
       '<form class="card" id="s-policy"><h2>Client routing policy</h2>' +
-      field("domains", "Proxied domains", (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: "One domain per line, including all of its subdomains. macOS rejects local resolution for .test domains." }) +
+      field("domains", "Proxied domains", (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: "Enter one domain or web URL per line. A URL adds its hostname and subdomains." }) +
       field("direct_dns", "DNS for other domains", cp.direct_dns || "dhcp", { hint: "Use dhcp for the DNS assigned by the local network, or enter an IP such as 223.5.5.5." }) +
       '<div class="form-row check"><label><input type="checkbox" id="block_quic"' + (cp.block_quic === false ? "" : " checked") + "> Block QUIC (UDP 443) for proxied domains so apps use TCP.</label></div>" +
       '<button class="primary" type="submit">Save routing policy</button><p class="small muted">Clients check for and apply updates every 30 seconds.</p></form>' +
@@ -1265,6 +1493,93 @@
     save("#s-alerts", () => ({ alerts: Object.assign({}, al, {
       webhooks: lines($("#hooks").value).map((l) => { const [f, ...rest] = l.split(/\s+/); const url = rest.join(" "); if (!url) return { url: f, format: "generic" }; return { format: f, url }; }),
       consecutive_failures: Number($("#fails").value), agent_stale_seconds: Number($("#stale").value), out_of_sync_seconds: Number($("#sync").value), repeat_seconds: Number($("#repeat").value) }) }), "Alert settings saved.");
+  };
+
+  // ---- usage ----------------------------------------------------------------------------------------------
+  const UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  function fmtBytes(n) {
+    let v = Number(n || 0), i = 0;
+    while (v >= 1024 && i < UNITS.length - 1) { v /= 1024; i++; }
+    return (i === 0 ? String(v) : v.toFixed(v < 10 ? 2 : v < 100 ? 1 : 0)) + " " + UNITS[i];
+  }
+  const exact = (n) => Number(n || 0).toLocaleString() + " bytes";
+  const USAGE_STATUS = { complete: ["Measured", "ok"], incomplete: ["Incomplete", "warn"], unavailable: ["Not measured", ""] };
+  const COLLECTOR_STATUS = { collecting: ["Collecting", "ok"], starting: ["Starting", "warn"], error: ["Error", "bad"], stale: ["Stale", "bad"], unavailable: ["Unavailable", ""] };
+  const usageLabel = (r) => {
+    const start = new Date(r.start + "T00:00:00Z"), last = new Date(Date.parse(r.end + "T00:00:00Z") - 86400000);
+    const day = (d, opts) => d.toLocaleDateString(undefined, Object.assign({ timeZone: "UTC" }, opts));
+    if (r.period === "month") return day(start, { year: "numeric", month: "long" });
+    if (r.period === "week") return day(start, { month: "short", day: "numeric" }) + " – " + day(last, { year: "numeric", month: "short", day: "numeric" });
+    return day(start, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+  };
+
+  PAGES.usage = async (_, token) => {
+    setTitle("Usage");
+    const params = new URLSearchParams(location.hash.split("?")[1] || "");
+    const query = new URLSearchParams();
+    for (const key of ["period", "date", "user", "device"]) if (params.get(key)) query.set(key, params.get(key));
+    const r = await api("GET", "/admin/usage?" + query.toString());
+    if (!current(token)) return;
+    const go = (changes) => {
+      const next = new URLSearchParams({ period: r.period, date: r.start });
+      if (r.user) next.set("user", r.user);
+      if (r.device) next.set("device", r.device);
+      for (const [k, v] of Object.entries(changes)) { if (v) next.set(k, v); else next.delete(k); }
+      location.hash = "#/usage?" + next.toString();
+    };
+    const measured = r.rows.filter((row) => row.status !== "unavailable").length;
+    const incomplete = r.rows.filter((row) => row.status === "incomplete").length;
+    const option = (value, label, selected) => `<option value="${esc(value)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
+    const row = (u) => {
+      const [label, tone] = USAGE_STATUS[u.status] || [u.status, ""];
+      const off = u.status === "unavailable";
+      const state = u.device_state !== "active" ? ' <span class="badge ' + (u.device_state === "deleted" ? "bad" : "warn") + '">' + esc(u.device_state === "deleted" ? "Deleted" : "Revoked") + "</span>" : "";
+      const bytes = (n) => off ? '<td class="num muted" title="No collector measured this device in this period">—</td>' : `<td class="num" title="${exact(n)}">${fmtBytes(n)}</td>`;
+      return `<tr><td>${esc(u.user)}</td><td>${esc(u.device)}${state}</td>${bytes(u.upload)}${bytes(u.download)}${bytes(u.total)}` +
+        `<td><span class="badge ${tone}">${esc(label)}</span>${u.reasons.length ? '<div class="usage-why">' + u.reasons.map(esc).join("<br>") + "</div>" : ""}</td>` +
+        `<td class="mono small nowrap">${u.hosts.map(esc).join(", ") || "—"}</td></tr>`;
+    };
+    const collector = (c) => {
+      const [label, tone] = COLLECTOR_STATUS[c.status] || [c.status, ""];
+      return `<tr><td class="nowrap"><a href="#/hosts/${enc(c.host)}">${esc(c.host)}</a></td><td><span class="badge ${tone}">${esc(label)}</span></td>` +
+        `<td class="small">${esc(c.note || "")}</td><td class="mono small">${esc(c.agent_version || "—")}</td>` +
+        `<td class="mono small">${esc(c.singbox_version || "—")}</td><td>${c.last_report ? ago(now() - c.last_report) : "—"}</td></tr>`;
+    };
+    const lost = r.hosts.map((h) => `<tr><td class="nowrap">${esc(h.host)}</td><td class="num" title="${exact(h.unattributed_upload)}">${fmtBytes(h.unattributed_upload)}</td>` +
+      `<td class="num" title="${exact(h.unattributed_download)}">${fmtBytes(h.unattributed_download)}</td>` +
+      `<td class="num" title="${exact(h.rejected_upload)}">${fmtBytes(h.rejected_upload)}</td><td class="num" title="${exact(h.rejected_download)}">${fmtBytes(h.rejected_download)}</td>` +
+      `<td class="num" title="${exact(h.unresolved_upload)}">${fmtBytes(h.unresolved_upload)}</td><td class="num" title="${exact(h.unresolved_download)}">${fmtBytes(h.unresolved_download)}</td></tr>`).join("");
+    const recorded = r.recorded_periods.includes(r.start) ? r.recorded_periods : [r.start].concat(r.recorded_periods);
+    $("#view").innerHTML = `
+      <div class="table-toolbar">
+        <select id="u-period" aria-label="Period">${option("day", "Day", r.period === "day")}${option("week", "Week", r.period === "week")}${option("month", "Month", r.period === "month")}</select>
+        <span class="usage-nav"><button id="u-prev" type="button" aria-label="Previous period">‹</button><b id="u-label">${esc(usageLabel(r))}</b>
+          <button id="u-next" type="button" aria-label="Next period"${r.next ? "" : " disabled"}>›</button></span>
+        <select id="u-recorded" aria-label="Recorded periods">${recorded.map((d) => option(d, (r.period === "week" ? "Week of " : "") + usageLabel({ period: r.period, start: d, end: d }).replace(/ – .*/, ""), d === r.start)).join("")}</select>
+        <select id="u-user" aria-label="User">${option("", "All users", !r.user)}${r.users.map((u) => option(u, u, u === r.user)).join("")}</select>
+        <select id="u-device" aria-label="Device">${option("", "All devices", !r.device)}${r.devices.map((d) => option(d, d, d === r.device)).join("")}</select>
+        <span class="spacer"></span><button id="u-refresh" type="button">${icon("refresh")} Refresh</button>
+      </div>
+      <div class="summary" aria-label="Usage summary">
+        ${metric("Upload", fmtBytes(r.totals.upload), exact(r.totals.upload))}
+        ${metric("Download", fmtBytes(r.totals.download), exact(r.totals.download))}
+        ${metric("Total", fmtBytes(r.totals.total), r.in_progress ? "This period so far" : exact(r.totals.total))}
+        ${metric("Devices measured", measured + " / " + r.rows.length, incomplete ? incomplete + " incomplete" : "")}
+      </div>
+      <p class="small muted">Calendar periods in Asia/Singapore (UTC+8); weeks start on Monday. Each exit assigns traffic to the hour in which it observed it, so a boundary moves at most a fraction of a second of traffic. “Not measured” means no collector covered the device; a measured device with no traffic shows 0 B.</p>
+      <div class="table-wrap"><table><thead><tr><th>User</th><th>Device</th><th class="num">Upload</th><th class="num">Download</th><th class="num">Total</th><th>Status</th><th>Exits</th></tr></thead><tbody>
+        ${r.rows.map(row).join("") || '<tr><td colspan="7" class="empty">No devices match these filters.</td></tr>'}</tbody></table></div>
+      ${lost ? `<section class="section"><h2>Traffic not attributed to a device</h2><div class="table-wrap"><table><thead><tr><th>Exit</th><th class="num">Unattributed upload</th><th class="num">Unattributed download</th><th class="num">Rejected upload</th><th class="num">Rejected download</th><th class="num">Unresolved upload</th><th class="num">Unresolved download</th></tr></thead><tbody>${lost}</tbody></table></div>
+        <p class="small muted">Rejected bytes were reported for names the exit was never configured with. Unresolved bytes were reported under names that two devices had during the same hour (an account deleted and recreated); they are not assigned to either device.</p></section>` : ""}
+      <section class="section"><h2>Usage collection by exit</h2><div class="table-wrap"><table><thead><tr><th>Exit</th><th>Collection</th><th>Details</th><th>Agent</th><th>sing-box</th><th>Last report</th></tr></thead><tbody>
+        ${r.collectors.map(collector).join("") || '<tr><td colspan="6" class="empty">No exits.</td></tr>'}</tbody></table></div></section>`;
+    $("#u-period").onchange = (e) => go({ period: e.target.value });
+    $("#u-prev").onclick = () => go({ date: r.previous });
+    $("#u-next").onclick = () => r.next && go({ date: r.next });
+    $("#u-recorded").onchange = (e) => go({ date: e.target.value });
+    $("#u-user").onchange = (e) => go({ user: e.target.value, device: "" });
+    $("#u-device").onchange = (e) => go({ device: e.target.value });
+    $("#u-refresh").onclick = route;
   };
 
   // ---- audit ----------------------------------------------------------------------------------------------
