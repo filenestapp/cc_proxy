@@ -423,7 +423,9 @@ func TestCloudMailSenderCachesLoginAndAccount(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	sender := &cloudMailSender{baseURL: server.URL, email: "noreply@aifree.sg", password: "secret", client: server.Client()}
+	sender := &cloudMailSender{cloudMailConnection: cloudMailConnection{
+		baseURL: server.URL, email: "noreply@aifree.sg", password: "secret", client: server.Client(),
+	}}
 	require(t, sender.send(t.Context(), "customer@example.com", "First", "first body"))
 	require(t, sender.send(t.Context(), "customer@example.com", "Second", "second body"))
 	if logins != 1 || lookups != 1 || sends != 2 {

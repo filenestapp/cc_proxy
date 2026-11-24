@@ -162,46 +162,49 @@ Checkout 跳回：成功 `https://app.aifree.sg/account?checkout=success`，取�
 | `POST /admin/provisioning/{id}/done` | `{note}` 标记完成 |
 | `GET/PUT /admin/plans` | 查看和修改价格、Stripe Price ID、上下架 |
 
-## 企业邮箱（WP8）
+## Business mailboxes (WP8)
 
-### 规则
+A verified, active customer with a paid subscription can have one mailbox. Eligibility follows the control plane's existing subscription deadline and payment grace period. The `mailbox_quota` setting defaults to 1. Set it to 0 through `PUT /admin/settings` to block new setups.
 
-- 有权益（见上）的客户最多一个企业邮箱，数量上限放 `settings.mailbox_quota`，默认 1。
-- 由管理员在后台开通。客户在用户中心只能查看，并跳转 `https://mail.aifree.sg` 登录网页邮箱。
-- 本地部分：3–32 位，小写字母、数字、`.`、`-`，首尾必须是字母或数字；保留 `admin`、`noreply`、`support`、`postmaster`、`abuse`、`billing`、`root`。
+An administrator creates the mailbox in **Customers** and manages it in **Mailboxes**. The local part is normalized to lowercase and must be 3–32 characters. It starts and ends with a letter or digit and may contain single dots and hyphens. Reserved names are `admin`, `noreply`, `support`, `postmaster`, `abuse`, `billing`, and `root`.
 
-### 管理端路由
-
-| 方法与路径 | 说明 |
+| Method and path | Behavior |
 | --- | --- |
-| `POST /admin/customers/{id}/mailbox` | `{local_part}` → 201 `{mailbox, initial_password}`；初始密码只返回这一次，不入库 |
-| `POST /admin/mailboxes/{id}/disable` | 停用 |
-| `POST /admin/mailboxes/{id}/enable` | 恢复 |
-| `DELETE /admin/mailboxes/{id}` | 永久删除，需要请求体 `{confirm: "<address>"}` |
-| `GET /admin/mailboxes` | 列表 |
+| `POST /admin/customers/{id}/mailbox` | Accepts `{local_part}`. Returns 201 with `{mailbox, initial_password}` after setup completes. This response is the only control plane response that includes the initial password. |
+| `GET /admin/mailboxes` | Lists mailbox addresses, customers, status, pending setup, and scheduled deletion. |
+| `POST /admin/mailboxes/{id}/disable` | Disables access and returns 204. A manual disable persists across renewals. |
+| `POST /admin/mailboxes/{id}/enable` | Restores access for an eligible customer and returns 204. |
+| `DELETE /admin/mailboxes/{id}` | Accepts `{confirm: "<address>"}` and returns 204 after permanently deleting the mailbox and its messages. |
 
-错误码：`no_entitlement`(403)、`quota_exceeded`(409)、`address_taken`(409)、`invalid_local_part`(400)、`mail_unavailable`(502，cloud-mail 出错)。
+Error codes include `no_entitlement` (403), `quota_exceeded` and `address_taken` (409), `invalid_local_part` and `invalid_confirmation` (400), and `mail_unavailable` (502). Repeat the setup request with the same customer and address to resume a pending setup.
 
-客户端只读：`GET /v1/account/me` 里的 `mailbox = {address, status: active|disabled, webmail_url}`。
+`GET /admin/customers` includes `mailbox_entitled` and a current mailbox summary. The customer reads their own mailbox through `GET /v1/account/me` as `{address, status, webmail_url}`. The customer status is `active` or `disabled`. The webmail URL is `https://mail.aifree.sg`.
 
-### 生命周期
+### Lifecycle
 
-```text
-active ──订阅进入 cancelled──► disabled ──30 天后定时任务──► deleted
-disabled ──重新订阅──► active
-```
+The control plane reconciles mailboxes about once a minute. When subscription entitlement ends, it disables the cloud-mail user and schedules permanent deletion for 30 days after access is confirmed disabled. A renewal before reclamation starts clears the deadline and restores the same mailbox unless an administrator manually disabled it. After reclamation starts, the worker retries incomplete deletion until it succeeds. The address becomes available for a new setup after deletion succeeds.
 
-### cloud-mail 调用
+PostgreSQL reserves the customer and address before the first cloud-mail write. A rejected create releases the reservation. If cloud-mail acknowledges creation and the user lookup fails, the reservation stays pending. On retry, the control plane resolves the same user and sets a fresh initial password. The initial password is never stored in PostgreSQL or the audit log.
 
-| 动作 | cloud-mail 接口 |
+If cloud-mail accepts a create but its acknowledgment is lost, the next create can return `address_taken`. Inspect the address in cloud-mail before retrying. The control plane leaves any existing upstream address and its credentials alone unless it recorded a successful create.
+
+### cloud-mail API
+
+| Action | cloud-mail request |
 | --- | --- |
-| 取管理员 token | `POST /api/login {email, password}` → `data.token`；放在 `Authorization` 头，不加 `Bearer` |
-| 开户 | `POST /api/user/add {email, password}`，随后 `GET /api/user/list?email=` 取 `userId` 存入 `mailboxes.cloudmail_user_id` |
-| 停用 / 恢复 | `PUT /api/user/setStatus {userId, status}`，1 为停用，0 为正常 |
-| 删除 | `DELETE /api/user/delete?userIds=<id>` |
-| 发事务邮件 | 以 `noreply@aifree.sg` 账号登录后 `POST /api/email/send` |
+| Sign in | `POST /api/login {email, password}`. Send `data.token` in the `Authorization` header as returned. |
+| Create and link | `POST /api/user/add {email, password}` uses the Worker's default mailbox role. `GET /api/user/list?email=<address>` matches a prefix. Page through its results to find the exact address and record its `userId`. |
+| Resume an acknowledged setup | `PUT /api/user/setPwd {userId, password}` after finding the exact user. |
+| Disable or enable | `PUT /api/user/setStatus {userId, status}`. Use 1 to disable and 0 to enable. |
+| Delete | Disable first to revoke sign-in sessions, then call `DELETE /api/user/delete?userIds=<id>`. |
+| Send transactional mail | Sign in with the designated sender and call `POST /api/email/send`. |
 
-- 配置：`CLOUDMAIL_URL`、`CLOUDMAIL_ADMIN_EMAIL`、`CLOUDMAIL_ADMIN_PASSWORD`、`CLOUDMAIL_NOREPLY_EMAIL`、`CLOUDMAIL_NOREPLY_PASSWORD`，只从环境变量读取。
-- token 缓存在内存。收到 401，或响应体的业务码表示未登录时，重新登录一次后重试；仍失败返回 `mail_unavailable`。
-- 开户先写本地 `mailboxes`（状态 `creating`）占住地址，再调用 cloud-mail，成功后改为 `active`；失败删除本地记录。
-- 实现前先在部署好的 cloud-mail 上核对以上路径和返回结构；文档与实际不一致时以实际为准并更新本文。
+Set `CLOUDMAIL_URL`, `CLOUDMAIL_ADMIN_EMAIL`, and `CLOUDMAIL_ADMIN_PASSWORD` in the control plane environment. A delegated administrator needs `user:add`, `user:query`, `user:set-pwd`, `user:set-status`, and `user:delete`. Verify that the intended account can sign in with email and password after a session expires under the Worker's login verification settings.
+
+The control plane caches the token in memory and signs in again once on an HTTP 401 or a cloud-mail business code 401. It then retries the request once. The Worker can use HTTP 200 for business errors, including code 403 for a permission denial and code 501 for an address already assigned to an active or soft-deleted account. The adapter uses the duplicate-address messages to distinguish those conflicts from other code 501 failures. The request and response shapes were checked against [cloud-mail v3.6.0 at `7367856`](https://github.com/maillab/cloud-mail/tree/73678562ad2349c1e24935d0f8b8d3d303bfbdc5/mail-worker/src) and exercised with a fake server.
+
+### Receive-only rollout
+
+PR #53 records a receive-only v3.6.0 deployment, successful administrator login, and an inbound delivery to `support@aifree.sg`. New business mailboxes inherit the deployed default role, which disables sending. Keep `CLOUDMAIL_NOREPLY_EMAIL` and `CLOUDMAIL_NOREPLY_PASSWORD` unset for this rollout. External account verification and password reset require a working transactional sender. New customers must verify their email before starting Checkout. [Deployment record](https://github.com/filenestapp/cc_proxy/pull/53)
+
+Before enabling mailbox provisioning for customers, use a disposable paid test account and the intended cloud-mail API credentials to verify setup, re-login after token expiry, webmail sign-in with the initial password, and receipt of an external message in the new inbox. Use the disposable mailbox to verify session revocation on disable, restoration within the retention window, and permanent deletion of its messages and attachments. Verify delivery of account verification and password reset messages before opening public self-service signup.
