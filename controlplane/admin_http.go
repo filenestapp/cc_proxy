@@ -282,13 +282,23 @@ func (a *api) userAdd(r *apiRequest) (response, error) {
 
 func (a *api) userUpdate(r *apiRequest) (response, error) {
 	var body struct {
-		MaxDevices integer `json:"max_devices"`
+		MaxDevices *integer `json:"max_devices"`
+		Mode       *string  `json:"mode"`
 	}
-	if err := r.decode(&body, "max_devices"); err != nil {
+	if err := r.decode(&body); err != nil {
 		return response{}, err
 	}
+	if body.MaxDevices == nil && body.Mode == nil {
+		return response{}, failure(400, "max_devices or mode is required")
+	}
+	var change userUpdate
+	if body.MaxDevices != nil {
+		limit := int(*body.MaxDevices)
+		change.MaxDevices = &limit
+	}
+	change.Mode = body.Mode
 	name := r.PathValue("name")
-	return ok(object{"name": name}, a.store.setMaxDevices(r.Context(), name, int(body.MaxDevices)))
+	return ok(object{"name": name}, a.store.updateUser(r.Context(), name, change))
 }
 
 func (a *api) userDelete(r *apiRequest) (response, error) {

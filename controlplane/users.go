@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -97,13 +98,50 @@ func (s *store) setUserPassword(ctx context.Context, name, password string, revo
 	})
 }
 
-func (s *store) setMaxDevices(ctx context.Context, name string, limit int) error {
-	if err := validDeviceLimit(limit); err != nil {
-		return err
+type userUpdate struct {
+	MaxDevices *int
+	Mode       *string
+}
+
+// updateUser changes the device limit and/or the egress mode in one transaction. Switching to shared keeps the
+// current IP, port, and device credentials. Switching to exclusive is refused, without any change, while another
+// user holds the same egress IP.
+func (s *store) updateUser(ctx context.Context, name string, change userUpdate) error {
+	if change.MaxDevices != nil {
+		if err := validDeviceLimit(*change.MaxDevices); err != nil {
+			return err
+		}
+	}
+	if change.Mode != nil && *change.Mode != "exclusive" && *change.Mode != "shared" {
+		return failure(409, "mode must be exclusive or shared")
 	}
 	return s.mutate(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, "UPDATE users SET max_devices = $2 WHERE name = $1", name, limit)
-		return rowsChanged(tag, err, "user "+name)
+		user, err := getUser(ctx, tx, name)
+		if err != nil {
+			return err
+		}
+		if change.Mode != nil && *change.Mode == "exclusive" && user.Mode != "exclusive" && user.IP != nil {
+			others, err := columnOf[string](ctx, tx, `SELECT name FROM users WHERE egress_ip = $1::text::inet AND name != $2
+				ORDER BY name`, *user.IP, name)
+			if err != nil {
+				return err
+			}
+			if len(others) != 0 {
+				return failure(409, "user %s shares %s with %s; move or release the other holders before switching to exclusive",
+					name, *user.IP, strings.Join(others, ", "))
+			}
+		}
+		if change.MaxDevices != nil {
+			if _, err := tx.Exec(ctx, "UPDATE users SET max_devices = $2 WHERE name = $1", name, *change.MaxDevices); err != nil {
+				return err
+			}
+		}
+		if change.Mode != nil {
+			if _, err := tx.Exec(ctx, "UPDATE users SET mode = $2 WHERE name = $1", name, *change.Mode); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

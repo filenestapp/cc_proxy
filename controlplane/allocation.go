@@ -180,6 +180,9 @@ type hostView struct {
 	RealityPublic   string `json:"reality_public_key"`
 	IPs             int    `json:"ips"`
 	Users           int    `json:"users"`
+	// Entry capacity: every assigned user needs its own port in the range, whichever IP it shares.
+	PortCapacity int `json:"port_capacity"`
+	FreePorts    int `json:"free_ports"`
 }
 
 // Queries using the hosts alias h prefer the manual entry and then the address learned from its Agent.
@@ -189,7 +192,11 @@ func listHosts(ctx context.Context, db database) ([]hostView, error) {
 	return rowsOf[hostView](ctx, db, `SELECT h.name, `+publicEntryHostSQL+` AS public_host,
 		h.public_host = '' AS auto_public_host, ARRAY[h.port_min, h.port_max] AS port_range,
 		h.server_name, h.handshake_server, h.reality_public, (SELECT count(*) FROM egress_ips e WHERE e.host = h.name) AS ips,
-		(SELECT count(*) FROM users u WHERE u.host = h.name) AS users FROM hosts h ORDER BY h.name`)
+		(SELECT count(*) FROM users u WHERE u.host = h.name) AS users,
+		h.port_max - h.port_min + 1 AS port_capacity,
+		h.port_max - h.port_min + 1 - (SELECT count(*) FROM users u WHERE u.host = h.name
+			AND u.port BETWEEN h.port_min AND h.port_max) AS free_ports
+		FROM hosts h ORDER BY h.name`)
 }
 
 func columnOf[T any](ctx context.Context, db database, query string, args ...any) ([]T, error) {
@@ -247,8 +254,15 @@ type ipView struct {
 	Status        string         `json:"status"`
 	Users         []string       `json:"users"`
 	Ports         map[string]int `json:"ports"`
+	Holders       []ipHolder     `json:"holders"`
 	CooldownUntil *float64       `json:"cooldown_until"`
 	Note          string         `json:"note"`
+}
+
+type ipHolder struct {
+	User string `json:"user"`
+	Port int    `json:"port"`
+	Mode string `json:"mode"`
 }
 
 func listIPs(ctx context.Context, db database, hostName string, now float64) ([]ipView, error) {
@@ -256,7 +270,9 @@ func listIPs(ctx context.Context, db database, hostName string, now float64) ([]
 		CASE WHEN count(u.name) > 0 THEN 'assigned' WHEN e.banned THEN 'banned'
 			WHEN e.cooldown_until > $2 THEN 'cooldown' ELSE 'available' END AS status,
 		COALESCE(array_agg(u.name ORDER BY u.name) FILTER (WHERE u.name IS NOT NULL), '{}') AS users,
-		COALESCE(jsonb_object_agg(u.name, u.port) FILTER (WHERE u.name IS NOT NULL), '{}') AS ports
+		COALESCE(jsonb_object_agg(u.name, u.port) FILTER (WHERE u.name IS NOT NULL), '{}') AS ports,
+		COALESCE(jsonb_agg(jsonb_build_object('user', u.name, 'port', u.port, 'mode', u.mode) ORDER BY u.port)
+			FILTER (WHERE u.name IS NOT NULL), '[]') AS holders
 		FROM egress_ips e LEFT JOIN users u ON u.egress_ip = e.ip
 		WHERE $1 = '' OR e.host = $1 GROUP BY e.ip ORDER BY e.ip`, hostName, now)
 }
@@ -346,6 +362,9 @@ func (s *store) assign(ctx context.Context, name string, req assignment, moving 
 		}
 		if _, err := tx.Exec(ctx, "UPDATE users SET egress_ip = $2::text::inet, host = $3, port = $4 WHERE name = $1",
 			name, ip, h.Name, port); err != nil {
+			if uniqueViolation(err) { // the (host, port) constraint backs up the serialized choice above
+				return failure(409, "port %d on host %s is already in use", port, h.Name)
+			}
 			return err
 		}
 		if user.IP != nil && *user.IP != ip {
@@ -413,10 +432,10 @@ func (s *store) chooseBinding(ctx context.Context, db database, user userRow, re
 		if user.Mode != "shared" || holder.Mode != "shared" {
 			names := make([]string, 0, len(holders))
 			for _, h := range holders {
-				names = append(names, h.Name)
+				names = append(names, h.Name+" ("+h.Mode+")")
 			}
-			return "", host{}, 0, failure(409, "ip %s is held by %s; sharing needs mode=shared on every holder",
-				ip, strings.Join(names, ", "))
+			return "", host{}, 0, failure(409, "ip %s is held by %s and %s is %s; sharing needs mode=shared on every holder",
+				ip, strings.Join(names, ", "), user.Name, user.Mode)
 		}
 	}
 	h, err := getHost(ctx, db, hostName)
@@ -457,7 +476,8 @@ func choosePort(ctx context.Context, db database, h host, user userRow, requeste
 			return port, nil
 		}
 	}
-	return 0, failure(409, "no free port left in %d-%d on host %s", h.PortMin, h.PortMax, h.Name)
+	return 0, failure(409, "no free entry port left on host %s: all %d ports in %d-%d are assigned; widen the port range",
+		h.Name, h.PortMax-h.PortMin+1, h.PortMin, h.PortMax)
 }
 
 func (s *store) releaseBinding(ctx context.Context, db database, user userRow) error {
