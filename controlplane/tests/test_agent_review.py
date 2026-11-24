@@ -235,13 +235,13 @@ class ReloadCmdTest(tc.AgentFixture):
         a_marker = a.applied_marker
         original = on_disk(self)["inbounds"][0]["tls"]["server_name"]
         self.flag("silent")
-        self.store.update_host("hk-1", server_name="www.example.org")
+        self.admin("PUT", "/admin/hosts/hk-1", {"server_name": "www.example.org"})
         a.loop()                                  # B: unknown, at --config
         b_marker = a.marker
         self.assertEqual((a.state(), disk_marker(self)), ("unknown", b_marker))
 
         self.flag("silent", False)
-        self.store.update_host("hk-1", server_name=original)
+        self.admin("PUT", "/admin/hosts/hk-1", {"server_name": original})
         self.assertTrue(a.sync_config())          # A's content again
         self.assertEqual(a.installed, first, "same ETag as the confirmed version")
         self.assertNotIn(a.marker, (a_marker, b_marker))
@@ -303,7 +303,7 @@ class ReloadCmdTest(tc.AgentFixture):
         a = self.agent()
         a.loop()
         before, applied = tc.read(os.path.join(self.tmp, "config.json")), a.applied
-        self.store.update_host("hk-1", server_name="REJECT_ME")
+        self.admin("PUT", "/admin/hosts/hk-1", {"server_name": "REJECT_ME"})
         a.loop()
         self.assertEqual(tc.read(os.path.join(self.tmp, "config.json")), before)
         self.assertEqual((a.applied, a.installed), (applied, applied))
@@ -350,7 +350,7 @@ class RunModeTest(tc.AgentFixture):
         a, first = self.start_confirmed()
         old_pid, old_marker = a.child.pid, a.applied_marker
         # Passes `sing-box check`, but the process exits when it loads it (after closing the old instance).
-        self.store.update_host("hk-1", server_name="CRASH_ME.example.com")
+        self.admin("PUT", "/admin/hosts/hk-1", {"server_name": "CRASH_ME.example.com"})
         a.sync_config()
         self.assertFalse(a.apply())               # the failing step itself recovers (not a later loop restart)
         self.assertIsNone(a.child.poll())
@@ -377,7 +377,7 @@ class RunModeTest(tc.AgentFixture):
         self.assertIsNone(a.child.poll())
         self.assertNotIn("CRASH_ME", tc.read(os.path.join(self.tmp, "config.json")))
 
-        self.store.update_host("hk-1", server_name="www.example.org")
+        self.admin("PUT", "/admin/hosts/hk-1", {"server_name": "www.example.org"})
         a.loop()                                  # a new candidate is not held back by the old one's back-off
         self.assertEqual(a.applied, a.installed)
         self.assertNotEqual(a.applied, first)
@@ -390,7 +390,7 @@ class RunModeTest(tc.AgentFixture):
         previous = tc.read(os.path.join(self.tmp, "config.json"))
         b = self.agent_obj = self._agent()        # the agent restarts: nothing confirmed in this process
         b.args.run, b.args.reload_cmd = True, None
-        self.store.update_host("hk-1", server_name="CRASH_ME.example.com")
+        self.admin("PUT", "/admin/hosts/hk-1", {"server_name": "CRASH_ME.example.com"})
         b.sync_config()
         self.assertFalse(b.apply())               # starts B, which exits: A goes back and is started once
         self.assertEqual(tc.read(os.path.join(self.tmp, "config.json")), previous)
@@ -721,7 +721,7 @@ class ProbeIsolationTest(tc.AgentFixture):
         super().setUp()
         ips = ["100.64.0.%d" % i for i in range(1, 201)]
         self.admin("POST", "/admin/hosts/hk-1/ips", {"ips": ips})
-        self.store.configure(monitor={"egress_targets": ["http://probe.invalid/"]})
+        self.admin("PUT", "/admin/settings", {"monitor": {"egress_targets": ["http://probe.invalid/"]}})
         self.release = threading.Event()
         self.started = threading.Semaphore(0)
         self.real_probe = agentmod.http_probe
