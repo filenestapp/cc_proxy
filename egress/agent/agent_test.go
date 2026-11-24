@@ -21,12 +21,17 @@ import (
 // The test binary doubles as a fake sing-box (like controlplane/tests/fake_singbox.py) when started as
 // "<test binary> check|run -c FILE" with CCPROXY_FAKE_SINGBOX=1 in the environment:
 //
-//	check   fails when FILE contains REJECT_ME
+//	check   fails when FILE contains REJECT_ME, or an API service when CCPROXY_FAKE_NO_API=1 (a pre-1.14 build)
+//	version prints a sing-box version line
 //	run     serves FILE's clash_api /proxies (outbound tags, only with the loaded secret); SIGHUP reloads FILE.
 //	        A "crash" file next to FILE makes it exit 3 at start or on SIGHUP; "stubborn" ignores SIGHUP.
 func TestMain(m *testing.M) {
 	if os.Getenv("CCPROXY_FAKE_SINGBOX") == "1" && len(os.Args) > 2 && (os.Args[1] == "check" || os.Args[1] == "run") {
 		os.Exit(fakeSingBox(os.Args[1], os.Args[3]))
+	}
+	if os.Getenv("CCPROXY_FAKE_SINGBOX") == "1" && len(os.Args) == 2 && os.Args[1] == "version" {
+		fmt.Println("sing-box version 1.14.4-fake")
+		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }
@@ -36,6 +41,10 @@ func fakeSingBox(cmd, path string) int {
 	if cmd == "check" {
 		if strings.Contains(string(data), "REJECT_ME") {
 			fmt.Fprintln(os.Stderr, "fake check: rejected")
+			return 1
+		}
+		if os.Getenv("CCPROXY_FAKE_NO_API") == "1" && strings.Contains(string(data), `"type":"api"`) {
+			fmt.Fprintln(os.Stderr, "FATAL[0000] decode config: services[0].type: unknown service type: api")
 			return 1
 		}
 		return 0

@@ -39,6 +39,7 @@ func (a *api) adminRoutes() {
 	a.bind("POST /admin/users/{name}/devices", "admin", "devices_add", a.deviceAdd)
 	a.bind("POST /admin/users/{name}/devices/{device}/revoke", "admin", "devices_revoke", a.deviceRevoke)
 	a.bind("GET /admin/topology", "admin", "", a.topology)
+	a.bind("GET /admin/usage", "admin", "", a.usageList)
 	a.bind("GET /admin/alerts", "admin", "", a.alertList)
 	a.bind("POST /admin/alerts/test", "admin", "alerts_test", a.alertTest)
 }

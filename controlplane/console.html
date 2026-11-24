@@ -278,6 +278,11 @@
   .appearance { flex: none; width: auto; font-size: 12px; }
   .login .appearance { float: right; }
   .badge.info { background: var(--idle-soft); color: var(--ink); }
+  .usage-nav { display: flex; align-items: center; gap: 6px; }
+  .usage-nav b { min-width: 13ch; text-align: center; font-variant-numeric: tabular-nums; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .usage-why { color: var(--muted); font-size: 12px; margin-top: 3px; max-width: 420px; }
+  td.nowrap { white-space: nowrap; }
   .badge { font-weight: 550; }
   .actions button:focus-visible { outline-offset: 0; }
   @media (max-width: 540px) {
@@ -309,6 +314,7 @@
       <a href="#/hosts" data-nav="hosts"><span data-icon="server"></span>Hosts</a>
       <a href="#/ips" data-nav="ips"><span data-icon="ips"></span>Egress IPs</a>
       <a href="#/users" data-nav="users"><span data-icon="users"></span>Users</a>
+      <a href="#/usage" data-nav="usage"><span data-icon="chart"></span>Usage</a>
       <a href="#/alerts" data-nav="alerts"><span data-icon="bell"></span>Alerts <span class="count" id="alert-count" hidden></span></a>
       <hr class="nav-divider">
       <a href="#/settings" data-nav="settings"><span data-icon="settings"></span>Settings</a>
@@ -345,6 +351,7 @@
     log: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6m-6 4h6m-6 4h4"/>',
     shield: '<path d="m12 2 8 3v6c0 6-4 9-8 11-4-2-8-5-8-11V5z"/><path d="m9 12 2 2 4-4"/>',
     refresh: '<path d="M20 10a8 8 0 1 0-1 7M20 4v6h-6"/>',
+    chart: '<path d="M4 20V4M4 20h16"/><path d="M8 16v-5m4 5V8m4 8v-3"/>',
   };
   const icon = (name) => '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round">' + ICONS[name] + "</svg>";
   $$("[data-icon]").forEach((item) => { item.innerHTML = icon(item.dataset.icon); });
@@ -1486,6 +1493,93 @@
     save("#s-alerts", () => ({ alerts: Object.assign({}, al, {
       webhooks: lines($("#hooks").value).map((l) => { const [f, ...rest] = l.split(/\s+/); const url = rest.join(" "); if (!url) return { url: f, format: "generic" }; return { format: f, url }; }),
       consecutive_failures: Number($("#fails").value), agent_stale_seconds: Number($("#stale").value), out_of_sync_seconds: Number($("#sync").value), repeat_seconds: Number($("#repeat").value) }) }), "Alert settings saved.");
+  };
+
+  // ---- usage ----------------------------------------------------------------------------------------------
+  const UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  function fmtBytes(n) {
+    let v = Number(n || 0), i = 0;
+    while (v >= 1024 && i < UNITS.length - 1) { v /= 1024; i++; }
+    return (i === 0 ? String(v) : v.toFixed(v < 10 ? 2 : v < 100 ? 1 : 0)) + " " + UNITS[i];
+  }
+  const exact = (n) => Number(n || 0).toLocaleString() + " bytes";
+  const USAGE_STATUS = { complete: ["Measured", "ok"], incomplete: ["Incomplete", "warn"], unavailable: ["Not measured", ""] };
+  const COLLECTOR_STATUS = { collecting: ["Collecting", "ok"], starting: ["Starting", "warn"], error: ["Error", "bad"], stale: ["Stale", "bad"], unavailable: ["Unavailable", ""] };
+  const usageLabel = (r) => {
+    const start = new Date(r.start + "T00:00:00Z"), last = new Date(Date.parse(r.end + "T00:00:00Z") - 86400000);
+    const day = (d, opts) => d.toLocaleDateString(undefined, Object.assign({ timeZone: "UTC" }, opts));
+    if (r.period === "month") return day(start, { year: "numeric", month: "long" });
+    if (r.period === "week") return day(start, { month: "short", day: "numeric" }) + " – " + day(last, { year: "numeric", month: "short", day: "numeric" });
+    return day(start, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+  };
+
+  PAGES.usage = async (_, token) => {
+    setTitle("Usage");
+    const params = new URLSearchParams(location.hash.split("?")[1] || "");
+    const query = new URLSearchParams();
+    for (const key of ["period", "date", "user", "device"]) if (params.get(key)) query.set(key, params.get(key));
+    const r = await api("GET", "/admin/usage?" + query.toString());
+    if (!current(token)) return;
+    const go = (changes) => {
+      const next = new URLSearchParams({ period: r.period, date: r.start });
+      if (r.user) next.set("user", r.user);
+      if (r.device) next.set("device", r.device);
+      for (const [k, v] of Object.entries(changes)) { if (v) next.set(k, v); else next.delete(k); }
+      location.hash = "#/usage?" + next.toString();
+    };
+    const measured = r.rows.filter((row) => row.status !== "unavailable").length;
+    const incomplete = r.rows.filter((row) => row.status === "incomplete").length;
+    const option = (value, label, selected) => `<option value="${esc(value)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
+    const row = (u) => {
+      const [label, tone] = USAGE_STATUS[u.status] || [u.status, ""];
+      const off = u.status === "unavailable";
+      const state = u.device_state !== "active" ? ' <span class="badge ' + (u.device_state === "deleted" ? "bad" : "warn") + '">' + esc(u.device_state === "deleted" ? "Deleted" : "Revoked") + "</span>" : "";
+      const bytes = (n) => off ? '<td class="num muted" title="No collector measured this device in this period">—</td>' : `<td class="num" title="${exact(n)}">${fmtBytes(n)}</td>`;
+      return `<tr><td>${esc(u.user)}</td><td>${esc(u.device)}${state}</td>${bytes(u.upload)}${bytes(u.download)}${bytes(u.total)}` +
+        `<td><span class="badge ${tone}">${esc(label)}</span>${u.reasons.length ? '<div class="usage-why">' + u.reasons.map(esc).join("<br>") + "</div>" : ""}</td>` +
+        `<td class="mono small nowrap">${u.hosts.map(esc).join(", ") || "—"}</td></tr>`;
+    };
+    const collector = (c) => {
+      const [label, tone] = COLLECTOR_STATUS[c.status] || [c.status, ""];
+      return `<tr><td class="nowrap"><a href="#/hosts/${enc(c.host)}">${esc(c.host)}</a></td><td><span class="badge ${tone}">${esc(label)}</span></td>` +
+        `<td class="small">${esc(c.note || "")}</td><td class="mono small">${esc(c.agent_version || "—")}</td>` +
+        `<td class="mono small">${esc(c.singbox_version || "—")}</td><td>${c.last_report ? ago(now() - c.last_report) : "—"}</td></tr>`;
+    };
+    const lost = r.hosts.map((h) => `<tr><td class="nowrap">${esc(h.host)}</td><td class="num" title="${exact(h.unattributed_upload)}">${fmtBytes(h.unattributed_upload)}</td>` +
+      `<td class="num" title="${exact(h.unattributed_download)}">${fmtBytes(h.unattributed_download)}</td>` +
+      `<td class="num" title="${exact(h.rejected_upload)}">${fmtBytes(h.rejected_upload)}</td><td class="num" title="${exact(h.rejected_download)}">${fmtBytes(h.rejected_download)}</td>` +
+      `<td class="num" title="${exact(h.unresolved_upload)}">${fmtBytes(h.unresolved_upload)}</td><td class="num" title="${exact(h.unresolved_download)}">${fmtBytes(h.unresolved_download)}</td></tr>`).join("");
+    const recorded = r.recorded_periods.includes(r.start) ? r.recorded_periods : [r.start].concat(r.recorded_periods);
+    $("#view").innerHTML = `
+      <div class="table-toolbar">
+        <select id="u-period" aria-label="Period">${option("day", "Day", r.period === "day")}${option("week", "Week", r.period === "week")}${option("month", "Month", r.period === "month")}</select>
+        <span class="usage-nav"><button id="u-prev" type="button" aria-label="Previous period">‹</button><b id="u-label">${esc(usageLabel(r))}</b>
+          <button id="u-next" type="button" aria-label="Next period"${r.next ? "" : " disabled"}>›</button></span>
+        <select id="u-recorded" aria-label="Recorded periods">${recorded.map((d) => option(d, (r.period === "week" ? "Week of " : "") + usageLabel({ period: r.period, start: d, end: d }).replace(/ – .*/, ""), d === r.start)).join("")}</select>
+        <select id="u-user" aria-label="User">${option("", "All users", !r.user)}${r.users.map((u) => option(u, u, u === r.user)).join("")}</select>
+        <select id="u-device" aria-label="Device">${option("", "All devices", !r.device)}${r.devices.map((d) => option(d, d, d === r.device)).join("")}</select>
+        <span class="spacer"></span><button id="u-refresh" type="button">${icon("refresh")} Refresh</button>
+      </div>
+      <div class="summary" aria-label="Usage summary">
+        ${metric("Upload", fmtBytes(r.totals.upload), exact(r.totals.upload))}
+        ${metric("Download", fmtBytes(r.totals.download), exact(r.totals.download))}
+        ${metric("Total", fmtBytes(r.totals.total), r.in_progress ? "This period so far" : exact(r.totals.total))}
+        ${metric("Devices measured", measured + " / " + r.rows.length, incomplete ? incomplete + " incomplete" : "")}
+      </div>
+      <p class="small muted">Calendar periods in Asia/Singapore (UTC+8); weeks start on Monday. Each exit assigns traffic to the hour in which it observed it, so a boundary moves at most a fraction of a second of traffic. “Not measured” means no collector covered the device; a measured device with no traffic shows 0 B.</p>
+      <div class="table-wrap"><table><thead><tr><th>User</th><th>Device</th><th class="num">Upload</th><th class="num">Download</th><th class="num">Total</th><th>Status</th><th>Exits</th></tr></thead><tbody>
+        ${r.rows.map(row).join("") || '<tr><td colspan="7" class="empty">No devices match these filters.</td></tr>'}</tbody></table></div>
+      ${lost ? `<section class="section"><h2>Traffic not attributed to a device</h2><div class="table-wrap"><table><thead><tr><th>Exit</th><th class="num">Unattributed upload</th><th class="num">Unattributed download</th><th class="num">Rejected upload</th><th class="num">Rejected download</th><th class="num">Unresolved upload</th><th class="num">Unresolved download</th></tr></thead><tbody>${lost}</tbody></table></div>
+        <p class="small muted">Rejected bytes were reported for names the exit was never configured with. Unresolved bytes were reported under names that two devices had during the same hour (an account deleted and recreated); they are not assigned to either device.</p></section>` : ""}
+      <section class="section"><h2>Usage collection by exit</h2><div class="table-wrap"><table><thead><tr><th>Exit</th><th>Collection</th><th>Details</th><th>Agent</th><th>sing-box</th><th>Last report</th></tr></thead><tbody>
+        ${r.collectors.map(collector).join("") || '<tr><td colspan="6" class="empty">No exits.</td></tr>'}</tbody></table></div></section>`;
+    $("#u-period").onchange = (e) => go({ period: e.target.value });
+    $("#u-prev").onclick = () => go({ date: r.previous });
+    $("#u-next").onclick = () => r.next && go({ date: r.next });
+    $("#u-recorded").onchange = (e) => go({ date: e.target.value });
+    $("#u-user").onchange = (e) => go({ user: e.target.value, device: "" });
+    $("#u-device").onchange = (e) => go({ device: e.target.value });
+    $("#u-refresh").onclick = route;
   };
 
   // ---- audit ----------------------------------------------------------------------------------------------

@@ -1,0 +1,118 @@
+# Per-device usage e2e: a real sing-box exit (the pinned linux installer package) with the current Go agent,
+# a second exit with the previous agent release, and real sing-box clients.
+#   lan 10.88.1.0/24  user side          wan 10.99.1.0/24  "the internet"
+#   cp        lan 10.88.1.5   control plane over TLS (127.0.0.1:18444 for the driver)
+#   db        data network   PostgreSQL
+#   exit-hk   lan 10.88.1.2   wan 10.99.1.2  current agent; alice (two devices) and bob share egress 10.99.1.2
+#   exit-jp   lan 10.88.1.3   wan 10.99.1.12 previous agent release (no usage support); carol
+#   clients   lan 10.88.1.30-.33  one sing-box client per device (proxy mode, SOCKS on 127.0.0.1:2080)
+#   sink      wan 10.99.1.10  sized and echo TCP target          decoy wan 10.99.1.20  Reality handshake
+name: cc-usage-e2e
+
+x-exit: &exit
+  image: debian:12-slim
+  entrypoint: ["/bin/sh", "-c"]
+  volumes: ["./out:/out:ro"]
+  profiles: [exits]
+
+x-client: &client
+  image: egress-e2e-tunclient     # python + the official sing-box 1.14.4 image binary
+  build: { context: ../../../egress/test, dockerfile: Dockerfile.tunclient }
+  entrypoint: ["/bin/sh", "-c"]
+  volumes: ["./out:/out:ro", "./gen.py:/app/gen.py:ro"]
+  profiles: [clients]
+
+services:
+  db:
+    image: postgres:16
+    environment: { POSTGRES_DB: controlplane, POSTGRES_USER: controlplane, POSTGRES_PASSWORD: usage-e2e }
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "controlplane", "-d", "controlplane"]
+      interval: 1s
+      retries: 30
+    networks: [data]
+
+  cp:
+    image: python:3.12-alpine
+    environment:
+      DATABASE_URL: postgres://controlplane:usage-e2e@db:5432/controlplane?sslmode=disable
+      CP_ADMIN_TOKEN: "${CP_ADMIN_TOKEN}"
+    ports: ["127.0.0.1:18444:8443"]
+    depends_on: { db: { condition: service_healthy } }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        /out/bin/cc-controlplane init
+        exec /out/bin/cc-controlplane serve --listen 0.0.0.0 --tls-cert /out/tls/cp.pem --tls-key /out/tls/cp-key.pem
+    volumes: ["./out:/out:ro"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--no-check-certificate", "-O", "/dev/null", "https://127.0.0.1:8443/healthz"]
+      interval: 1s
+      retries: 30
+    networks: { lan: { ipv4_address: 10.88.1.5 }, data: {} }
+
+  decoy:
+    image: caddy:2.10.2-alpine
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
+    volumes: ["../../../egress/test/Caddyfile:/etc/caddy/Caddyfile:ro"]
+    networks: { wan: { ipv4_address: 10.99.1.20 } }
+
+  sink:
+    image: python:3.12-alpine
+    command: ["python", "-u", "/app/sink.py"]
+    volumes: ["./sink.py:/app/sink.py:ro"]
+    networks: { wan: { ipv4_address: 10.99.1.10 } }
+
+  exit-hk:
+    <<: *exit
+    environment: { CP_AGENT_TOKEN: "${HK_TOKEN}" }
+    command:
+      - |
+        mkdir -p /etc/sing-box
+        exec /out/bin/agent-new --cp https://10.88.1.5:8443 --cafile /out/tls/ca.pem --name hk-1 \
+          --config /etc/sing-box/config.json --state-dir /var/lib/agent --singbox /out/sing-box/sing-box \
+          --interval 1 --settle 1 --max-delay 10 --probe-interval 3600 --run --usage-interval 10
+    networks:
+      lan: { ipv4_address: 10.88.1.2 }
+      wan: { ipv4_address: 10.99.1.2 }
+
+  exit-jp:
+    <<: *exit
+    environment: { CP_AGENT_TOKEN: "${JP_TOKEN}" }
+    command:
+      - |
+        mkdir -p /etc/sing-box
+        exec /out/bin/agent-old --cp https://10.88.1.5:8443 --cafile /out/tls/ca.pem --name jp-1 \
+          --config /etc/sing-box/config.json --state-dir /var/lib/agent --singbox /out/sing-box/sing-box \
+          --interval 1 --settle 1 --max-delay 10 --probe-interval 3600 --run
+    networks:
+      lan: { ipv4_address: 10.88.1.3 }
+      wan: { ipv4_address: 10.99.1.12 }
+
+  client-alice-mac:
+    <<: *client
+    command: ["exec sing-box run -c /out/clients/alice-mac.json"]
+    networks: { lan: { ipv4_address: 10.88.1.30 } }
+  client-alice-win:
+    <<: *client
+    command: ["exec sing-box run -c /out/clients/alice-win.json"]
+    networks: { lan: { ipv4_address: 10.88.1.31 } }
+  client-bob-phone:
+    <<: *client
+    command: ["exec sing-box run -c /out/clients/bob-phone.json"]
+    networks: { lan: { ipv4_address: 10.88.1.32 } }
+  client-carol-laptop:
+    <<: *client
+    command: ["exec sing-box run -c /out/clients/carol-laptop.json"]
+    networks: { lan: { ipv4_address: 10.88.1.33 } }
+
+networks:
+  data:
+    internal: true
+  lan:
+    ipam:
+      config: [{ subnet: 10.88.1.0/24, gateway: 10.88.1.1, ip_range: 10.88.1.128/25 }]
+  wan:
+    ipam:
+      config: [{ subnet: 10.99.1.0/24, gateway: 10.99.1.1, ip_range: 10.99.1.128/25 }]

@@ -49,8 +49,10 @@ const (
 type Options struct {
 	CP, CAFile, Iface, Config, StateDir, SingBox, Name string
 	StatusCmd, ReloadCmd, ConfirmAPI, RunReload        string
+	UsageAPI                                           string // loopback address of sing-box's API service, or "off"
 	Interval, Settle, MaxDelay                         float64
 	ProbeInterval, ProbeTimeout, ConfirmTimeout        float64
+	UsageInterval                                      float64
 	Once, Run                                          bool
 }
 
@@ -99,6 +101,9 @@ type Agent struct {
 	probeBuf     []ProbeResult
 	probeFunc    func(url, sourceIP string, timeout time.Duration) ProbeResult
 	output       io.Writer // where a --run child writes (the agent's log)
+
+	usage     *usageCollector // nil with --once or when usage collection could not be set up
+	stopUsage context.CancelFunc
 }
 
 func NewAgent(opt Options, token string, logf func(string, ...any), output io.Writer) (*Agent, error) {
@@ -111,6 +116,15 @@ func NewAgent(opt Options, token string, logf func(string, ...any), output io.Wr
 	addr, err := loopbackAPI(opt.ConfirmAPI)
 	if err != nil {
 		return nil, err
+	}
+	if opt.UsageAPI != "" && !strings.EqualFold(opt.UsageAPI, "off") {
+		usageAddr, err := loopbackAPI(opt.UsageAPI)
+		if err != nil {
+			return nil, errors.New(strings.Replace(err.Error(), "--confirm-api", "--usage-api", 1))
+		}
+		if usageAddr == addr {
+			return nil, errors.New("--usage-api must differ from --confirm-api")
+		}
 	}
 	tlsConf := &tls.Config{MinVersion: tls.VersionTLS12}
 	if opt.CAFile != "" {
@@ -521,6 +535,9 @@ func (a *Agent) install(etag string, body []byte) (bool, error) {
 	secret, marker := randomHex(), markerPrefix+randomHex()
 	experimental["clash_api"] = map[string]any{"external_controller": a.confirmAddress, "secret": secret}
 	config["outbounds"] = append(outbounds, map[string]any{"type": "block", "tag": marker})
+	if a.usage != nil {
+		a.usage.inject(config) // never refuses the candidate; collection just reports itself unavailable
+	}
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return false, err
@@ -912,6 +929,7 @@ func (a *Agent) Loop() error {
 	if a.opt.Run {
 		cleanupStaleChild(a.opt.StateDir, a.opt.SingBox, a.logf)
 	}
+	a.startUsage()
 	for {
 		a.Cycle()
 		if a.opt.Once {
@@ -921,8 +939,30 @@ func (a *Agent) Loop() error {
 	}
 }
 
+// startUsage sets up per-device traffic collection. Problems leave the agent fully working without it.
+func (a *Agent) startUsage() {
+	if a.opt.Once || a.opt.UsageAPI == "" {
+		return
+	}
+	collector, err := newUsageCollector(a)
+	if err != nil {
+		a.logf("usage collection disabled: %v", err)
+		return
+	}
+	if state, detail := collector.status(); state == usageUnavailable {
+		a.logf("usage collection unavailable: %s", detail)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.usage, a.stopUsage = collector, cancel
+	collector.Start(ctx)
+}
+
 // Close stops a --run child (tests; the service keeps it until the agent exits).
 func (a *Agent) Close() {
+	if a.stopUsage != nil {
+		a.stopUsage()
+		a.usage.Wait() // the final usage report and state write finish before the caller moves on
+	}
 	if a.child != nil && a.child.alive() {
 		a.child.stop(5 * time.Second)
 	}

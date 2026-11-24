@@ -14,6 +14,10 @@
 //   - When a reload fails definitively the last confirmed configuration is put back at --config.
 //   - Every --probe-interval seconds each URL from /agent/probe-targets is fetched from every egress IP, bound to
 //     that IP, in the background; results go out with the next heartbeats.
+//   - Per-device traffic (usage.go): each candidate also gets sing-box's API service on --usage-api (loopback,
+//     sing-box 1.14+). The agent follows its connection events and sends upload and download bytes per VLESS user
+//     and UTC hour to POST /agent/usage every --usage-interval seconds, independently of sync and heartbeats.
+//     --usage-api off, or a sing-box without the API service, leaves usage reported as unavailable.
 //
 // Reload, one of:
 //
@@ -106,6 +110,8 @@ func run(argv []string) int {
 	fs.Float64Var(&o.ProbeTimeout, "probe-timeout", 10, "seconds per egress probe")
 	fs.StringVar(&o.StatusCmd, "status-cmd", "", "with --reload-cmd: exits 0 when sing-box is up (reported only)")
 	fs.StringVar(&o.ConfirmAPI, "confirm-api", "127.0.0.1:9095", "numeric loopback address:port for the confirmation API")
+	fs.StringVar(&o.UsageAPI, "usage-api", "127.0.0.1:9096", "numeric loopback address:port for sing-box's API service (per-device traffic), or off")
+	fs.Float64Var(&o.UsageInterval, "usage-interval", 60, "seconds between usage reports (10-600)")
 	fs.Float64Var(&o.ConfirmTimeout, "confirm-timeout", 15, "seconds to wait for sing-box to confirm a reloaded config")
 	fs.BoolVar(&o.Once, "once", false, "sync once and exit")
 	fs.BoolVar(&o.Run, "run", false, "supervise sing-box as a child process")
@@ -127,6 +133,9 @@ func run(argv []string) int {
 	}
 	if o.RunReload == "signal" && !canHangup {
 		return fail("--run-reload signal is not available on this platform")
+	}
+	if o.UsageInterval < 10 || o.UsageInterval > 600 {
+		return fail("--usage-interval must be between 10 and 600 seconds")
 	}
 	if o.Iface != "" && !ipsSupported {
 		return fail("--iface is Linux-only; on this system the host's existing local address is the egress IP")
