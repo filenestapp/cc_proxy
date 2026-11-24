@@ -315,6 +315,9 @@
       <a href="#/ips" data-nav="ips"><span data-icon="ips"></span>Egress IPs</a>
       <a href="#/users" data-nav="users"><span data-icon="users"></span>Users</a>
       <a href="#/usage" data-nav="usage"><span data-icon="chart"></span>Usage</a>
+      <a href="#/subscriptions" data-nav="subscriptions"><span data-icon="card"></span>Subscriptions</a>
+      <a href="#/orders" data-nav="orders"><span data-icon="receipt"></span>Orders</a>
+      <a href="#/provisioning" data-nav="provisioning"><span data-icon="queue"></span>Provisioning</a>
       <a href="#/alerts" data-nav="alerts"><span data-icon="bell"></span>Alerts <span class="count" id="alert-count" hidden></span></a>
       <hr class="nav-divider">
       <a href="#/settings" data-nav="settings"><span data-icon="settings"></span>Settings</a>
@@ -352,6 +355,9 @@
     shield: '<path d="m12 2 8 3v6c0 6-4 9-8 11-4-2-8-5-8-11V5z"/><path d="m9 12 2 2 4-4"/>',
     refresh: '<path d="M20 10a8 8 0 1 0-1 7M20 4v6h-6"/>',
     chart: '<path d="M4 20V4M4 20h16"/><path d="M8 16v-5m4 5V8m4 8v-3"/>',
+    card: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h3"/>',
+    receipt: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6m-6 4h6m-6 4h4"/>',
+    queue: '<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3" cy="6" r="1"/><circle cx="3" cy="12" r="1"/><circle cx="3" cy="18" r="1"/>',
   };
   const icon = (name) => '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round">' + ICONS[name] + "</svg>";
   $$("[data-icon]").forEach((item) => { item.innerHTML = icon(item.dataset.icon); });
@@ -1580,6 +1586,39 @@
     $("#u-user").onchange = (e) => go({ user: e.target.value, device: "" });
     $("#u-device").onchange = (e) => go({ device: e.target.value });
     $("#u-refresh").onclick = route;
+  };
+
+  // ---- billing --------------------------------------------------------------------------------------------
+  const money = (amount, currency = "cny") => new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase(), minimumFractionDigits: 2 }).format((amount || 0) / 100);
+  const billingBadge = (status) => '<span class="badge ' + ({ active: "ok", paid: "ok", past_due: "warn", pending: "warn", failed: "bad", cancelled: "bad", expired: "bad", refunded: "bad" }[status] || "") + '">' + esc(status.replaceAll("_", " ")) + "</span>";
+  PAGES.subscriptions = async (_, token) => {
+    setTitle("Subscriptions");
+    const subscriptions = await api("GET", "/admin/subscriptions");
+    if (!current(token)) return;
+    const rows = subscriptions.map((s) => '<tr><td class="mono">' + s.id + "</td><td>" + esc(s.plan) + "</td><td>" + billingBadge(s.status) + "</td><td>" + fmtTime(s.current_period_end) + "</td><td>" + (s.cancel_at_period_end ? '<span class="badge warn">Cancels at renewal</span>' : "—") + "</td></tr>").join("");
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + subscriptions.length + ' subscriptions</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Plan</th><th>Status</th><th>Period end</th><th>Renewal</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="empty">No subscriptions.</td></tr>') + "</tbody></table></div>";
+    $("#refresh").onclick = route;
+  };
+  PAGES.orders = async (_, token) => {
+    setTitle("Orders");
+    const orders = await api("GET", "/admin/orders");
+    if (!current(token)) return;
+    const rows = orders.map((o) => '<tr><td class="mono">' + o.id + "</td><td class=\"mono\">" + (o.subscription_id || "—") + "</td><td>" + money(o.amount, o.currency) + "</td><td>" + billingBadge(o.status) + "</td><td>" + fmtTime(o.paid_at) + "</td><td>" + (o.receipt_url ? '<a href="' + esc(o.receipt_url) + '" target="_blank" rel="noreferrer">Receipt</a>' : "—") + "</td></tr>").join("");
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + orders.length + ' orders</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Subscription</th><th>Amount</th><th>Status</th><th>Paid</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">No orders.</td></tr>') + "</tbody></table></div>";
+    $("#refresh").onclick = route;
+  };
+  PAGES.provisioning = async (_, token) => {
+    setTitle("Provisioning queue");
+    const items = await api("GET", "/admin/provisioning");
+    if (!current(token)) return;
+    const rows = items.map((item) => '<tr><td class="mono">' + item.id + "</td><td>" + esc(item.kind.replaceAll("_", " ")) + "</td><td>" + esc(item.email) + "</td><td class=\"mono\">" + item.subscription_id + "</td><td>" + fmtTime(item.created_at) + '</td><td class="actions"><button class="link" data-done="' + item.id + '">Mark done</button></td></tr>').join("");
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + items.length + ' items need action</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Type</th><th>Customer</th><th>Subscription</th><th>Queued</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">No provisioning tasks.</td></tr>') + "</tbody></table></div>";
+    $("#refresh").onclick = route;
+    $$('[data-done]').forEach((button) => button.onclick = async () => {
+      const note = prompt("Completion note (optional):") ?? null;
+      if (note === null) return;
+      if (await act(() => api("POST", "/admin/provisioning/" + button.dataset.done + "/done", { note }), "Marked done.")) route();
+    });
   };
 
   // ---- audit ----------------------------------------------------------------------------------------------

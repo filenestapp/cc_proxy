@@ -125,6 +125,7 @@ type api struct {
 	limiter        loginLimiter
 	actions        accountActionLimiter
 	mail           mailSender
+	stripe         stripeClient
 	served         servedCache
 }
 
@@ -133,9 +134,13 @@ func newAPI(s *store, adminToken, probeToken string, proxies []netip.Prefix) htt
 }
 
 func newAPIWithMail(s *store, adminToken, probeToken string, proxies []netip.Prefix, mail mailSender) http.Handler {
+	return newAPIWithMailAndStripe(s, adminToken, probeToken, proxies, mail, newStripeClientFromEnv())
+}
+
+func newAPIWithMailAndStripe(s *store, adminToken, probeToken string, proxies []netip.Prefix, mail mailSender, stripe stripeClient) http.Handler {
 	a := &api{
 		store: s, mux: http.NewServeMux(), adminToken: adminToken, probeToken: probeToken, trustedProxies: proxies,
-		limiter: loginLimiter{failures: make(map[string][]time.Time)},
+		limiter: loginLimiter{failures: make(map[string][]time.Time)}, stripe: stripe,
 		actions: accountActionLimiter{hits: make(map[string][]time.Time)}, mail: mail,
 	}
 	a.bind("GET /healthz", "", "", a.health)
@@ -468,15 +473,22 @@ func (a *api) login(r *apiRequest) (response, error) {
 		return response{}, failure(429, "too many failed sign-ins; try again later")
 	}
 	if strings.Contains(body.Username, "@") {
-		_, err := a.store.checkCustomerCredentials(r.Context(), body.Username, body.Password)
+		customer, err := a.store.checkCustomerCredentials(r.Context(), body.Username, body.Password)
 		if err != nil && statusOf(err) == http.StatusUnauthorized {
 			a.limiter.fail(a.store.clock(), keys...)
 		}
 		if err != nil {
 			return response{}, err
 		}
-		// WP4 will resolve the customer's active subscription and customer_proxy row here.
-		return response{}, failureCode(403, "no_active_subscription", "no active subscription")
+		token, user, err := a.store.loginCustomerProxy(r.Context(), customer.ID, body.Device, body.Platform)
+		if err != nil {
+			return response{}, err
+		}
+		return ok(struct {
+			userSummary
+			Token  string `json:"token"`
+			Device string `json:"device"`
+		}{user, token, body.Device}, nil)
 	}
 	token, user, err := a.store.loginUser(r.Context(), body.Username, body.Password, body.Device, body.Platform)
 	if err != nil && statusOf(err) == 401 {
