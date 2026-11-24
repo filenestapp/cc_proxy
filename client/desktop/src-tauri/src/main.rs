@@ -5,13 +5,16 @@
 // polling the control plane), a heartbeat every few seconds, and a stop file on disconnect or exit.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod exit_probe;
+
 use anyhow::Result;
-use ccproxy_core::api::{Api, LoginError, Me};
+use ccproxy_core::api::{Api, LoginError};
 use ccproxy_core::commands::{self, touch, ConnectError, Connected, Effects, LoggedOut, Tunnel};
 use ccproxy_core::session::{Paths, Session};
 use ccproxy_core::supervisor::Status;
 use ccproxy_core::sync::{sync_once, SyncOutcome};
 use ccproxy_core::{default_device_name, elevate, platform, DEFAULT_MODE};
+use exit_probe::{Observation, PublicExit};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -27,10 +30,9 @@ struct App {
     /// earlier run).
     tunnel: Tunnel,
     message: Mutex<Option<AppMessage>>,
-    /// Last exit IP / entry from the control plane. Local refreshes (every 1.5 s) reuse it instead of asking
-    /// the server, so they must not blank it out.
-    /// Keyed by session id: a reply for an earlier session never shows up under a later one.
-    me: Mutex<Option<(String, Me)>>,
+    /// Last assignment check from the control plane, keyed by session id.
+    assignment: Mutex<Option<(String, bool)>>,
+    exit_observation: Mutex<Option<Observation>>,
 }
 
 /// The real effects behind the connect and logout commands (see [`commands`]).
@@ -97,20 +99,13 @@ impl From<ConnectError> for AppMessage {
 }
 
 #[derive(Serialize)]
-struct Entry {
-    host: String,
-    port: u16,
-}
-
-#[derive(Serialize)]
 struct View {
     signed_in: bool,
     server: Option<String>,
     user: Option<String>,
     device: String,
-    egress_ip: Option<String>,
-    entry: Option<Entry>,
-    host: Option<String>,
+    has_assignment: bool,
+    public_exit: PublicExit,
     /// idle | connecting | running | stopped | failed
     tunnel: String,
     tunnel_message: String,
@@ -131,6 +126,12 @@ impl App {
 
     fn request_stop(&self) {
         self.tunnel.request_stop(&self.paths);
+        *self.exit_observation.lock().unwrap() = None;
+    }
+
+    fn current_status(&self) -> Option<Status> {
+        // An older status file may still exist in the protected runtime directory.
+        Status::current().filter(|status| status.updated >= self.tunnel.connected_at())
     }
 
     fn view(&self, online: bool) -> View {
@@ -140,27 +141,15 @@ impl App {
             server: session.as_ref().map(|s| s.server.clone()),
             user: session.as_ref().map(|s| s.user.clone()),
             device: session.as_ref().map(|s| s.device.clone()).unwrap_or_else(default_device_name),
-            egress_ip: None,
-            entry: None,
-            host: None,
+            has_assignment: false,
+            public_exit: PublicExit::NotConnected,
             tunnel: "idle".into(),
             tunnel_message: String::new(),
             want_connected: self.tunnel.wants_connection(),
             message: self.message.lock().unwrap().clone(),
         };
-        // The supervisor writes its status only on transitions, so an old "running" can be current. A status older
-        // than the last connect belongs to a previous run (the app cannot delete it: it lives in the protected dir).
-        if let Some(st) = Status::current() {
-            if st.updated >= self.tunnel.connected_at() {
-                v.tunnel = st.state;
-                v.tunnel_message = st.message;
-            }
-        }
-        if v.want_connected && v.tunnel != "running" && v.tunnel != "failed" {
-            v.tunnel = "connecting".into();
-        }
         if !v.signed_in {
-            *self.me.lock().unwrap() = None;
+            *self.assignment.lock().unwrap() = None;
             return v;
         }
         let session = session.expect("signed in");
@@ -171,10 +160,10 @@ impl App {
                 let _g = ccproxy_core::session::lock();
                 if Session::is_current(&self.paths, &session.id) {
                     match reply {
-                        Ok(Some(me)) => *self.me.lock().unwrap() = Some((session.id.clone(), me)),
+                        Ok(Some(me)) => *self.assignment.lock().unwrap() = Some((session.id.clone(), me.entry.is_some())),
                         Ok(None) => {
                             Session::clear_locked(&self.paths);
-                            *self.me.lock().unwrap() = None;
+                            *self.assignment.lock().unwrap() = None;
                             v.signed_in = false;
                             v.message = Some(AppMessage::SessionExpired);
                             return v;
@@ -184,12 +173,18 @@ impl App {
                 }
             }
         }
-        if let Some((id, me)) = self.me.lock().unwrap().clone() {
-            if id == session.id {
-                v.egress_ip = me.egress_ip;
-                v.host = me.host;
-                v.entry = me.entry.map(|e| Entry { host: e.host, port: e.port });
+        v.has_assignment = self.assignment.lock().unwrap().as_ref()
+            .is_some_and(|(id, assigned)| id == &session.id && *assigned);
+        v.want_connected = self.tunnel.wants_connection();
+        if let Some(status) = self.current_status() {
+            if v.want_connected && status.state == "running" {
+                v.public_exit = exit_probe::display(self, &session, &status);
             }
+            v.tunnel = status.state;
+            v.tunnel_message = status.message;
+        }
+        if v.want_connected && v.tunnel != "running" && v.tunnel != "failed" {
+            v.tunnel = "connecting".into();
         }
         v
     }
@@ -200,7 +195,7 @@ fn system_languages() -> Vec<String> {
     sys_locale::get_locales().collect()
 }
 
-/// `refresh` also asks the control plane for the exit IP and entry; off the main thread so the window never stalls.
+/// `refresh` also checks the current assignment with the control plane, off the main thread.
 #[tauri::command]
 async fn get_state(app: tauri::State<'_, Arc<App>>, refresh: bool) -> Result<View, AppMessage> {
     let app = app.inner().clone();
@@ -306,12 +301,17 @@ fn main() {
         paths,
         tunnel: Tunnel::default(),
         message: Mutex::new(None),
-        me: Mutex::new(None),
+        assignment: Mutex::new(None),
+        exit_observation: Mutex::new(None),
     });
     // A tunnel left over from a previous run of the app stops by itself once its heartbeat goes stale.
     {
         let app = app.clone();
         std::thread::spawn(move || background(app));
+    }
+    {
+        let app = app.clone();
+        std::thread::spawn(move || exit_probe::monitor(app));
     }
     let on_exit = app.clone();
     tauri::Builder::default()
