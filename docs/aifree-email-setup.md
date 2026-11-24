@@ -1,6 +1,6 @@
 # aifree.sg 邮件部署（WP7，#42）
 
-`mail.aifree.sg` 运行 [maillab/cloud-mail](https://github.com/maillab/cloud-mail) v3.6.0（MIT），提供网页收件箱、收信和发信。控制面通过它的 API 发送事务邮件（WP3）并为付费客户开通企业邮箱（WP8）。
+`mail.aifree.sg` 运行 [maillab/cloud-mail](https://github.com/maillab/cloud-mail) v3.6.0（MIT），提供网页收件箱和收信。控制面通过它的 API 为付费客户开通企业邮箱（WP8）。当前只收信，不对外发信（2026-11-24 决定）。
 
 ## 当前状态（2026-11-24）
 
@@ -12,8 +12,8 @@
 | 账号 `admin@`、`noreply@`、`support@aifree.sg` | 已创建，管理员 API 登录已验证 |
 | Email Routing | 已启用；catch-all → Worker `aifree-mail` |
 | DNS | MX `route1/2/3.mx.cloudflare.net`，SPF `include:_spf.mx.cloudflare.net`，DKIM `cf2024-1._domainkey`，DMARC `p=quarantine` |
-| 收信实测 | 待做：从外部邮箱发信到 `support@aifree.sg` |
-| 发信 | 已在后台开启 Cloudflare Email Sending，Worker 已加 `email` 绑定并重新部署；站内互发已验证，发往外部邮箱待验证 |
+| 收信实测 | 已通过：从本机直连 `route1.mx.cloudflare.net:25` 投递到 `support@aifree.sg`，1 秒内写入 D1 并出现在收件箱 API |
+| 发信 | 暂不启用。Worker 不带 `email` 绑定，也未配置 Resend；站内邮箱之间互发可用，发往外部地址会被 cloud-mail 拒绝（`noSendProvider`） |
 | 角色 | 默认角色 `普通用户` 禁止发信（`sendType=ban`）；新建角色 `system-sender`（不限量）并分配给 `noreply@`、`support@` |
 
 ## 密钥
@@ -22,7 +22,7 @@
 
 - `CLOUDMAIL_JWT_SECRET`、`CLOUDMAIL_ADMIN_PASSWORD`：已用 `wrangler secret put jwt_secret` / `password` 写入 Worker。
 - `CLOUDMAIL_ADMIN_EMAIL`/`PASSWORD`：控制面 WP8 用来开户。
-- `CLOUDMAIL_NOREPLY_EMAIL`/`PASSWORD`：控制面 WP3 用来发验证和重置邮件。
+- `CLOUDMAIL_NOREPLY_EMAIL`/`PASSWORD`：控制面 WP3 用来发验证和重置邮件；在启用发信前不要给控制面配置这两个变量，否则注册时会记录发信失败日志。
 - `CLOUDMAIL_SUPPORT_EMAIL`/`PASSWORD`：客服收件箱。
 
 控制面部署时把 `CLOUDMAIL_URL`、`CLOUDMAIL_ADMIN_*`、`CLOUDMAIL_NOREPLY_*` 设为环境变量。
@@ -40,7 +40,7 @@ npx --yes wrangler@4.167.0 deploy
 - 首次部署后写入密钥，再访问一次 `https://mail.aifree.sg/api/init/<jwt_secret>` 初始化数据库（只需一次）。
 - 升级 cloud-mail 版本前先在 `cloud-mail-test` 之类的测试 Worker 上验证。
 
-## 开启发信（二选一）
+## 以后开启发信（二选一）
 
 1. **Cloudflare Email Sending（推荐，留在 Cloudflare 内）**：在 Cloudflare 后台 Email → Email Sending 为 `aifree.sg` 开启发信并按提示添加 DNS 记录；然后在 `deploy/cloud-mail/wrangler.toml` 加上
    ```toml
@@ -56,6 +56,18 @@ npx --yes wrangler@4.167.0 deploy
 
 - 收件人全部是 `@aifree.sg` 时，cloud-mail 直接写入本库，不经过 Cloudflare（`email-service.js` 的 `allInternal` 分支）；验证外发必须发往外部邮箱。
 - 客户企业邮箱能否对外发信由 WP8（#43）决定：保持默认角色即只能收信，或为付费客户分配允许发信的角色并设每日上限。
+
+## 收信验收方法
+
+```bash
+python3 - <<'PY'
+import smtplib; from email.message import EmailMessage
+m=EmailMessage(); m['From']='inbound-probe@probe.aifree.sg'; m['To']='support@aifree.sg'; m['Subject']='inbound check'; m.set_content('test')
+with smtplib.SMTP('route1.mx.cloudflare.net',25,timeout=20) as s: s.starttls(); s.send_message(m)
+PY
+```
+
+然后在 `support@` 收件箱或 D1 `email` 表中确认。Cloudflare 的 Email Routing 分析数据有延迟，不能用来判断是否送达。
 
 ## 已知限制
 
