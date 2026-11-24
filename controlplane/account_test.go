@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -19,13 +20,33 @@ type sentMail struct {
 }
 
 type fakeMailSender struct {
+	mu       sync.Mutex
 	messages []sentMail
 	err      error
 }
 
 func (m *fakeMailSender) send(_ context.Context, to, subject, content string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.messages = append(m.messages, sentMail{to: to, subject: subject, content: content})
 	return m.err
+}
+
+func (m *fakeMailSender) waitForMessages(t *testing.T, count int) []sentMail {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		m.mu.Lock()
+		messages := append([]sentMail(nil), m.messages...)
+		m.mu.Unlock()
+		if len(messages) >= count {
+			return messages
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d emails; received %d", count, len(messages))
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func tokenFromMail(t *testing.T, value string) string {
@@ -91,6 +112,57 @@ func responseCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 	return nil
 }
 
+func TestAdminCookieAuthorizesAdminRoutes(t *testing.T) {
+	s := testStore(t)
+	require(t, s.addAdmin(t.Context(), "console", testPassword))
+	token, _, err := s.loginAdmin(t.Context(), "console", testPassword, "127.0.0.1")
+	require(t, err)
+	handler := newAPIWithMail(s, testAdminToken, "", nil, nil)
+
+	rec := accountRequest(t, handler, http.MethodGet, "/admin/users", "", &http.Cookie{Name: sessionCookie, Value: token}, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin cookie /admin/users: HTTP %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAdminCookieDoesNotAuthorizeCustomerRoutes(t *testing.T) {
+	s := testStore(t)
+	require(t, s.addAdmin(t.Context(), "console", testPassword))
+	token, _, err := s.loginAdmin(t.Context(), "console", testPassword, "127.0.0.1")
+	require(t, err)
+	handler := newAPIWithMail(s, testAdminToken, "", nil, nil)
+
+	rec := accountRequest(t, handler, http.MethodGet, "/v1/account/me", "", &http.Cookie{Name: sessionCookie, Value: token}, "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("admin cookie /v1/account/me: HTTP %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCustomerCookieDoesNotAuthorizeAdminRoutes(t *testing.T) {
+	s := testStore(t)
+	_, token, _, _, err := s.registerCustomer(t.Context(), "customer@example.com", testPassword, "", "127.0.0.1")
+	require(t, err)
+	handler := newAPIWithMail(s, testAdminToken, "", nil, nil)
+
+	rec := accountRequest(t, handler, http.MethodGet, "/admin/users", "", &http.Cookie{Name: customerSessionCookie, Value: token}, "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("customer cookie /admin/users: HTTP %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAccountActionLimiterPrunesExpiredKeys(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	limiter := accountActionLimiter{hits: map[string][]time.Time{
+		"expired": {now.Add(-accountActionWindow - time.Second)},
+	}}
+	if !limiter.allowedEmail(now, "register", "customer@example.com", "127.0.0.1") {
+		t.Fatal("first account action was rate limited")
+	}
+	if _, ok := limiter.hits["expired"]; ok {
+		t.Fatal("expired account action limiter key was not pruned")
+	}
+}
+
 func TestCustomerStoreLifecycle(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
@@ -119,6 +191,13 @@ func TestCustomerStoreLifecycle(t *testing.T) {
 	}
 	_, err = s.customerSession(ctx, sessionA)
 	require(t, err)
+	_, suspendedSession, _, _, err := s.registerCustomer(ctx, "suspended@example.com", testPassword, "", "127.0.0.1")
+	require(t, err)
+	_, err = s.pool.Exec(ctx, "UPDATE customers SET status = 'suspended' WHERE email = $1", "suspended@example.com")
+	require(t, err)
+	if _, err := s.customerSession(ctx, suspendedSession); err == nil {
+		t.Fatal("suspended customer session was authorized")
+	}
 
 	reset, err := s.issuePasswordReset(ctx, customer.Email)
 	require(t, err)
@@ -158,8 +237,9 @@ func TestAccountHTTPRoutes(t *testing.T) {
 	if !cookieA.HttpOnly || cookieA.SameSite != http.SameSiteLaxMode || cookieA.MaxAge != int(customerSessionTTL.Seconds()) {
 		t.Fatalf("unexpected customer cookie: %+v", cookieA)
 	}
-	if len(mail.messages) != 1 || mail.messages[0].to != "person@example.com" {
-		t.Fatalf("unexpected verification delivery: %+v", mail.messages)
+	messages := mail.waitForMessages(t, 1)
+	if len(messages) != 1 || messages[0].to != "person@example.com" {
+		t.Fatalf("unexpected verification delivery: %+v", messages)
 	}
 	initialMe := accountRequest(t, handler, http.MethodGet, "/v1/account/me", "", cookieA, "")
 	if initialMe.Code != http.StatusOK {
@@ -168,17 +248,18 @@ func TestAccountHTTPRoutes(t *testing.T) {
 	csrfA := responseCSRF(t, initialMe)
 
 	resent := accountRequest(t, handler, http.MethodPost, "/v1/account/verify/resend", `{}`, cookieA, csrfA)
-	if resent.Code != http.StatusOK || len(mail.messages) != 2 {
-		t.Fatalf("resend verification: HTTP %d, messages=%d", resent.Code, len(mail.messages))
+	messages = mail.waitForMessages(t, 2)
+	if resent.Code != http.StatusOK || len(messages) != 2 {
+		t.Fatalf("resend verification: HTTP %d, messages=%d", resent.Code, len(messages))
 	}
 
 	verify := accountRequest(t, handler, http.MethodPost, "/v1/account/verify",
-		`{"token":"`+tokenFromMail(t, mail.messages[1].content)+`"}`, nil, "")
+		`{"token":"`+tokenFromMail(t, messages[1].content)+`"}`, nil, "")
 	if verify.Code != http.StatusOK {
 		t.Fatalf("verify: HTTP %d: %s", verify.Code, verify.Body.String())
 	}
 	reused := accountRequest(t, handler, http.MethodPost, "/v1/account/verify",
-		`{"token":"`+tokenFromMail(t, mail.messages[1].content)+`"}`, nil, "")
+		`{"token":"`+tokenFromMail(t, messages[1].content)+`"}`, nil, "")
 	if reused.Code != http.StatusBadRequest || responseCode(t, reused) != "invalid_token" {
 		t.Fatalf("reused verification token: HTTP %d: %s", reused.Code, reused.Body.String())
 	}
@@ -219,11 +300,12 @@ func TestAccountHTTPRoutes(t *testing.T) {
 	}
 
 	forgot := accountRequest(t, handler, http.MethodPost, "/v1/account/password/forgot", `{"email":"person@example.com"}`, nil, "")
-	if forgot.Code != http.StatusAccepted || len(mail.messages) != 3 {
-		t.Fatalf("forgot password: HTTP %d, messages=%d", forgot.Code, len(mail.messages))
+	messages = mail.waitForMessages(t, 3)
+	if forgot.Code != http.StatusAccepted || len(messages) != 3 {
+		t.Fatalf("forgot password: HTTP %d, messages=%d", forgot.Code, len(messages))
 	}
 	reset := accountRequest(t, handler, http.MethodPost, "/v1/account/password/reset",
-		`{"token":"`+tokenFromMail(t, mail.messages[2].content)+`","new_password":"reset correct horse battery"}`, nil, "")
+		`{"token":"`+tokenFromMail(t, messages[2].content)+`","new_password":"reset correct horse battery"}`, nil, "")
 	if reset.Code != http.StatusNoContent {
 		t.Fatalf("reset password: HTTP %d: %s", reset.Code, reset.Body.String())
 	}
@@ -269,7 +351,7 @@ func TestAccountHTTPRateLimitsAndExpiry(t *testing.T) {
 	}
 	now = now.Add(verificationTokenTTL + time.Second)
 	expired := accountRequest(t, handler2, http.MethodPost, "/v1/account/verify",
-		`{"token":"`+tokenFromMail(t, mail2.messages[0].content)+`"}`, nil, "")
+		`{"token":"`+tokenFromMail(t, mail2.waitForMessages(t, 1)[0].content)+`"}`, nil, "")
 	if expired.Code != http.StatusBadRequest || responseCode(t, expired) != "invalid_token" {
 		t.Fatalf("expired verification token: HTTP %d: %s", expired.Code, expired.Body.String())
 	}

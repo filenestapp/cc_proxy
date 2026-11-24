@@ -12,7 +12,10 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
+
+const cloudMailHTTPTimeout = 15 * time.Second
 
 type mailSender interface {
 	send(context.Context, string, string, string) error
@@ -39,7 +42,7 @@ func newCloudMailSenderFromEnv() mailSender {
 	if _, err := url.ParseRequestURI(baseURL); err != nil {
 		return nil
 	}
-	return &cloudMailSender{baseURL: baseURL, email: email, password: password, client: http.DefaultClient}
+	return &cloudMailSender{baseURL: baseURL, email: email, password: password, client: &http.Client{Timeout: cloudMailHTTPTimeout}}
 }
 
 func (m *cloudMailSender) request(ctx context.Context, method, path string, body any, token string, out any) (int, error) {
@@ -63,7 +66,7 @@ func (m *cloudMailSender) request(ctx context.Context, method, path string, body
 	}
 	client := m.client
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: cloudMailHTTPTimeout}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

@@ -283,6 +283,19 @@ func (a *api) authorize(r *apiRequest, role string) error {
 			r.Session.Admin = "api-token"
 			return nil
 		}
+		if cookie := cookieValue(r.Request); cookie != "" {
+			session, err := a.store.session(ctx, cookie)
+			if err == nil {
+				if r.Method != http.MethodGet && r.Method != http.MethodHead && !equalSecret(r.Header.Get("X-CSRF-Token"), session.CSRF) {
+					return failure(403, "missing or wrong CSRF token")
+				}
+				r.Session = session
+				return nil
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		}
 	case "customer":
 		if cookie := customerCookieValue(r.Request); cookie != "" {
 			session, err := a.store.customerSession(ctx, cookie)
@@ -294,19 +307,6 @@ func (a *api) authorize(r *apiRequest, role string) error {
 					return err
 				}
 				r.Customer = session
-				return nil
-			}
-			if !errors.Is(err, pgx.ErrNoRows) {
-				return err
-			}
-		}
-		if cookie := cookieValue(r.Request); cookie != "" {
-			session, err := a.store.session(ctx, cookie)
-			if err == nil {
-				if r.Method != http.MethodGet && r.Method != http.MethodHead && !equalSecret(r.Header.Get("X-CSRF-Token"), session.CSRF) {
-					return failure(403, "missing or wrong CSRF token")
-				}
-				r.Session = session
 				return nil
 			}
 			if !errors.Is(err, pgx.ErrNoRows) {

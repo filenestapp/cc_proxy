@@ -18,6 +18,7 @@ const (
 	verificationTokenTTL  = 24 * time.Hour
 	resetTokenTTL         = time.Hour
 	accountActionWindow   = time.Hour
+	mailSendTimeout       = 15 * time.Second
 )
 
 const customerSchemaSQL = `
@@ -63,6 +64,17 @@ func (l *accountActionLimiter) allowedEmail(now time.Time, action, email, addres
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	cutoff := now.Add(-accountActionWindow)
+	for key, hits := range l.hits {
+		i := 0
+		for i < len(hits) && !hits[i].After(cutoff) {
+			i++
+		}
+		if i == len(hits) {
+			delete(l.hits, key)
+			continue
+		}
+		l.hits[key] = hits[i:]
+	}
 	keys := []struct {
 		key string
 		max int
@@ -72,13 +84,7 @@ func (l *accountActionLimiter) allowedEmail(now time.Time, action, email, addres
 	}
 	for _, key := range keys {
 		hits := l.hits[key.key]
-		i := 0
-		for i < len(hits) && !hits[i].After(cutoff) {
-			i++
-		}
-		hits = hits[i:]
 		if len(hits) >= key.max {
-			l.hits[key.key] = hits
 			return false
 		}
 		l.hits[key.key] = append(hits, now)
@@ -225,8 +231,9 @@ func (s *store) loginCustomer(ctx context.Context, email, password, address stri
 }
 
 func (s *store) customerSession(ctx context.Context, token string) (customerSession, error) {
-	return rowOf[customerSession](ctx, s.pool, `SELECT customer_id, csrf, created_at, expires_at FROM customer_sessions
-		WHERE token_hash = $1 AND expires_at > $2`, hashToken(token), s.now())
+	return rowOf[customerSession](ctx, s.pool, `SELECT cs.customer_id, cs.csrf, cs.created_at, cs.expires_at
+		FROM customer_sessions cs JOIN customers c ON c.id = cs.customer_id
+		WHERE cs.token_hash = $1 AND cs.expires_at > $2 AND c.status = 'active'`, hashToken(token), s.now())
 }
 
 func (s *store) touchCustomerSession(ctx context.Context, token string) error {
@@ -370,27 +377,29 @@ func (a *api) accountRateLimit(action, email, address string) error {
 	return nil
 }
 
-func (a *api) sendVerification(ctx context.Context, email, token string) {
-	if a.mail == nil {
-		log.Printf("verification email for %s was not sent: cloud-mail is not configured", email)
-		return
-	}
-	if err := a.mail.send(ctx, email, "Verify your aifree email", "https://app.aifree.sg/account/verify?token="+token); err != nil {
-		log.Printf("send verification email: %v", err)
-	}
+func (a *api) sendVerification(email, token string) {
+	a.sendMail(email, "Verify your aifree email", "https://app.aifree.sg/account/verify?token="+token, "verification")
 }
 
-func (a *api) sendPasswordReset(ctx context.Context, email, token string) {
+func (a *api) sendPasswordReset(email, token string) {
 	if token == "" {
 		return
 	}
+	a.sendMail(email, "Reset your aifree password", "https://app.aifree.sg/account/reset?token="+token, "password reset")
+}
+
+func (a *api) sendMail(email, subject, content, purpose string) {
 	if a.mail == nil {
-		log.Printf("password reset email for %s was not sent: cloud-mail is not configured", email)
+		log.Printf("%s email for %s was not sent: cloud-mail is not configured", purpose, email)
 		return
 	}
-	if err := a.mail.send(ctx, email, "Reset your aifree password", "https://app.aifree.sg/account/reset?token="+token); err != nil {
-		log.Printf("send password reset email: %v", err)
-	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), mailSendTimeout)
+		defer cancel()
+		if err := a.mail.send(ctx, email, subject, content); err != nil {
+			log.Printf("send %s email: %v", purpose, err)
+		}
+	}()
 }
 
 func (a *api) accountRegister(r *apiRequest) (response, error) {
@@ -413,7 +422,7 @@ func (a *api) accountRegister(r *apiRequest) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	a.sendVerification(r.Context(), result.Email, verification)
+	a.sendVerification(result.Email, verification)
 	return response{status: 201, body: object{"customer": result},
 		cookie: a.customerCookie(r, session, int(customerSessionTTL.Seconds()))}, nil
 }
@@ -441,7 +450,7 @@ func (a *api) accountVerifyResend(r *apiRequest) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	a.sendVerification(r.Context(), customer.Email, token)
+	a.sendVerification(customer.Email, token)
 	return ok(object{"customer": customer}, nil)
 }
 
@@ -511,7 +520,7 @@ func (a *api) accountPasswordForgot(r *apiRequest) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	a.sendPasswordReset(r.Context(), email, token)
+	a.sendPasswordReset(email, token)
 	return response{status: 202, body: object{}}, nil
 }
 
