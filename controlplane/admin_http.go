@@ -9,6 +9,7 @@ import (
 
 func (a *api) adminRoutes() {
 	a.billingAdminRoutes()
+	a.mailboxAdminRoutes()
 	a.bind("POST /admin/session", "", "", a.adminLogin)
 	a.bind("GET /admin/session", "admin", "", a.adminWhoami)
 	a.bind("DELETE /admin/session", "", "", a.adminLogout)

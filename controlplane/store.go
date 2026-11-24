@@ -30,9 +30,10 @@ type database interface {
 }
 
 type store struct {
-	pool   *pgxpool.Pool
-	clock  func() time.Time
-	stripe stripeClient
+	pool         *pgxpool.Pool
+	clock        func() time.Time
+	stripe       stripeClient
+	mailboxAdmin *cloudMailAdmin
 }
 
 func openStore(ctx context.Context, dsn string) (*store, error) {
@@ -41,7 +42,7 @@ func openStore(ctx context.Context, dsn string) (*store, error) {
 		// The connection parser may include the full DSN in errors.
 		return nil, errors.New("invalid PostgreSQL connection configuration")
 	}
-	s := &store{pool: pool, clock: time.Now, stripe: newStripeClientFromEnv()}
+	s := &store{pool: pool, clock: time.Now, stripe: newStripeClientFromEnv(), mailboxAdmin: newCloudMailAdminFromEnv()}
 	if err := s.initializeSchema(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("initialize PostgreSQL: %w", err)
@@ -59,35 +60,26 @@ func (s *store) initializeSchema(ctx context.Context) error {
 			if _, err := tx.Exec(ctx, schemaSQL); err != nil {
 				return err
 			}
-			if err := ensureUsageTables(ctx, tx); err != nil {
+		} else {
+			var version int
+			if err := tx.QueryRow(ctx, "SELECT value::integer FROM settings WHERE key = 'schema'").Scan(&version); err != nil {
+				return fmt.Errorf("read PostgreSQL schema version: %w", err)
+			}
+			if version != schemaVersion {
+				return fmt.Errorf("unsupported PostgreSQL schema version %d", version)
+			}
+			// This additive change lets the previous binary still serve the database on rollback.
+			var hasObservedIPv4 bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns
+				WHERE table_schema = current_schema() AND table_name = 'hosts'
+				AND column_name = 'observed_public_ipv4')`).Scan(&hasObservedIPv4); err != nil {
 				return err
 			}
-			if err := ensureXTCPTable(ctx, tx); err != nil {
-				return err
-			}
-			if err := ensureCustomerTables(ctx, tx); err != nil {
-				return err
-			}
-			return ensureBillingTables(ctx, tx)
-		}
-		var version int
-		if err := tx.QueryRow(ctx, "SELECT value::integer FROM settings WHERE key = 'schema'").Scan(&version); err != nil {
-			return fmt.Errorf("read PostgreSQL schema version: %w", err)
-		}
-		if version != schemaVersion {
-			return fmt.Errorf("unsupported PostgreSQL schema version %d", version)
-		}
-		// This additive change lets the previous binary still serve the database on rollback.
-		var hasObservedIPv4 bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name = 'hosts'
-			AND column_name = 'observed_public_ipv4')`).Scan(&hasObservedIPv4); err != nil {
-			return err
-		}
-		if !hasObservedIPv4 {
-			if _, err := tx.Exec(ctx, `ALTER TABLE hosts ADD COLUMN IF NOT EXISTS observed_public_ipv4 inet
-				CHECK (family(observed_public_ipv4) = 4 AND masklen(observed_public_ipv4) = 32)`); err != nil {
-				return err
+			if !hasObservedIPv4 {
+				if _, err := tx.Exec(ctx, `ALTER TABLE hosts ADD COLUMN IF NOT EXISTS observed_public_ipv4 inet
+					CHECK (family(observed_public_ipv4) = 4 AND masklen(observed_public_ipv4) = 32)`); err != nil {
+					return err
+				}
 			}
 		}
 		// Additive as well: a previous binary ignores the table, so rollback keeps working.
@@ -100,7 +92,10 @@ func (s *store) initializeSchema(ctx context.Context) error {
 		if err := ensureCustomerTables(ctx, tx); err != nil {
 			return err
 		}
-		return ensureBillingTables(ctx, tx)
+		if err := ensureBillingTables(ctx, tx); err != nil {
+			return err
+		}
+		return ensureMailboxTables(ctx, tx)
 	})
 }
 
@@ -193,6 +188,7 @@ type settings struct {
 	Monitor           json.RawMessage `json:"monitor"`
 	Alerts            json.RawMessage `json:"alerts"`
 	SubscriptionGrace float64         `db:"subscription_grace_seconds" json:"subscription_grace_seconds"`
+	MailboxQuota      int             `db:"mailbox_quota" json:"mailbox_quota"`
 }
 
 func loadSettings(ctx context.Context, db database) (settings, error) {
@@ -201,17 +197,25 @@ func loadSettings(ctx context.Context, db database) (settings, error) {
 		COALESCE((SELECT value::bigint FROM settings WHERE key = 'cooldown_seconds'), $1) AS cooldown_seconds,
 		COALESCE((SELECT value FROM settings WHERE key = 'monitor'), '{"egress_targets":[],"entries":[]}') AS monitor,
 		COALESCE((SELECT value FROM settings WHERE key = 'alerts'), '{}') AS alerts,
-		`+subscriptionGraceSQL+` AS subscription_grace_seconds`, defaultCooldown)
+		`+subscriptionGraceSQL+` AS subscription_grace_seconds,
+		`+mailboxQuotaSQL+` AS mailbox_quota`, defaultCooldown)
 }
 
 func settingsPatch(body fields) (map[string]any, error) {
 	values := make(map[string]any)
-	for _, key := range []string{"client_policy", "cooldown_seconds", "monitor", "alerts", "subscription_grace_seconds"} {
+	for _, key := range []string{"client_policy", "cooldown_seconds", "monitor", "alerts", "subscription_grace_seconds", "mailbox_quota"} {
 		raw := body[key]
 		if len(raw) == 0 || string(raw) == "null" {
 			continue
 		}
 		switch key {
+		case "mailbox_quota":
+			var quota integer
+			if err := json.Unmarshal(raw, &quota); err != nil || quota < 0 || quota > 1 {
+				return nil, failure(400, "mailbox_quota must be 0 or 1")
+			}
+			values[key] = int(quota)
+			continue
 		case "cooldown_seconds", "subscription_grace_seconds":
 			var seconds integer
 			if err := json.Unmarshal(raw, &seconds); err != nil {
