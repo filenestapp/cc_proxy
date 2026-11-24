@@ -67,7 +67,7 @@ export default {
   environment_complete: "Check complete",
   environment_partial: "Partial results. Netcheck analysis is unavailable.",
   environment_already_running: "The previous check is still running. Try again shortly.",
-  environment_deadline: "The check timed out. Run it again when the network is available.",
+  environment_incomplete: "Some checks did not finish. Review the available results or run the check again.",
   environment_failed: "The check could not finish. Try again.",
   environment_observed_exit: "Observed public exit",
   environment_route_comparison: "Route comparison",

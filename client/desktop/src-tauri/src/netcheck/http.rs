@@ -238,16 +238,15 @@ fn measure_tls(result: &mut Transport) -> Result<(), Failure> {
 
 pub(super) fn submit(
     agent: &ureq::Agent,
-    local: &Details,
-    transport: &Transport,
-    exits: &[ExitReading],
-    udp: &[NetworkReading],
-    dns: &[NetworkReading],
+    payload: Value,
+    remaining: Duration,
 ) -> Result<Value, Failure> {
-    let payload = payload(local, transport, exits, udp, dns);
+    if remaining.is_zero() {
+        return Err(Failure::Timeout);
+    }
     let response = agent
         .post(&format!("{ORIGIN}/api/cli/report"))
-        .timeout(Duration::from_secs(12))
+        .timeout(remaining.min(Duration::from_secs(12)))
         .send_json(payload)
         .map_err(transport_error)?;
     if response.status() != 200 {
@@ -261,7 +260,7 @@ pub(super) fn submit(
     Ok(report)
 }
 
-fn payload(
+pub(super) fn payload(
     local: &Details,
     transport: &Transport,
     exits: &[ExitReading],

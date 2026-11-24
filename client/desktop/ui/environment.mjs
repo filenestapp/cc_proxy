@@ -246,11 +246,13 @@ export function createEnvironmentPage({ invoke, translate, onNavigate }) {
   function render() {
     retry.disabled = checking;
     output.setAttribute("aria-busy", String(checking));
-    status.dataset.tone = error ? "error" : report?.server_error ? "warning" : "";
+    const partial = report?.incomplete || report?.server_error;
+    status.dataset.tone = error ? "error" : partial ? "warning" : "";
     let key;
     if (checking) key = "environment_running";
     else if (error) key = error;
-    else if (report) key = report.server_error ? "environment_partial" : "environment_complete";
+    else if (report?.incomplete) key = "environment_incomplete";
+    else if (report) key = partial ? "environment_partial" : "environment_complete";
     status.textContent = key ? translate(key) : "";
     output.replaceChildren(...(report ? renderReport(report, translate) : []));
   }
@@ -266,8 +268,7 @@ export function createEnvironmentPage({ invoke, translate, onNavigate }) {
       if (!Array.isArray(result?.exits)) throw Error("Invalid environment report");
       report = result;
     } catch (reason) {
-      error = reason === "already_running" ? "environment_already_running"
-        : reason === "deadline" ? "environment_deadline" : "environment_failed";
+      error = reason === "already_running" ? "environment_already_running" : "environment_failed";
     } finally {
       checking = false;
       render();

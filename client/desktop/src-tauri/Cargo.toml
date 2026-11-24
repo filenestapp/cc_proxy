@@ -20,7 +20,7 @@ ccproxy-core = { path = "../../core" }
 sys-locale = "0.3"
 tauri = { version = "2.12", features = ["image-png", "tray-icon"] }
 tauri-plugin-single-instance = "2.5"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 ureq = { workspace = true, features = ["socks-proxy"] }
 url = "2"
 webpki-roots = "1"

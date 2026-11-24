@@ -67,7 +67,7 @@ export default {
   environment_complete: "检测完成",
   environment_partial: "已取得部分结果，Netcheck 分析暂不可用。",
   environment_already_running: "上一次检测仍在运行，请稍后重试。",
-  environment_deadline: "检测超时，请在网络恢复后重试。",
+  environment_incomplete: "部分检测未完成。你可以查看已取得的结果，或重新检测。",
   environment_failed: "检测未完成，请重试。",
   environment_observed_exit: "检测到的公网出口",
   environment_route_comparison: "出口一致性",
