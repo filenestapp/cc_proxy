@@ -58,6 +58,9 @@ func (s *store) initializeSchema(ctx context.Context) error {
 			if _, err := tx.Exec(ctx, schemaSQL); err != nil {
 				return err
 			}
+			if err := ensureUsageTables(ctx, tx); err != nil {
+				return err
+			}
 			return ensureXTCPTable(ctx, tx)
 		}
 		var version int
@@ -81,6 +84,9 @@ func (s *store) initializeSchema(ctx context.Context) error {
 			}
 		}
 		// Additive as well: a previous binary ignores the table, so rollback keeps working.
+		if err := ensureUsageTables(ctx, tx); err != nil {
+			return err
+		}
 		return ensureXTCPTable(ctx, tx)
 	})
 }

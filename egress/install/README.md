@@ -91,6 +91,12 @@ that lists the marker confirms the candidate. The heartbeat reports `config_etag
 (`confirmed`/`pending`/`failed`/`unknown`), `apply_error`, `candidate_etag`, `singbox_running` and egress probes.
 After a definitive failure, the agent restores the last confirmed config.
 
+Per-device usage runs alongside and never blocks a config. Each candidate also gets sing-box's API service on
+`--usage-api` (loopback, default `127.0.0.1:9096`, `off` disables it) with a secret kept in
+`<state-dir>/usage-state.json` (mode 0600). The agent follows the connection stream and sends bytes per device and
+hour to `POST /agent/usage`. See [Per-device usage](../../controlplane/README.md#per-device-usage) for the
+measurement and rollout.
+
 | Platform | Reload | Egress IPs |
 | --- | --- | --- |
 | Linux | `systemctl reload-or-restart ccproxy-exit-singbox` (SIGHUP) | With `--iface`, each routed IP the interface lacks is added as `/32` and recorded in `owned-ips.txt`. Addresses already present are left alone. `ips down` (uninstall, `--no-iface`) removes only recorded addresses. The boot unit runs `ccproxy-exit-agent ips up` before sing-box |
@@ -273,7 +279,7 @@ must be able to reach the chosen TLS 1.3 server. A manual handshake target can b
 ## Tests
 
 ```bash
-(cd egress/agent && go test ./...)                     # Go agent unit tests (17)
+(cd egress/agent && go test ./...)                     # Go agent unit tests (37)
 egress/agent/build.sh --verify                         # reproducible cross-build, 6 targets
 cd controlplane && go test ./...                       # installer routes, rendering, digests, console (no database)
 TEST_DATABASE_URL=postgresql://... python3 -m unittest tests.test_installer tests.test_go_agent -v
@@ -284,6 +290,9 @@ TEST_DATABASE_URL=postgresql://... python3 -m unittest tests.test_installer test
 | `egress/agent/*_test.go` | Routed-IP ownership (a pre-existing address survives up and down), confirm/marker contract, SIGHUP and restart reloads, rejected version, rollback after a crash, a stubborn process, reload command, settle window, redirect refusal, the HTTPS rule, probes bound to a source IP, log rotation | macOS arm64 native; `go vet` for all six targets |
 | `controlplane/xtcp_test.go` | frpc configuration: xtcp proxy only, TLS always verified, no fallback or relay settings, each secret once; CA validation; safe TOML paths; frpc pins in both scripts; the official frpc accepts the configuration (`FRPC_TEST_BIN`) | macOS arm64 native, with frpc 0.72.0 |
 | `controlplane/installer_test.go` | Commands (HTTPS-only, full-string validation, download before `sudo`, `curl -q`); rendered scripts carry the agent and sing-box digests; PowerShell CRLF and first-line guard; BSD grep limits; tamper or missing build → 503; the sing-box pin matches the desktop build; routes through the real router; the console's three commands and copy guard | macOS arm64 native |
+| `egress/agent/usage_test.go` | Usage collector against a scripted gRPC-web API service: short-lived connections per device, baseline at the first subscription, dropped events repaired from the snapshot without double counting, reload cut and counter reset, agent restart on the same instance, an instance that ended unwatched (gap), closed-list overflow, batch retry and refusal, hour attribution, injection and port conflicts, a sing-box without the API service, `--usage-api off`, credential hashes only from a config the running sing-box proved it loaded (recreated device across a reload, unproven config, restart during subscribe) | macOS arm64 native |
+| `controlplane/usage_test.go` (PostgreSQL) | Usage ingestion and report: scope to served devices, duplicate and reused batches, validation, admin-only access, collector states, identity through reassignment, revocation, re-registration and user deletion, delayed batches after an account is deleted and recreated with the same names (the review regression, same-hour recreation with retries, legacy names left unresolved, credentials bound to their names and exit), Singapore days, Monday weeks, months, measured zero, incomplete reasons | macOS arm64 native, PostgreSQL 16 |
+| `controlplane/test/usage/run-e2e.sh` (Docker) | The pinned linux sing-box 1.14.4 package as an exit with the current agent, real sing-box clients: exact bytes per device for two devices of one user and a second user on one egress IPv4, short-lived and long connections, control-plane outage with retries, reload during a live connection, exit restart, the previous agent release on a second exit, and an account deleted and recreated with the same names within the hour | Linux arm64 (Docker Desktop) |
 | `tests/test_go_agent.py` | The compiled agent against the Go control plane and PostgreSQL: SIGHUP reload, Windows-style restart reload, rejected version, `http://` refused | macOS arm64 native |
 | `tests/test_installer.py` (XTCP) | Admin settings validated, secrets write-only (also in the audit log), generated secret key shown once, agent routes scoped to the calling host (204 for a public-entry host); installer on an XTCP host: macOS upgrade from a public-entry install, `frpc.toml` 0600, frpc plist and unit, back to the public entry removes frpc, digest mismatch and rejected configuration change nothing. With genuine archives, the real frpc 0.72.0 is downloaded, checked and verifies the configuration | macOS native; Linux mode with stubbed `systemctl` |
 | `tests/test_installer.py` | Against the Go control plane over real TLS: agent downloads need a host token (not the admin token) and match the digest; exit status 22/7 of the copied command; rendered `exit.sh` end to end for macOS (plists checked with `plutil`) and Linux mode (`--iface` units), rerun, uninstall, wrong token, digest mismatch, redirect plus `.curlrc` `location`, untrusted root. With `CCPROXY_TEST_SINGBOX_ARCHIVES`, the genuine sing-box 1.14.4 archives are downloaded and verified | macOS native with BSD tools; Linux mode with stubbed `systemctl` |

@@ -21,3 +21,5 @@ client/test/local-demo/out/
 egress/agent/dist/
 controlplane/test/xtcp/out/
 controlplane/test/shared-egress/out/
+controlplane/test/usage/out/
+controlplane/test/usage/.cache/

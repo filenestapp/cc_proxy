@@ -10,6 +10,7 @@ The Go control plane manages exit hosts, egress IPs, users, devices, and sing-bo
 | `config.go` | sing-box configurations and content ETags |
 | `auth.go` | Administrator accounts, sessions, CSRF, password verification, and audit log |
 | `monitor.go`, `alerts.go` | Agent heartbeats, probes, topology, alerts, and webhooks |
+| `usage.go` | Per-device usage reports from exit agents and the admin usage view |
 | `migration.go`, `sqlite_export.py` | One-time SQLite v2 import |
 | `agent.py`, `prober.py`, `cpctl.py` | Exit host synchronization, vantage probes, and administration |
 
@@ -123,6 +124,82 @@ CP_PROBE_TOKEN=YOUR_PROBE_TOKEN controlplane/prober.py --cp "$CP_URL" --vantage 
 ```
 
 Topology refreshes every ten seconds. Search by host, entry, or egress IP. **Needs attention** surfaces failures and warnings. Select a host to see heartbeat, applied configuration, probe history, users, and devices. The IP inventory shows allocation and probe health separately. Results older than three minutes are stale.
+
+## Per-device usage
+
+**Usage** in the console, `GET /admin/usage`, and `cpctl.py usage` show upload, download, and total bytes for each
+client device per calendar day, week, or month. Periods use Asia/Singapore (UTC+8) and weeks start on Monday. Select
+earlier periods with the arrows or the recorded-periods list, and filter by user and device. This is a report for
+administrators only; billing, quotas, and alerts are separate.
+
+```bash
+controlplane/cpctl.py usage --period week --date 2026-11-23 --user alice
+curl "$CP_URL/admin/usage?period=month&date=2026-11-01" -H "Authorization: Bearer $CP_ADMIN_TOKEN"
+```
+
+**Source.** The exit agent measures traffic with the sing-box API service (`services[].type: "api"`, sing-box 1.14 and
+later). It is part of every official sing-box build, unlike the V2Ray statistics API, which needs the
+`with_v2ray_api` build tag. All six pinned 1.14.4 packages in `install/sing-box.json` (darwin, linux, and windows on
+amd64 and arm64) contain the API service and reject `v2ray_api`. The agent adds the service to each candidate config
+on a loopback port (`--usage-api`, default `127.0.0.1:9096`) with its own secret. It then follows the connection
+stream, which carries the authenticated VLESS user name `<user>/<device>` and byte counts for each connection.
+
+**Attribution.** The agent counts every connection separately and attributes only growth in its byte totals, so a
+counter reset on reload cannot produce negative or repeated traffic. A connection that opens and closes between
+two updates is still counted in full from its final totals. Several users on one egress IPv4 and several devices of
+one user are told apart by the VLESS credential, not by address. Usage belongs to `devices.id`, which stays the same
+when a device signs in again, when it is revoked and re-registered, and when its user moves to another exit. A
+deleted device or user keeps its history under the names it had when an exit was first configured with it.
+
+**Deleted and recreated accounts.** A deleted account recreated with the same user and device names gets new device
+IDs, so the names alone cannot say which device moved a byte. The agent therefore also sends the SHA-256 of the
+VLESS UUID behind each connection. It takes the UUID from the config file only after the running sing-box proves it
+loaded that file (its Clash API lists the file's confirmation marker, checked within one sing-box instance). The
+control plane records the hash of every credential it serves, so a delayed batch lands on the original device, even
+when both accounts existed in the same hour. Usage reports carry the credential hash. The server configuration
+keeps its existing VLESS user names and ETags.
+
+A name-only report entry goes to a device when exactly one device served under those names on that exit existed
+before the reported hour ended, allowing 5 minutes of clock difference. With multiple candidates or an unrecognized
+credential, the bytes are counted as unresolved on the exit, and each candidate device shows that hour as incomplete.
+
+**Period boundaries.** Bytes count in the UTC hour in which the exit observed them, and Singapore periods are made of
+whole UTC hours. A long connection's traffic is split at each update, which arrives every 250 ms. A connection that
+closes between updates counts in the hour in which it closed. Traffic that an exit recovers after a restart or a
+disconnect counts in the hour in which it was recovered.
+
+**Status.** Each device row shows one of these states:
+
+| Status | Meaning |
+| --- | --- |
+| Measured | A collector covered the device; 0 B is a measured zero |
+| Incomplete | Measured, with the reason listed: collection started during the period; sing-box ended while the collector was away (`gap`); more than 1000 connections closed during a disconnection (`overflow`); a reload cut live connections, so up to 250 ms of each is not counted (`cut`); traffic reported under its names could not be attributed to a device (`unresolved`) |
+| Not measured | No collector covered the device, for example on an exit whose agent does not report usage, or before history began |
+
+**Integrity.** An exit can add traffic only under its own name and only for devices its configuration carried
+(recorded when the agent fetches the config). Other names, and a credential reported under names it was not served
+with, are counted on the exit as rejected bytes. Bytes from
+connections without a user are shown as unattributed. Reports are batches numbered per collector. The agent writes
+each batch to its state directory before sending it and resends it unchanged until the control plane accepts it.
+The control plane ignores a batch it has already stored, so duplicate reports and retries change nothing.
+
+**Independence.** Collection and reporting (`POST /agent/usage`, every `--usage-interval` seconds) run apart from
+configuration sync and heartbeats. They never block or fail a config. If the service cannot be added because sing-box
+is older than 1.14, the port belongs to another program, or `--usage-api off` was set, the agent applies the config
+without it and reports collection as unavailable. **Usage collection by exit** in the console shows each exit as
+collecting, starting, error, stale (no report for five minutes), or unavailable. An exit whose agent predates usage
+reports, including `agent.py`, keeps working and is listed as unavailable.
+
+**Rollout.** Usage history starts when collection becomes available on an exit.
+
+1. Deploy the control plane. It adds the usage tables, which a previous binary ignores on rollback.
+2. Rebuild the agent (`egress/agent/build.sh --verify`) and serve it with `CP_AGENT_DIST`.
+3. Run each exit's **Install command** again. The new agent reloads sing-box once with the API service. The pinned
+   sing-box 1.14.4 does not change.
+4. Confirm that **Usage collection by exit** shows the exit as collecting.
+
+An agent that reaches a control plane without usage support keeps its batches for up to 30 days and sends them
+after the upgrade.
 
 ## Alerts
 

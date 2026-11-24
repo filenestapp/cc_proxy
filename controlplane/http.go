@@ -114,6 +114,7 @@ type api struct {
 	probeToken     string
 	trustedProxies []netip.Prefix
 	limiter        loginLimiter
+	served         servedCache
 }
 
 func newAPI(s *store, adminToken, probeToken string, proxies []netip.Prefix) http.Handler {
@@ -130,6 +131,7 @@ func newAPI(s *store, adminToken, probeToken string, proxies []netip.Prefix) htt
 	a.bind("GET /agent/server-config", "agent", "", a.agentConfig)
 	a.bind("GET /agent/probe-targets", "agent", "", a.agentTargets)
 	a.bind("POST /agent/report", "agent", "", a.agentReport)
+	a.bind("POST /agent/usage", "agent", "", a.agentUsage)
 	a.bind("GET /probe/targets", "probe", "", a.probeTargets)
 	a.bind("POST /probe/report", "probe", "", a.probeReport)
 	for _, pattern := range []string{"GET /{$}", "GET /console", "GET /console/{$}", "GET /dashboard", "GET /dashboard/{$}"} {
@@ -457,14 +459,21 @@ func (a *api) deviceLogout(r *apiRequest) (response, error) {
 func (a *api) agentConfig(r *apiRequest) (response, error) {
 	ctx := r.Context()
 	var cfg renderedConfig
+	var served []servedDevice
 	err := a.store.snapshot(ctx, func(tx pgx.Tx) error {
 		h, err := getHost(ctx, tx, r.Agent)
 		if err != nil {
 			return err
 		}
-		cfg, err = serverConfig(ctx, tx, h)
+		if cfg, err = serverConfig(ctx, tx, h); err != nil {
+			return err
+		}
+		served, err = servedDevices(ctx, tx, h.Name)
 		return err
 	})
+	if err == nil {
+		a.recordServed(ctx, r.Agent, served) // lets the host report these devices' traffic later
+	}
 	return configResponse(r, cfg), err
 }
 

@@ -25,6 +25,8 @@ Users
 Alerts
   cpctl.py alerts [--all]
   cpctl.py alert-test
+Usage (Asia/Singapore calendar periods, weeks start on Monday)
+  cpctl.py usage [--period day|week|month] [--date YYYY-MM-DD] [--user U] [--device D]
 """
 import argparse
 import json
@@ -95,6 +97,9 @@ def main(argv):
     a = sub.add_parser("revoke"); a.add_argument("user"); a.add_argument("device")
     sub.add_parser("alerts").add_argument("--all", action="store_true")
     sub.add_parser("alert-test")
+    a = sub.add_parser("usage")
+    a.add_argument("--period", choices=["day", "week", "month"], default="day")
+    a.add_argument("--date"); a.add_argument("--user"); a.add_argument("--device")
     args = p.parse_args(argv)
     c = args.cmd
 
@@ -169,6 +174,25 @@ def main(argv):
             print("%-8s %-8s %-22s %s" % (al["state"], al["severity"], al["rule"], al["summary"]))
     elif c == "alert-test":
         show(call("POST", "/admin/alerts/test"))
+    elif c == "usage":
+        params = {k: v for k, v in (("period", args.period), ("date", args.date), ("user", args.user),
+                                    ("device", args.device)) if v}
+        r = call("GET", "/admin/usage?" + urllib.parse.urlencode(params))
+        print("%s %s .. %s (%s)%s" % (r["period"], r["start"], r["end"], r["timezone"], " so far" if r["in_progress"] else ""))
+        for u in r["rows"]:
+            measured = u["status"] != "unavailable"
+            num = lambda v: "%15d" % v if measured else "%15s" % "-"
+            print("%-16s %-16s %s %s %s  %-11s %s" % (u["user"], u["device"], num(u["upload"]), num(u["download"]),
+                                                     num(u["total"]), u["status"], "; ".join(u["reasons"])))
+        t = r["totals"]
+        print("%-33s %15d %15d %15d" % ("total (bytes: upload download total)", t["upload"], t["download"], t["total"]))
+        for h in r["hosts"]:
+            print("exit %s: unattributed %d/%d, rejected %d/%d, unresolved %d/%d bytes (upload/download)" % (
+                h["host"], h["unattributed_upload"], h["unattributed_download"], h["rejected_upload"],
+                h["rejected_download"], h["unresolved_upload"], h["unresolved_download"]))
+        for col in r["collectors"]:
+            if col["status"] != "collecting":
+                print("exit %s: usage %s %s" % (col["host"], col["status"], col["note"]))
     return 0
 
 
