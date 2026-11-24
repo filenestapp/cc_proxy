@@ -155,6 +155,7 @@ func newAPIWithMail(s *store, adminToken, probeToken string, proxies []netip.Pre
 	}
 	a.adminRoutes()
 	a.accountRoutes()
+	a.accountPageRoutes()
 	a.installRoutes()
 	a.xtcpRoutes()
 	a.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
