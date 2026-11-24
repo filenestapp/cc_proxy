@@ -40,6 +40,8 @@ The desktop app shows the control plane URL, username, password, and optional de
 
 Use **Language** in the header to choose **System**, **English**, or **Simplified Chinese**. System is the default. The app uses the first supported system language and falls back to English. The app remembers language and appearance choices across restarts.
 
+The system tray icon shows connection status. Close the window to keep the app and tunnel running in a supported tray. Select **Open CC Proxy** to bring the window back or **Quit CC Proxy** to exit and stop the tunnel. The macOS and Windows hover tooltip shows the current status and verified public exit IP. On Linux, open the tray menu for this information.
+
 ## 命令行（ccproxy）
 
 ```bash

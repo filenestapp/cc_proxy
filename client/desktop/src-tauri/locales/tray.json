@@ -1,0 +1,24 @@
+{
+  "en": {
+    "signed_out": "Signed out",
+    "disconnected": "Disconnected",
+    "connecting": "Connecting…",
+    "connected": "Connected",
+    "disconnecting": "Disconnecting…",
+    "failed": "Connection failed",
+    "public_exit_ip": "Public exit IP",
+    "show_window": "Open CC Proxy",
+    "quit": "Quit CC Proxy"
+  },
+  "zh-Hans": {
+    "signed_out": "未登录",
+    "disconnected": "未连接",
+    "connecting": "正在连接…",
+    "connected": "已连接",
+    "disconnecting": "正在断开…",
+    "failed": "连接失败",
+    "public_exit_ip": "公网出口 IP",
+    "show_window": "打开 CC Proxy",
+    "quit": "退出 CC Proxy"
+  }
+}
