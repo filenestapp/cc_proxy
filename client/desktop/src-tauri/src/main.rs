@@ -6,8 +6,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use anyhow::Result;
-use ccproxy_core::api::{Api, Me};
-use ccproxy_core::commands::{self, touch, Connected, Effects, LoggedOut, Tunnel};
+use ccproxy_core::api::{Api, LoginError, Me};
+use ccproxy_core::commands::{self, touch, ConnectError, Connected, Effects, LoggedOut, Tunnel};
 use ccproxy_core::session::{Paths, Session};
 use ccproxy_core::supervisor::Status;
 use ccproxy_core::sync::{sync_once, SyncOutcome};
@@ -26,7 +26,7 @@ struct App {
     /// Whether the user wants the tunnel, and when they last connected (older supervisor status belongs to an
     /// earlier run).
     tunnel: Tunnel,
-    message: Mutex<String>,
+    message: Mutex<Option<AppMessage>>,
     /// Last exit IP / entry from the control plane. Local refreshes (every 1.5 s) reuse it instead of asking
     /// the server, so they must not blank it out.
     /// Keyed by session id: a reply for an earlier session never shows up under a later one.
@@ -51,6 +51,51 @@ impl Effects for DesktopEffects {
     }
 }
 
+// The webview translates message keys. Native and server diagnostics stay available as details.
+#[derive(Clone, Serialize)]
+#[serde(tag = "key", content = "detail", rename_all = "snake_case")]
+enum AppMessage {
+    InvalidServer,
+    IncorrectCredentials,
+    TooManySignInAttempts,
+    SignInRejected(String),
+    ControlPlaneUnreachable(String),
+    SessionSaveFailed(String),
+    OperationFailed(String),
+    SignInRequired,
+    SessionExpired,
+    SessionChangedWhileConnecting,
+    SessionExpiredDisconnected,
+    NoEgressAssigned(String),
+    EgressRevoked(String),
+    ConfigurationUnavailable(String),
+    AuthorizationUnavailable(String),
+    SignedOut,
+}
+
+impl From<LoginError> for AppMessage {
+    fn from(error: LoginError) -> Self {
+        match error {
+            LoginError::WrongCredentials => Self::IncorrectCredentials,
+            LoginError::TooManyAttempts => Self::TooManySignInAttempts,
+            LoginError::Rejected(detail) => Self::SignInRejected(detail),
+            LoginError::Network(detail) => Self::ControlPlaneUnreachable(detail),
+        }
+    }
+}
+
+impl From<ConnectError> for AppMessage {
+    fn from(error: ConnectError) -> Self {
+        match error {
+            ConnectError::SignInRequired => Self::SignInRequired,
+            ConnectError::SessionExpired => Self::SessionExpired,
+            ConnectError::Unassigned(detail) => Self::NoEgressAssigned(detail),
+            ConnectError::Configuration(detail) => Self::ConfigurationUnavailable(detail),
+            ConnectError::Authorization(detail) => Self::AuthorizationUnavailable(detail),
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct Entry {
     host: String,
@@ -70,7 +115,7 @@ struct View {
     tunnel: String,
     tunnel_message: String,
     want_connected: bool,
-    message: String,
+    message: Option<AppMessage>,
 }
 
 fn sidecar(name: &str) -> PathBuf {
@@ -80,8 +125,8 @@ fn sidecar(name: &str) -> PathBuf {
 }
 
 impl App {
-    fn set_message(&self, m: impl Into<String>) {
-        *self.message.lock().unwrap() = m.into();
+    fn set_message(&self, message: Option<AppMessage>) {
+        *self.message.lock().unwrap() = message;
     }
 
     fn request_stop(&self) {
@@ -131,10 +176,10 @@ impl App {
                             Session::clear_locked(&self.paths);
                             *self.me.lock().unwrap() = None;
                             v.signed_in = false;
-                            v.message = "Your session expired or was revoked. Sign in again.".into();
+                            v.message = Some(AppMessage::SessionExpired);
                             return v;
                         }
-                        Err(e) => v.message = format!("Could not reach the control plane: {e}"),
+                        Err(e) => v.message = Some(AppMessage::ControlPlaneUnreachable(e.to_string())),
                     }
                 }
             }
@@ -150,37 +195,44 @@ impl App {
     }
 }
 
+#[tauri::command]
+fn system_languages() -> Vec<String> {
+    sys_locale::get_locales().collect()
+}
+
 /// `refresh` also asks the control plane for the exit IP and entry; off the main thread so the window never stalls.
 #[tauri::command]
-async fn get_state(app: tauri::State<'_, Arc<App>>, refresh: bool) -> Result<View, String> {
+async fn get_state(app: tauri::State<'_, Arc<App>>, refresh: bool) -> Result<View, AppMessage> {
     let app = app.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || app.view(refresh)).await.map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || app.view(refresh))
+        .await
+        .map_err(|error| AppMessage::OperationFailed(error.to_string()))
 }
 
 #[tauri::command]
 async fn login(app: tauri::State<'_, Arc<App>>, server: String, username: String, password: String,
-               device: Option<String>) -> Result<View, String> {
+               device: Option<String>) -> Result<View, AppMessage> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let api = Api::new(&server).map_err(|e| e.to_string())?;
+        let api = Api::new(&server).map_err(|_| AppMessage::InvalidServer)?;
         let device = device.filter(|d| !d.trim().is_empty()).unwrap_or_else(default_device_name);
-        let resp = api.login(username.trim(), &password, device.trim(), platform()).map_err(|e| e.to_string())?;
+        let resp = api.login(username.trim(), &password, device.trim(), platform())?;
         Session::new(api.base().to_string(), resp.user, resp.device, resp.token)
             .save(&app.paths)
-            .map_err(|e| e.to_string())?;
-        app.set_message("");
+            .map_err(|error| AppMessage::SessionSaveFailed(error.to_string()))?;
+        app.set_message(None);
         Ok(app.view(true))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|error| AppMessage::OperationFailed(error.to_string()))?
 }
 
 #[tauri::command]
-async fn logout(app: tauri::State<'_, Arc<App>>) -> Result<View, String> {
+async fn logout(app: tauri::State<'_, Arc<App>>) -> Result<View, AppMessage> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         match commands::logout(&app.paths, &app.tunnel, &DesktopEffects) {
-            LoggedOut::SignedOut | LoggedOut::NotSignedIn => app.set_message("Signed out."),
+            LoggedOut::SignedOut | LoggedOut::NotSignedIn => app.set_message(Some(AppMessage::SignedOut)),
             // A newer sign-in replaced the session while the server call was in flight: it stays signed in, and
             // its message stays as it is.
             LoggedOut::Superseded => {}
@@ -188,30 +240,30 @@ async fn logout(app: tauri::State<'_, Arc<App>>) -> Result<View, String> {
         app.view(false)
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|error| AppMessage::OperationFailed(error.to_string()))
 }
 
 #[tauri::command]
-async fn connect(app: tauri::State<'_, Arc<App>>) -> Result<View, String> {
+async fn connect(app: tauri::State<'_, Arc<App>>) -> Result<View, AppMessage> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         match commands::connect(&app.paths, &app.tunnel, &DesktopEffects)? {
             Connected::Started => {}
             // Signed out or replaced while the config synced: nothing was started for the old session. Return before
             // touching the app message or refreshing online, which would act for the replacement session.
-            Connected::Superseded => return Err("The session changed while connecting. Connect again.".into()),
+            Connected::Superseded => return Err(AppMessage::SessionChangedWhileConnecting),
         }
-        app.set_message("");
+        app.set_message(None);
         Ok(app.view(true))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|error| AppMessage::OperationFailed(error.to_string()))?
 }
 
 #[tauri::command]
 fn disconnect(app: tauri::State<Arc<App>>) -> View {
     app.request_stop();
-    app.set_message("");
+    app.set_message(None);
     app.view(false)
 }
 
@@ -234,11 +286,11 @@ fn background(app: Arc<App>) {
                 match sync_once(&app.paths, &s, DEFAULT_MODE) {
                     Ok(SyncOutcome::SignedOut) => {
                         app.request_stop();
-                        app.set_message("Your session expired or was revoked. The tunnel disconnected.");
+                        app.set_message(Some(AppMessage::SessionExpiredDisconnected));
                     }
                     Ok(SyncOutcome::Unassigned(m)) => {
                         app.request_stop();
-                        app.set_message(format!("The egress assignment was revoked and the tunnel disconnected: {m}"));
+                        app.set_message(Some(AppMessage::EgressRevoked(m)));
                     }
                     Ok(_) => {}
                     Err(_) => {} // offline for a moment: keep running on the current config
@@ -253,7 +305,7 @@ fn main() {
     let app = Arc::new(App {
         paths,
         tunnel: Tunnel::default(),
-        message: Mutex::new(String::new()),
+        message: Mutex::new(None),
         me: Mutex::new(None),
     });
     // A tunnel left over from a previous run of the app stops by itself once its heartbeat goes stale.
@@ -264,7 +316,7 @@ fn main() {
     let on_exit = app.clone();
     tauri::Builder::default()
         .manage(app)
-        .invoke_handler(tauri::generate_handler![get_state, login, logout, connect, disconnect])
+        .invoke_handler(tauri::generate_handler![system_languages, get_state, login, logout, connect, disconnect])
         .build(tauri::generate_context!())
         .expect("building the app")
         .run(move |_, event| {

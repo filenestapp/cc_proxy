@@ -36,7 +36,9 @@ cd src-tauri && npx @tauri-apps/cli@2.12.6 build --bundles app    # macOS；Wind
 
 安装包里，`ccproxy` 和 `sing-box` 放在主程序旁边。[.github/workflows/desktop.yml](../.github/workflows/desktop.yml) 分别在 macOS（Apple 芯片）、Windows、Linux 上构建并上传安装包。没有签名：macOS 公证和 Windows 代码签名需要证书，还没配。
 
-The desktop app shows the control plane URL, username, password, and optional device name at sign-in. The home screen shows the tunnel state, connection control, assigned entry and egress IP, host, account, and device. Select **System**, **Light**, or **Dark** in the header. The app remembers the choice.
+The desktop app shows the control plane URL, username, password, and optional device name at sign-in. The home screen shows the tunnel state, connection control, assigned entry and egress IP, host, account, and device.
+
+Use **Language** in the header to choose **System**, **English**, or **Simplified Chinese**. System is the default. The app uses the first supported system language and falls back to English. The app remembers language and appearance choices across restarts.
 
 ## 命令行（ccproxy）
 
