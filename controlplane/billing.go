@@ -283,17 +283,18 @@ func (e *pendingCheckoutPlanChange) Error() string {
 func (s *store) reserveCheckout(ctx context.Context, customerID int64, plan string) (checkoutReservation, error) {
 	reservation := checkoutReservation{CustomerID: customerID, Plan: plan}
 	err := s.write(ctx, func(tx pgx.Tx) error {
-		var currentPlan string
+		var currentPlan, status, sessionID string
 		var providerSubscription bool
-		var sessionID string
-		err := tx.QueryRow(ctx, `SELECT id,plan_code,stripe_subscription_id IS NOT NULL,checkout_price_id,checkout_amount,COALESCE(checkout_expires_at,0),checkout_session_id
+		err := tx.QueryRow(ctx, `SELECT id,plan_code,status,stripe_subscription_id IS NOT NULL,checkout_price_id,checkout_amount,COALESCE(checkout_expires_at,0),checkout_session_id
 			FROM subscriptions WHERE customer_id=$1 AND status IN ('pending','active','past_due')`, customerID).
-			Scan(&reservation.ID, &currentPlan, &providerSubscription, &reservation.PriceID, &reservation.Amount, &reservation.ExpiresAt, &sessionID)
+			Scan(&reservation.ID, &currentPlan, &status, &providerSubscription, &reservation.PriceID, &reservation.Amount, &reservation.ExpiresAt, &sessionID)
 		if err == nil {
-			if !providerSubscription && currentPlan == plan && reservation.ExpiresAt > s.clock().Unix() {
+			pending := status == "pending" && !providerSubscription
+			withinWindow := reservation.ExpiresAt > s.clock().Unix()
+			if pending && currentPlan == plan && withinWindow {
 				return nil
 			}
-			if !providerSubscription && currentPlan != plan && reservation.ExpiresAt > s.clock().Unix() && sessionID != "" {
+			if pending && (sessionID != "" || withinWindow) {
 				var priceID string
 				if err := tx.QueryRow(ctx, "SELECT stripe_price_id FROM plans WHERE code=$1 AND active", plan).Scan(&priceID); err != nil {
 					return missing(err, "plan")
@@ -301,6 +302,7 @@ func (s *store) reserveCheckout(ctx context.Context, customerID int64, plan stri
 				if priceID == "" {
 					return failureCode(503, "stripe_unavailable", "plan is not configured in Stripe")
 				}
+				reservation.Plan = currentPlan
 				return &pendingCheckoutPlanChange{reservation: reservation, sessionID: sessionID}
 			}
 			return failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
@@ -335,8 +337,9 @@ func (s *store) reserveCheckout(ctx context.Context, customerID int64, plan stri
 func (s *store) replacePendingCheckout(ctx context.Context, previous pendingCheckoutPlanChange, plan string) (checkoutReservation, error) {
 	reservation := checkoutReservation{CustomerID: previous.reservation.CustomerID, Plan: plan}
 	err := s.write(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE subscriptions SET status='expired',updated_at=$2
-			WHERE id=$1 AND status='pending' AND stripe_subscription_id IS NULL AND checkout_session_id=$3`,
+		// Stripe can deliver checkout.session.expired before its expire request returns.
+		tag, err := tx.Exec(ctx, `UPDATE subscriptions SET status='expired',checkout_session_id=$3,updated_at=$2
+			WHERE id=$1 AND status IN ('pending','expired') AND stripe_subscription_id IS NULL AND checkout_session_id IN ('',$3)`,
 			previous.reservation.ID, s.now(), previous.sessionID)
 		if err != nil {
 			return err
@@ -351,8 +354,13 @@ func (s *store) replacePendingCheckout(ctx context.Context, previous pendingChec
 			return failureCode(503, "stripe_unavailable", "plan is not configured in Stripe")
 		}
 		reservation.ExpiresAt = s.clock().Add(24 * time.Hour).Unix()
-		return tx.QueryRow(ctx, `INSERT INTO subscriptions(customer_id,plan_code,status,checkout_price_id,checkout_amount,checkout_expires_at,created_at,updated_at)
-			VALUES($1,$2,'pending',$3,$4,$5,$6,$6) RETURNING id`, reservation.CustomerID, plan, reservation.PriceID, reservation.Amount, reservation.ExpiresAt, s.now()).Scan(&reservation.ID)
+		err = tx.QueryRow(ctx, `INSERT INTO subscriptions(customer_id,plan_code,status,checkout_price_id,checkout_amount,checkout_expires_at,created_at,updated_at)
+			VALUES($1,$2,'pending',$3,$4,$5,$6,$6) ON CONFLICT (customer_id) WHERE status IN ('pending','active','past_due')
+			DO NOTHING RETURNING id`, reservation.CustomerID, plan, reservation.PriceID, reservation.Amount, reservation.ExpiresAt, s.now()).Scan(&reservation.ID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
+		}
+		return err
 	})
 	return reservation, err
 }
@@ -360,8 +368,11 @@ func (s *store) replacePendingCheckout(ctx context.Context, previous pendingChec
 func (s *store) setCheckoutSessionID(ctx context.Context, reservationID int64, sessionID string) error {
 	return s.write(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE subscriptions SET checkout_session_id=$2,updated_at=$3
-			WHERE id=$1 AND status='pending' AND stripe_subscription_id IS NULL`, reservationID, sessionID, s.now())
-		return rowsChanged(tag, err, "Checkout reservation")
+			WHERE id=$1 AND status='pending' AND stripe_subscription_id IS NULL AND checkout_session_id IN ('',$2)`, reservationID, sessionID, s.now())
+		if err == nil && tag.RowsAffected() == 0 {
+			return failureCode(409, "subscription_exists", "the Checkout reservation changed; try again")
+		}
+		return err
 	})
 }
 
@@ -672,8 +683,10 @@ func (s *store) expireSubscriptions(ctx context.Context) error {
 				return err
 			}
 		}
+		// A known Checkout Session may have completed before its webhook arrives.
 		_, err = tx.Exec(ctx, `UPDATE subscriptions SET status='expired',updated_at=$1 WHERE status='pending'
-			AND stripe_subscription_id IS NULL AND COALESCE(checkout_expires_at::double precision,created_at+86400) <= $1`, s.now())
+			AND stripe_subscription_id IS NULL AND checkout_session_id=''
+			AND COALESCE(checkout_expires_at::double precision,created_at+86400) <= $1`, s.now())
 		return err
 	})
 }
@@ -791,15 +804,6 @@ func (c *stripeHTTPClient) call(ctx context.Context, method, path string, values
 	}
 	defer res.Body.Close()
 	if res.StatusCode/100 != 2 {
-		var failure struct {
-			Error struct {
-				Code    string
-				Message string
-			}
-		}
-		if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&failure); err == nil && (failure.Error.Code != "" || failure.Error.Message != "") {
-			return fmt.Errorf("Stripe %s %s returned HTTP %d: %s %s", method, path, res.StatusCode, failure.Error.Code, failure.Error.Message)
-		}
 		return fmt.Errorf("Stripe %s %s returned HTTP %d", method, path, res.StatusCode)
 	}
 	return json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(out)
@@ -848,12 +852,28 @@ func (c *stripeHTTPClient) createCheckout(ctx context.Context, customer string, 
 }
 
 func (c *stripeHTTPClient) expireCheckout(ctx context.Context, sessionID string) error {
-	var result struct{ Status string }
-	err := c.call(ctx, http.MethodPost, "/checkout/sessions/"+url.PathEscape(sessionID)+"/expire", nil, "", &result)
-	if err != nil && (strings.Contains(strings.ToLower(err.Error()), "already completed") || strings.Contains(strings.ToLower(err.Error()), "checkout_session_completed")) {
+	path := "/checkout/sessions/" + url.PathEscape(sessionID)
+	var session struct{ ID, Status string }
+	expireErr := c.call(ctx, http.MethodPost, path+"/expire", nil, "", &session)
+	if expireErr != nil {
+		// Stripe rejects expiry for both completed and expired Sessions. A read also resolves a lost response.
+		if err := c.call(ctx, http.MethodGet, path, nil, "", &session); err != nil {
+			return expireErr
+		}
+	}
+	if session.ID != sessionID {
+		return errors.New("Stripe Checkout Session ID did not match")
+	}
+	switch session.Status {
+	case "expired":
+		return nil
+	case "complete":
 		return errStripeCheckoutCompleted
 	}
-	return err
+	if expireErr != nil {
+		return expireErr
+	}
+	return errors.New("Stripe Checkout Session expiration was not confirmed")
 }
 
 func (c *stripeHTTPClient) createPortal(ctx context.Context, customer, returnURL string) (string, error) {
@@ -1026,21 +1046,9 @@ func (a *api) accountCheckout(r *apiRequest) (response, error) {
 		return response{}, failureCode(403, "email_unverified", "email is not verified")
 	}
 	reservation, err := a.store.reserveCheckout(ctx, customer.ID, body.Plan)
-	if err != nil {
-		var change *pendingCheckoutPlanChange
-		if !errors.As(err, &change) {
-			return response{}, err
-		}
-		if err := a.store.stripe.expireCheckout(ctx, change.sessionID); err != nil {
-			if errors.Is(err, errStripeCheckoutCompleted) {
-				return response{}, failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
-			}
-			return response{}, err
-		}
-		reservation, err = a.store.replacePendingCheckout(ctx, *change, body.Plan)
-		if err != nil {
-			return response{}, err
-		}
+	var change *pendingCheckoutPlanChange
+	if err != nil && !errors.As(err, &change) {
+		return response{}, err
 	}
 	stripeCustomer, err := a.store.customerStripeID(ctx, customer.ID)
 	if err != nil {
@@ -1053,6 +1061,26 @@ func (a *api) accountCheckout(r *apiRequest) (response, error) {
 			return response{}, err
 		}
 		stripeCustomer, err = a.store.setCustomerStripeID(ctx, customer.ID, stripeCustomer)
+		if err != nil {
+			return response{}, err
+		}
+	}
+	if change != nil {
+		if change.sessionID == "" {
+			// Older reservations and interrupted requests can recover the same Session by its idempotency key.
+			previous, err := a.store.stripe.createCheckout(ctx, stripeCustomer, change.reservation)
+			if err != nil {
+				return response{}, err
+			}
+			change.sessionID = previous.ID
+		}
+		if err := a.store.stripe.expireCheckout(ctx, change.sessionID); err != nil {
+			if errors.Is(err, errStripeCheckoutCompleted) {
+				return response{}, failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
+			}
+			return response{}, err
+		}
+		reservation, err = a.store.replacePendingCheckout(ctx, *change, body.Plan)
 		if err != nil {
 			return response{}, err
 		}
