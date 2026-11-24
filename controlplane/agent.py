@@ -174,6 +174,7 @@ class Agent:
     def get(self, path, etag=None):
         req = urllib.request.Request(self.args.cp.rstrip("/") + path)
         req.add_header("Authorization", "Bearer " + self.token)
+        req.add_header("User-Agent", "CCProxy-Agent")
         if etag:
             req.add_header("If-None-Match", etag)
         try:
@@ -187,6 +188,7 @@ class Agent:
     def post(self, path, obj):
         req = urllib.request.Request(self.args.cp.rstrip("/") + path, data=json.dumps(obj).encode(), method="POST")
         req.add_header("Authorization", "Bearer " + self.token)
+        req.add_header("User-Agent", "CCProxy-Agent")
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=10, context=self.ctx) as resp:
             return json.loads(resp.read())

@@ -10,6 +10,7 @@ egress/inventory.json
 egress/test/out/
 __pycache__/
 controlplane/test/out/
+/controlplane/cc-controlplane
 *.db
 *.db-wal
 *.db-shm
@@ -17,3 +18,8 @@ client/target/
 client/desktop/src-tauri/binaries/
 client/desktop/src-tauri/gen/
 client/test/local-demo/out/
+egress/agent/dist/
+controlplane/test/xtcp/out/
+controlplane/test/shared-egress/out/
+controlplane/test/usage/out/
+controlplane/test/usage/.cache/
