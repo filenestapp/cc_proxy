@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod exit_probe;
+mod tray;
 
 use anyhow::Result;
 use ccproxy_core::api::{Api, LoginError};
@@ -19,6 +20,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tauri::Manager;
 
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
 const HEARTBEAT_TIMEOUT_SECS: u64 = 30;
@@ -33,6 +35,7 @@ struct App {
     /// Last assignment check from the control plane, keyed by session id.
     assignment: Mutex<Option<(String, bool)>>,
     exit_observation: Mutex<Option<Observation>>,
+    tray_language: Mutex<tray::Language>,
 }
 
 /// The real effects behind the connect and logout commands (see [`commands`]).
@@ -149,7 +152,6 @@ impl App {
             message: self.message.lock().unwrap().clone(),
         };
         if !v.signed_in {
-            *self.assignment.lock().unwrap() = None;
             return v;
         }
         let session = session.expect("signed in");
@@ -193,6 +195,11 @@ impl App {
 #[tauri::command]
 fn system_languages() -> Vec<String> {
     sys_locale::get_locales().collect()
+}
+
+#[tauri::command]
+fn set_tray_language(app: tauri::State<'_, Arc<App>>, language: tray::Language) {
+    *app.tray_language.lock().unwrap() = language;
 }
 
 /// `refresh` also checks the current assignment with the control plane, off the main thread.
@@ -303,25 +310,37 @@ fn main() {
         message: Mutex::new(None),
         assignment: Mutex::new(None),
         exit_observation: Mutex::new(None),
+        tray_language: Mutex::new(tray::Language::preferred()),
     });
-    // A tunnel left over from a previous run of the app stops by itself once its heartbeat goes stale.
-    {
-        let app = app.clone();
-        std::thread::spawn(move || background(app));
-    }
-    {
-        let app = app.clone();
-        std::thread::spawn(move || exit_probe::monitor(app));
-    }
-    let on_exit = app.clone();
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| tray::show_window(app)))
         .manage(app)
-        .invoke_handler(tauri::generate_handler![system_languages, get_state, login, logout, connect, disconnect])
+        .setup(|app| {
+            let state = app.state::<Arc<App>>();
+            let heartbeat = state.inner().clone();
+            let exit = state.inner().clone();
+            std::thread::spawn(move || background(heartbeat));
+            std::thread::spawn(move || exit_probe::monitor(exit));
+            if let Err(error) = tray::install(app.handle(), state.inner().clone()) {
+                eprintln!("Could not create the system tray: {error}");
+            }
+            Ok(())
+        })
+        .on_window_event(tray::window_event)
+        .invoke_handler(tauri::generate_handler![
+            system_languages, set_tray_language, get_state, login, logout, connect, disconnect
+        ])
         .build(tauri::generate_context!())
         .expect("building the app")
-        .run(move |_, event| {
-            if let tauri::RunEvent::Exit = event {
-                on_exit.request_stop();
+        .run(|handle, event| match event {
+            tauri::RunEvent::Exit => {
+                let app = handle.state::<Arc<App>>();
+                if app.tunnel.wants_connection() {
+                    app.request_stop();
+                }
             }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { has_visible_windows: false, .. } => tray::show_window(handle),
+            _ => {}
         });
 }

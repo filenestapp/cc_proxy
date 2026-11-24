@@ -14,4 +14,8 @@ serde.workspace = true
 serde_json.workspace = true
 ccproxy-core = { path = "../../core" }
 sys-locale = "0.3"
-tauri = { version = "2.12", features = [] }
+tauri = { version = "2.12", features = ["image-png", "tray-icon"] }
+tauri-plugin-single-instance = "2.5"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = "0.18"

@@ -230,6 +230,7 @@ import { messages, resolveLanguage } from "./locale.mjs";
     if (next === activeLanguage) return;
     activeLanguage = next;
     document.documentElement.lang = next;
+    invoke("set_tray_language", { language: next }).catch(() => {});
     for (const element of document.querySelectorAll("[data-i18n]")) {
       element.textContent = t(element.dataset.i18n);
     }
