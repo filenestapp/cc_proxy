@@ -13,7 +13,8 @@
 | Email Routing | 已启用；catch-all → Worker `aifree-mail` |
 | DNS | MX `route1/2/3.mx.cloudflare.net`，SPF `include:_spf.mx.cloudflare.net`，DKIM `cf2024-1._domainkey`，DMARC `p=quarantine` |
 | 收信实测 | 待做：从外部邮箱发信到 `support@aifree.sg` |
-| 发信 | 待做：需要在 Cloudflare 后台开启 Email Sending，或配置 Resend（见下） |
+| 发信 | 已在后台开启 Cloudflare Email Sending，Worker 已加 `email` 绑定并重新部署；站内互发已验证，发往外部邮箱待验证 |
+| 角色 | 默认角色 `普通用户` 禁止发信（`sendType=ban`）；新建角色 `system-sender`（不限量）并分配给 `noreply@`、`support@` |
 
 ## 密钥
 
@@ -50,6 +51,11 @@ npx --yes wrangler@4.167.0 deploy
 2. **Resend**：在 Resend 添加并验证 `aifree.sg`（DNS 记录加到 Cloudflare），把 API Key 填到 cloud-mail 管理后台的发信设置。
 
 开启后验收：用 `noreply@aifree.sg` 发信到 Gmail，邮件头显示 SPF、DKIM、DMARC 均为 pass。
+
+## 发信说明
+
+- 收件人全部是 `@aifree.sg` 时，cloud-mail 直接写入本库，不经过 Cloudflare（`email-service.js` 的 `allInternal` 分支）；验证外发必须发往外部邮箱。
+- 客户企业邮箱能否对外发信由 WP8（#43）决定：保持默认角色即只能收信，或为付费客户分配允许发信的角色并设每日上限。
 
 ## 已知限制
 

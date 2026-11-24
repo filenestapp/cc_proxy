@@ -21,6 +21,10 @@ database_id = "1303d0b8-080c-47fb-a54c-69ae217e6467"
 binding = "kv"
 id = "f107f5d4b1c84bb3a713c55e64c294d4"
 
+# Cloudflare Email Sending for aifree.sg; cloud-mail sends through this binding first.
+[[send_email]]
+name = "email"
+
 [[send_email]]
 name = "forward"
 
