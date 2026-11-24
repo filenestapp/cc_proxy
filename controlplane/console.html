@@ -315,6 +315,7 @@
       <a href="#/ips" data-nav="ips"><span data-icon="ips"></span>Egress IPs</a>
       <a href="#/users" data-nav="users"><span data-icon="users"></span>Users</a>
       <a href="#/usage" data-nav="usage"><span data-icon="chart"></span>Usage</a>
+      <a href="#/plans" data-nav="plans"><span data-icon="card"></span>Plans</a>
       <a href="#/subscriptions" data-nav="subscriptions"><span data-icon="card"></span>Subscriptions</a>
       <a href="#/orders" data-nav="orders"><span data-icon="receipt"></span>Orders</a>
       <a href="#/provisioning" data-nav="provisioning"><span data-icon="queue"></span>Provisioning</a>
@@ -1591,12 +1592,37 @@
   // ---- billing --------------------------------------------------------------------------------------------
   const money = (amount, currency = "cny") => new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase(), minimumFractionDigits: 2 }).format((amount || 0) / 100);
   const billingBadge = (status) => '<span class="badge ' + ({ active: "ok", paid: "ok", past_due: "warn", pending: "warn", failed: "bad", cancelled: "bad", expired: "bad", refunded: "bad" }[status] || "") + '">' + esc(status.replaceAll("_", " ")) + "</span>";
+  PAGES.plans = async (_, token) => {
+    setTitle("Plans");
+    const plans = await api("GET", "/admin/plans");
+    if (!current(token)) return;
+    const rows = plans.map((plan) => '<tr><td>' + esc(plan.name) + '</td><td>' + money(plan.amount, plan.currency) +
+      '</td><td class="mono">' + esc(plan.stripe_price_id || "—") + '</td><td>' + (plan.active ? "Active" : "Hidden") +
+      '</td><td class="actions"><button class="link" data-edit-plan="' + esc(plan.code) + '">Edit</button></td></tr>').join("");
+    $("#view").innerHTML = '<div class="table-wrap"><table><thead><tr><th>Plan</th><th>Monthly price</th><th>Stripe Price ID</th><th>Availability</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    $$('[data-edit-plan]').forEach((button) => button.onclick = async () => {
+      const plan = plans.find((entry) => entry.code === button.dataset.editPlan);
+      const saved = await form("Edit " + plan.name, [
+        { name: "name", label: "Display name", value: plan.name, required: true },
+        { name: "price", label: "Monthly price (CNY)", value: (plan.amount / 100).toFixed(2), required: true },
+        { name: "stripe_price_id", label: "Stripe Price ID", value: plan.stripe_price_id, hint: "Use a monthly CNY Price with the same amount." },
+        { name: "active", label: "Available for new subscriptions", type: "checkbox", value: plan.active },
+      ], (values) => {
+        const amount = Math.round(Number(values.price) * 100);
+        if (!/^\d+(\.\d{1,2})?$/.test(values.price) || amount < 1 || amount > 2147483647) {
+          throw new Error("Enter a valid CNY amount with up to two decimal places.");
+        }
+        return api("PUT", "/admin/plans", { plans: [{ ...plan, name: values.name, amount, stripe_price_id: values.stripe_price_id, active: values.active }] });
+      });
+      if (saved) route();
+    });
+  };
   PAGES.subscriptions = async (_, token) => {
     setTitle("Subscriptions");
     const subscriptions = await api("GET", "/admin/subscriptions");
     if (!current(token)) return;
-    const rows = subscriptions.map((s) => '<tr><td class="mono">' + s.id + "</td><td>" + esc(s.plan) + "</td><td>" + billingBadge(s.status) + "</td><td>" + fmtTime(s.current_period_end) + "</td><td>" + (s.cancel_at_period_end ? '<span class="badge warn">Cancels at renewal</span>' : "—") + "</td></tr>").join("");
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + subscriptions.length + ' subscriptions</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Plan</th><th>Status</th><th>Period end</th><th>Renewal</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="empty">No subscriptions.</td></tr>') + "</tbody></table></div>";
+    const rows = subscriptions.map((s) => '<tr><td class="mono">' + s.id + "</td><td>" + esc(s.email) + "</td><td>" + esc(s.plan) + "</td><td>" + billingBadge(s.status) + "</td><td>" + fmtTime(s.current_period_end) + "</td><td>" + (s.cancel_at_period_end ? '<span class="badge warn">Cancels at renewal</span>' : "—") + "</td></tr>").join("");
+    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + subscriptions.length + ' subscriptions</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Customer</th><th>Plan</th><th>Status</th><th>Period end</th><th>Renewal</th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">No subscriptions.</td></tr>') + "</tbody></table></div>";
     $("#refresh").onclick = route;
   };
   PAGES.orders = async (_, token) => {

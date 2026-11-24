@@ -125,7 +125,6 @@ type api struct {
 	limiter        loginLimiter
 	actions        accountActionLimiter
 	mail           mailSender
-	stripe         stripeClient
 	served         servedCache
 }
 
@@ -134,13 +133,9 @@ func newAPI(s *store, adminToken, probeToken string, proxies []netip.Prefix) htt
 }
 
 func newAPIWithMail(s *store, adminToken, probeToken string, proxies []netip.Prefix, mail mailSender) http.Handler {
-	return newAPIWithMailAndStripe(s, adminToken, probeToken, proxies, mail, newStripeClientFromEnv())
-}
-
-func newAPIWithMailAndStripe(s *store, adminToken, probeToken string, proxies []netip.Prefix, mail mailSender, stripe stripeClient) http.Handler {
 	a := &api{
 		store: s, mux: http.NewServeMux(), adminToken: adminToken, probeToken: probeToken, trustedProxies: proxies,
-		limiter: loginLimiter{failures: make(map[string][]time.Time)}, stripe: stripe,
+		limiter: loginLimiter{failures: make(map[string][]time.Time)},
 		actions: accountActionLimiter{hits: make(map[string][]time.Time)}, mail: mail,
 	}
 	a.bind("GET /healthz", "", "", a.health)

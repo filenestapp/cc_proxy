@@ -159,4 +159,3 @@ CREATE TABLE IF NOT EXISTS alerts (
 CREATE UNIQUE INDEX IF NOT EXISTS alerts_active ON alerts(key) WHERE state != 'resolved';
 
 INSERT INTO settings(key, value) VALUES ('schema', '1') ON CONFLICT (key) DO NOTHING;
-INSERT INTO settings(key, value) VALUES ('subscription_grace_seconds', '259200') ON CONFLICT (key) DO NOTHING;

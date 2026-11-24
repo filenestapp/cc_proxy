@@ -201,6 +201,26 @@ reports, including `agent.py`, keeps working and is listed as unavailable.
 An agent that reaches a control plane without usage support keeps its batches for up to 30 days and sends them
 after the upgrade.
 
+## Stripe subscriptions
+
+Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in the control-plane runtime. Use separate Stripe
+sandbox and live credentials. The API key needs customer and Checkout Session creation, Billing Portal
+Session creation, and Price and subscription reads.
+
+1. In Stripe, create a monthly CNY Price for each plan and configure the Customer Portal for the available plans.
+2. In the admin console under **Plans**, enter the matching Stripe Price IDs and amounts. The seeded monthly
+   prices are CNY 600 for Standard, CNY 1,500 for Premium, and CNY 400 for Residential IP. Use a new Stripe
+   Price ID when changing the amount for new checkouts. Existing subscriptions keep their Stripe price.
+3. Set up a Stripe webhook at `https://cp.aifree.sg/v1/stripe/webhook` using API version `2026-11-18.endive`.
+   Subscribe to `checkout.session.completed`, `checkout.session.expired`, `checkout.session.async_payment_succeeded`,
+   `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`,
+   and `invoice.payment_failed`. Use its signing secret for `STRIPE_WEBHOOK_SECRET`.
+
+Checkout and the Customer Portal return customers to `https://app.aifree.sg/account`. Payment confirmation, IP
+assignment, and release follow webhook processing. Complete paid Team seats and retry waiting IP assignments on
+the **Provisioning** page. Renewal failures receive a three-day grace period by default. To change it, set
+`subscription_grace_seconds` through `PUT /admin/settings`.
+
 ## Alerts
 
 Rules use the same topology data as the console. The default evaluation interval is 15 seconds.
@@ -212,6 +232,7 @@ Rules use the same topology data as the console. The default evaluation interval
 | `agent_stale` | No heartbeat for more than `agent_stale_seconds`, which defaults to 120 | Critical |
 | `singbox_down` | The agent reports that sing-box has stopped | Critical |
 | `agent_out_of_sync` | The applied and current ETags differ for `out_of_sync_seconds`, which defaults to 300 | Warning |
+| `subscription_waiting_ip` | A paid customer is waiting for an exclusive egress IP | Warning |
 
 Alerts enter `pending` during any grace period and become `firing` once it expires. Recovery changes a firing alert to `resolved` and cancels alerts that are still pending. Resolved alerts are kept for 30 days. Webhooks send on firing and resolution, with optional reminders through `repeat_seconds`. Partial delivery failures retry the batch. The console shows webhook delivery errors.
 
