@@ -193,12 +193,18 @@ If cloud-mail accepts a create but its acknowledgment is lost, the next create c
 | Action | cloud-mail request |
 | --- | --- |
 | Sign in | `POST /api/login {email, password}`. Send `data.token` in the `Authorization` header as returned. |
-| Create and link | `POST /api/user/add {email, password}`, then `GET /api/user/list?email=<address>` to find the exact address and record its `userId`. |
+| Create and link | `POST /api/user/add {email, password}` uses the Worker's default mailbox role. `GET /api/user/list?email=<address>` matches a prefix. Page through its results to find the exact address and record its `userId`. |
 | Resume an acknowledged setup | `PUT /api/user/setPwd {userId, password}` after finding the exact user. |
 | Disable or enable | `PUT /api/user/setStatus {userId, status}`. Use 1 to disable and 0 to enable. |
 | Delete | Disable first to revoke sign-in sessions, then call `DELETE /api/user/delete?userIds=<id>`. |
 | Send transactional mail | Sign in with the designated sender and call `POST /api/email/send`. |
 
-Set `CLOUDMAIL_URL`, `CLOUDMAIL_ADMIN_EMAIL`, and `CLOUDMAIL_ADMIN_PASSWORD` in the control plane environment. The dedicated cloud-mail administrator needs `user:add`, `user:query`, `user:set-pwd`, `user:set-status`, and `user:delete`. The transactional sender uses its existing `CLOUDMAIL_NOREPLY_EMAIL` and `CLOUDMAIL_NOREPLY_PASSWORD` settings.
+Set `CLOUDMAIL_URL`, `CLOUDMAIL_ADMIN_EMAIL`, and `CLOUDMAIL_ADMIN_PASSWORD` in the control plane environment. A delegated administrator needs `user:add`, `user:query`, `user:set-pwd`, `user:set-status`, and `user:delete`. Verify that the intended account can sign in with email and password after a session expires under the Worker's login verification settings.
 
-The control plane caches the administrator token in memory and signs in again once on an HTTP 401 or a cloud-mail response with business code 401. The same request then gets one retry. The API shapes were checked against [the cloud-mail Worker source](https://github.com/maillab/cloud-mail/tree/152b890b3350faf40a9c7739f02bc13f03a93bf6/mail-worker/src) and exercised with a fake server. Verify the dedicated API account, deployed Worker, and mail delivery under [#42](https://github.com/filenestapp/cc_proxy/issues/42).
+The control plane caches the token in memory and signs in again once on an HTTP 401 or a cloud-mail business code 401. It then retries the request once. The Worker can use HTTP 200 for business errors, including code 403 for a permission denial and code 501 for an address already assigned to an active or soft-deleted account. The adapter uses the duplicate-address messages to distinguish those conflicts from other code 501 failures. The request and response shapes were checked against [cloud-mail v3.6.0 at `7367856`](https://github.com/maillab/cloud-mail/tree/73678562ad2349c1e24935d0f8b8d3d303bfbdc5/mail-worker/src) and exercised with a fake server.
+
+### Receive-only rollout
+
+PR #53 records a receive-only v3.6.0 deployment, successful administrator login, and an inbound delivery to `support@aifree.sg`. New business mailboxes inherit the deployed default role, which disables sending. Keep `CLOUDMAIL_NOREPLY_EMAIL` and `CLOUDMAIL_NOREPLY_PASSWORD` unset for this rollout. External account verification and password reset require a working transactional sender. New customers must verify their email before starting Checkout. [Deployment record](https://github.com/filenestapp/cc_proxy/pull/53)
+
+Before enabling mailbox provisioning for customers, use a disposable paid test account and the intended cloud-mail API credentials to verify setup, re-login after token expiry, webmail sign-in with the initial password, and receipt of an external message in the new inbox. Use the disposable mailbox to verify session revocation on disable, restoration within the retention window, and permanent deletion of its messages and attachments. Verify delivery of account verification and password reset messages before opening public self-service signup.

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +21,7 @@ const (
 
 type fakeCloudMailReply struct {
 	status, code int
+	message      string
 	afterWrite   bool
 }
 
@@ -56,10 +59,10 @@ func newFakeCloudMail(t *testing.T) (*fakeCloudMail, *cloudMailAdmin) {
 	return fake, admin
 }
 
-func (f *fakeCloudMail) failNext(path string, status, code int, afterWrite bool) {
+func (f *fakeCloudMail) failNext(path string, reply fakeCloudMailReply) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.failures[path] = append(f.failures[path], fakeCloudMailReply{status, code, afterWrite})
+	f.failures[path] = append(f.failures[path], reply)
 }
 
 func (f *fakeCloudMail) count(path string) int {
@@ -75,25 +78,32 @@ func (f *fakeCloudMail) user(address string) (fakeCloudMailUser, bool) {
 	return user, exists
 }
 
+// Exercise the v3.6.0 wire format and the control plane's receive-only create payload.
 func (f *fakeCloudMail) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	path := r.URL.Path
 	f.calls[path]++
 	write := func(status, code int, message string, data any) {
+		reply := object{"code": code, "message": message}
+		if code == 200 {
+			reply["message"], reply["data"] = "success", data
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(object{"code": code, "message": message, "data": data})
+		_ = json.NewEncoder(w).Encode(reply)
 	}
 	var body struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 		UserID   int64  `json:"userId"`
-		Status   int    `json:"status"`
+		Status   *int   `json:"status"`
 	}
 	if r.Method == http.MethodPost || r.Method == http.MethodPut {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			write(400, 400, "Invalid JSON", nil)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil {
+			write(200, 501, "Invalid control plane payload", nil)
 			return
 		}
 	}
@@ -107,7 +117,7 @@ func (f *fakeCloudMail) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if f.token == "" || r.Header.Get("Authorization") != f.token {
-		write(200, 401, "Session expired", nil)
+		write(200, 401, "Authentication has expired. Please sign in again", nil)
 		return
 	}
 	var failure fakeCloudMailReply
@@ -118,7 +128,7 @@ func (f *fakeCloudMail) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if failure.status == 401 || failure.code == 401 {
 				f.token = ""
 			}
-			write(failure.status, failure.code, "Fixture failure", nil)
+			write(failure.status, failure.code, failure.message, nil)
 			return
 		}
 	}
@@ -126,6 +136,10 @@ func (f *fakeCloudMail) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var data any
 	switch {
 	case path == "/api/user/add" && r.Method == http.MethodPost:
+		if !strings.HasSuffix(body.Email, "@aifree.sg") || len(body.Password) < 6 {
+			write(200, 501, "Invalid fixture email or password", nil)
+			return
+		}
 		if _, exists := f.users[body.Email]; exists {
 			write(200, 501, "This Email is already registered", nil)
 			return
@@ -133,17 +147,34 @@ func (f *fakeCloudMail) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.nextID++
 		f.users[body.Email] = fakeCloudMailUser{ID: f.nextID, Email: body.Email, Password: body.Password}
 	case path == "/api/user/list" && r.Method == http.MethodGet:
+		query := r.URL.Query()
+		prefix := strings.ToLower(query.Get("email"))
+		page, _ := strconv.Atoi(query.Get("num"))
+		size, _ := strconv.Atoi(query.Get("size"))
+		if page < 1 || size < 1 || size > 50 {
+			write(200, 501, "Invalid fixture pagination", nil)
+			return
+		}
 		var users []fakeCloudMailUser
-		for address, user := range f.users {
-			if strings.HasPrefix(address, r.URL.Query().Get("email")) {
+		for _, user := range f.users {
+			if strings.HasPrefix(strings.ToLower(user.Email), prefix) {
 				users = append(users, user)
 			}
 		}
-		data = object{"list": users, "total": len(users)}
+		slices.SortFunc(users, func(a, b fakeCloudMailUser) int {
+			return cmp.Compare(b.ID, a.ID)
+		})
+		start := min((page-1)*size, len(users))
+		end := min(start+size, len(users))
+		data = object{"list": users[start:end], "total": len(users)}
 	case path == "/api/user/setStatus" && r.Method == http.MethodPut:
+		if body.UserID <= 0 || body.Status == nil || (*body.Status != 0 && *body.Status != 1) {
+			write(200, 501, "Invalid fixture status update", nil)
+			return
+		}
 		for address, user := range f.users {
 			if user.ID == body.UserID {
-				user.Status = body.Status
+				user.Status = *body.Status
 				f.users[address] = user
 			}
 		}
@@ -165,7 +196,7 @@ func (f *fakeCloudMail) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if failure.afterWrite {
-		write(failure.status, failure.code, "Fixture failure after write", nil)
+		write(failure.status, failure.code, failure.message, nil)
 		return
 	}
 	write(200, 200, "", data)
@@ -247,8 +278,8 @@ func TestMailboxProvisioningEndpoints(t *testing.T) {
 		t.Fatal("ineligible requests contacted the provider")
 	}
 
-	fake.failNext("/api/user/add", 401, 401, false)
-	fake.failNext("/api/user/list", 200, 401, false)
+	fake.failNext("/api/user/add", fakeCloudMailReply{status: 401, code: 401})
+	fake.failNext("/api/user/list", fakeCloudMailReply{status: 200, code: 401})
 	created := accountRequest(t, h, http.MethodPost, path, requested, adminCookie, csrf)
 	wantMailboxHTTP(t, created, 201, "")
 	var out mailboxCreateResponse
@@ -321,13 +352,13 @@ func TestMailboxProvisioningFailureAndRetry(t *testing.T) {
 	id := mailboxTestCustomer(t, s, "retry@example.com", true, true)
 	path := fmt.Sprintf("/admin/customers/%d/mailbox", id)
 
-	fake.failNext("/api/user/add", 401, 401, false)
-	fake.failNext("/api/user/add", 200, 401, false)
+	fake.failNext("/api/user/add", fakeCloudMailReply{status: 401, code: 401})
+	fake.failNext("/api/user/add", fakeCloudMailReply{status: 200, code: 401})
 	wantMailboxHTTP(t, mailboxAdminRequest(h, http.MethodPost, path, `{"local_part":"retry"}`), 502, "mail_unavailable")
 	if fake.count("/api/login") != 2 || fake.count("/api/user/add") != 2 {
 		t.Fatal("authentication failures exceeded one retry")
 	}
-	fake.failNext("/api/user/add", 503, 503, false)
+	fake.failNext("/api/user/add", fakeCloudMailReply{status: 503, code: 503})
 	wantMailboxHTTP(t, mailboxAdminRequest(h, http.MethodPost, path, `{"local_part":"retry"}`), 502, "mail_unavailable")
 	var rows int
 	require(t, s.pool.QueryRow(ctx, "SELECT count(*) FROM mailboxes WHERE customer_id=$1", id).Scan(&rows))
@@ -341,7 +372,7 @@ func TestMailboxProvisioningFailureAndRetry(t *testing.T) {
 		t.Fatal("the provider's existing address was claimed or reset")
 	}
 
-	fake.failNext("/api/user/list", 503, 503, false)
+	fake.failNext("/api/user/list", fakeCloudMailReply{status: 503, code: 503})
 	wantMailboxHTTP(t, mailboxAdminRequest(h, http.MethodPost, path, `{"local_part":"retry"}`), 502, "mail_unavailable")
 	first, exists := fake.user("retry@aifree.sg")
 	if !exists {
@@ -367,11 +398,57 @@ func TestMailboxProvisioningFailureAndRetry(t *testing.T) {
 
 	otherID := mailboxTestCustomer(t, s, "ambiguous@example.com", true, true)
 	otherPath := fmt.Sprintf("/admin/customers/%d/mailbox", otherID)
-	fake.failNext("/api/user/add", 503, 503, true)
+	fake.failNext("/api/user/add", fakeCloudMailReply{status: 503, code: 503, afterWrite: true})
 	wantMailboxHTTP(t, mailboxAdminRequest(h, http.MethodPost, otherPath, `{"local_part":"unknown"}`), 502, "mail_unavailable")
 	wantMailboxHTTP(t, mailboxAdminRequest(h, http.MethodPost, otherPath, `{"local_part":"unknown"}`), 409, "address_taken")
 	if fake.count("/api/user/setPwd") != 1 {
 		t.Fatal("an unacknowledged create must not allow a password reset")
+	}
+}
+
+func TestMailboxProvisioningWithReceiveOnlyCloudMail(t *testing.T) {
+	s := testStore(t)
+	fake, admin := newFakeCloudMail(t)
+	s.mailboxAdmin = admin
+	t.Setenv("CLOUDMAIL_NOREPLY_EMAIL", "")
+	t.Setenv("CLOUDMAIL_NOREPLY_PASSWORD", "")
+	h := newAPI(s, testAdminToken, "", nil)
+	id := mailboxTestCustomer(t, s, "inbound-only@example.com", true, true)
+	path := fmt.Sprintf("/admin/customers/%d/mailbox", id)
+
+	fake.failNext("/api/user/add", fakeCloudMailReply{status: 200, code: 403, message: "Permission denied"})
+	wantMailboxHTTP(t, mailboxAdminRequest(h, http.MethodPost, path, `{"local_part":"inbound"}`), 502, "mail_unavailable")
+	if fake.count("/api/login") != 1 || fake.count("/api/user/add") != 1 {
+		t.Fatal("a permission failure must not refresh the administrator token or retry the write")
+	}
+
+	fake.failNext("/api/user/add", fakeCloudMailReply{status: 200, code: 501, message: "This email has been deleted"})
+	wantMailboxHTTP(t, mailboxAdminRequest(h, http.MethodPost, path, `{"local_part":"old-alias"}`), 409, "address_taken")
+	if fake.count("/api/user/list") != 0 || fake.count("/api/user/setPwd") != 0 {
+		t.Fatal("setup must leave a cloud-mail address reserved by a deleted account alone")
+	}
+
+	wantMailboxHTTP(t, mailboxAdminRequest(h, http.MethodPost, path, `{"local_part":"inbound"}`), 201, "")
+	if _, exists := fake.user("inbound@aifree.sg"); !exists || fake.count("/api/login") != 1 || fake.count("/api/email/send") != 0 {
+		t.Fatal("receive-only setup must use the administrator account without requiring an outbound sender")
+	}
+}
+
+func TestCloudMailV360LookupUsesExactAddressAcrossPages(t *testing.T) {
+	fake, admin := newFakeCloudMail(t)
+	const address = "mailbox@aifree.sg"
+	fake.mu.Lock()
+	fake.users[address] = fakeCloudMailUser{ID: 1, Email: strings.ToUpper(address)}
+	for i := 2; i <= 51; i++ {
+		prefixMatch := fmt.Sprintf("%s.other-%d.example", address, i)
+		fake.users[prefixMatch] = fakeCloudMailUser{ID: int64(i), Email: prefixMatch}
+	}
+	fake.mu.Unlock()
+
+	id, err := admin.findUser(t.Context(), address)
+	require(t, err)
+	if id != 1 || fake.count("/api/user/list") != 2 {
+		t.Fatalf("expected the exact address on the second page, got user %d", id)
 	}
 }
 
@@ -411,7 +488,7 @@ func TestMailboxLifecycleTracksStripeEntitlement(t *testing.T) {
 	changeSubscription(subscription, "evt_mail_cancel_scheduled")
 	now = time.Unix(subscription.Items.Data[0].CurrentPeriodEnd, 0)
 	require(t, s.expireSubscriptions(ctx))
-	fake.failNext("/api/user/setStatus", 503, 503, false)
+	fake.failNext("/api/user/setStatus", fakeCloudMailReply{status: 503, code: 503})
 	wantStatus(t, s.reconcileMailboxes(ctx), 502)
 	view, err := s.customerMailbox(ctx, c.ID)
 	require(t, err)
@@ -453,7 +530,7 @@ func TestMailboxLifecycleTracksStripeEntitlement(t *testing.T) {
 	changeSubscription(renewal, "evt_mail_ended")
 	require(t, s.reconcileMailboxes(ctx))
 	now = now.Add(mailboxRetention)
-	fake.failNext("/api/user/delete", 503, 503, true)
+	fake.failNext("/api/user/delete", fakeCloudMailReply{status: 503, code: 503, afterWrite: true})
 	wantStatus(t, s.reconcileMailboxes(ctx), 502)
 	row, err = getMailbox(ctx, s.pool, s.now(), m.ID)
 	require(t, err)
