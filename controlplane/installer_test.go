@@ -136,8 +136,15 @@ func TestSingBoxPinMatchesTheDesktopBuild(t *testing.T) {
 }
 
 func get(t *testing.T, h http.Handler, path, token string) (int, []byte) {
+	return getHTTP(t, h, path, token, "")
+}
+
+func getHTTP(t *testing.T, h http.Handler, path, token, host string) (int, []byte) {
 	t.Helper()
 	req := httptest.NewRequest("GET", path, nil)
+	if host != "" {
+		req.Host = host
+	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -145,6 +152,49 @@ func get(t *testing.T, h http.Handler, path, token string) (int, []byte) {
 	h.ServeHTTP(rec, req)
 	body, _ := io.ReadAll(rec.Result().Body)
 	return rec.Code, body
+}
+
+func TestInstallCommandsDefaultToConfiguredPublicURL(t *testing.T) {
+	h := newAPIWithPublicURL(nil, testAdminToken, "", nil, "https://cp.aifree.sg")
+	code, body := getHTTP(t, h, "/admin/install-commands?iface=eth1", testAdminToken, customerHost)
+	if code != 404 {
+		t.Fatalf("customer host served admin route: %d %s", code, body)
+	}
+	code, body = getHTTP(t, h, "/admin/install-commands?iface=eth1", testAdminToken, controlPlaneHost)
+	if code != 200 || !bytes.Contains(body, []byte("https://cp.aifree.sg/install/exit.sh")) {
+		t.Fatalf("install commands did not use configured public URL: %d %s", code, body)
+	}
+}
+
+func TestInstallCommandsAcceptHTTPSOverride(t *testing.T) {
+	h := newAPIWithPublicURL(nil, testAdminToken, "", nil, "https://cp.aifree.sg")
+	code, body := getHTTP(t, h, "/admin/install-commands?cp=https://ccproxy.macmini.sg/&iface=eth1", testAdminToken, controlPlaneHost)
+	if code != 200 || !bytes.Contains(body, []byte("https://ccproxy.macmini.sg/install/exit.sh")) || bytes.Contains(body, []byte("cp.aifree.sg")) {
+		t.Fatalf("install commands did not use HTTPS override: %d %s", code, body)
+	}
+	if code, _ := getHTTP(t, h, "/admin/install-commands?cp=http://ccproxy.macmini.sg", testAdminToken, controlPlaneHost); code != 400 {
+		t.Fatalf("non-HTTPS override: HTTP %d", code)
+	}
+}
+
+func TestInstallURLReportsConfiguredPublicURL(t *testing.T) {
+	h := newAPIWithPublicURL(nil, testAdminToken, "", nil, "https://cp.aifree.sg")
+	code, body := getHTTP(t, h, "/admin/install-url", testAdminToken, controlPlaneHost)
+	if code != 200 || !bytes.Contains(body, []byte(`"public_url":"https://cp.aifree.sg"`)) {
+		t.Fatalf("configured install URL: %d %s", code, body)
+	}
+}
+
+func TestControlPlanePublicURL(t *testing.T) {
+	if got, err := controlPlanePublicURL(""); err != nil || got != defaultPublicURL {
+		t.Fatalf("default public URL = %q, %v", got, err)
+	}
+	if got, err := controlPlanePublicURL("https://control.example/"); err != nil || got != "https://control.example" {
+		t.Fatalf("normalized public URL = %q, %v", got, err)
+	}
+	if _, err := controlPlanePublicURL("http://control.example"); statusOf(err) != 400 {
+		t.Fatalf("http public URL error = %v", err)
+	}
 }
 
 // Public and admin-token routes through the real router. Agent downloads with a valid host token need PostgreSQL;
@@ -178,12 +228,6 @@ func TestInstallRoutes(t *testing.T) {
 	if code != 200 || !bytes.Contains(body, []byte(`--iface 'eth1'`)) {
 		t.Fatalf("commands: %d %s", code, body)
 	}
-	if code, _ = get(t, h, "/admin/install-commands?cp=http://cp.example", testAdminToken); code != 400 {
-		t.Fatalf("http cp: %d", code)
-	}
-	if code, _ = get(t, h, "/admin/install-commands?cp=https://cp.example%0Aid", testAdminToken); code != 400 {
-		t.Fatalf("newline cp: %d", code)
-	}
 	t.Setenv("CP_AGENT_DIST", filepath.Join(dist, "missing"))
 	if code, body = get(t, h, "/install/exit.sh", ""); code != 503 || !bytes.Contains(body, []byte("build.sh")) {
 		t.Fatalf("missing dist: %d %s", code, body)
@@ -194,6 +238,9 @@ func TestConsoleOffersTheThreeCommands(t *testing.T) {
 	page := string(consolePage)
 	for _, want := range []string{
 		`[["macos", "macOS"], ["linux", "Linux"], ["windows", "Windows"]]`,
+		`id="inst-cp" type="url"`,
+		`api("GET", "/admin/install-url")`,
+		`new URLSearchParams({ cp: $("#inst-cp", root).value.trim() })`,
 		`api("GET", "/admin/install-commands?" + q)`,
 		`id="install" type="button">Install command`,
 		// Switching OS or editing the URL clears the commands and disables Copy at once, and only the response to
@@ -204,6 +251,9 @@ func TestConsoleOffersTheThreeCommands(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("console lacks %q", want)
 		}
+	}
+	if strings.Contains(page, "location.origin") {
+		t.Error("install commands must not use the request origin")
 	}
 	if !strings.Contains(page, `installPanel($("#install-panel", ov), transport)`) ||
 		!strings.Contains(page, `installPanel($("#install-panel", ov), transport, true)`) {
