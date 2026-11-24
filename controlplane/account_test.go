@@ -401,7 +401,7 @@ func TestCloudMailSenderCachesLoginAndAccount(t *testing.T) {
 			if r.Header.Get("Authorization") != "mail-token" {
 				t.Fatalf("account lookup missing token")
 			}
-			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[{"accountId":7,"email":"noreply@aifree.sg"}]}}`))
+			_, _ = w.Write([]byte(`{"code":200,"data":[{"accountId":5,"email":"alias@example.com"},{"accountId":7,"email":"noreply@aifree.sg"}]}`))
 		case "/api/email/send":
 			sends++
 			if r.Header.Get("Authorization") != "mail-token" {
