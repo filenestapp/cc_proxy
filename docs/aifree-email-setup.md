@@ -40,7 +40,13 @@ npx --yes wrangler@4.167.0 deploy
 - 首次部署后写入密钥，再访问一次 `https://mail.aifree.sg/api/init/<jwt_secret>` 初始化数据库（只需一次）。
 - 升级 cloud-mail 版本前先在 `cloud-mail-test` 之类的测试 Worker 上验证。
 
-## 以后开启发信（二选一）
+## 上线前必须开启发信
+
+注册要发验证邮件，契约要求邮箱已验证才能下单（`docs/aifree-account-api.md`）。发信不开，新客户无法验证，也就无法订阅。所以发信是上线阻塞项（2026-11-24 决定，跟踪在 #44），不改为"跳过验证"。
+
+开启后再给控制面配置 `CLOUDMAIL_NOREPLY_EMAIL`/`PASSWORD`，然后按下面的验收方法确认。
+
+## 开启发信（二选一）
 
 1. **Cloudflare Email Sending（推荐，留在 Cloudflare 内）**：在 Cloudflare 后台 Email → Email Sending 为 `aifree.sg` 开启发信并按提示添加 DNS 记录；然后在 `deploy/cloud-mail/wrangler.toml` 加上
    ```toml
