@@ -194,9 +194,15 @@ func serve(ctx context.Context, s *store, address, cert, key, publicURL string, 
 		defer close(done)
 		s.runAlerts(workerCtx)
 	}()
+	billingDone := make(chan struct{})
+	go func() {
+		defer close(billingDone)
+		s.runSubscriptionExpiry(workerCtx)
+	}()
 	defer func() {
 		cancel()
 		<-done
+		<-billingDone
 	}()
 
 	fmt.Printf("control plane listening on %s\n", listener.Addr())

@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS customers (
     locale text NOT NULL DEFAULT '',
     created_at double precision NOT NULL
 );
+ALTER TABLE customers ADD COLUMN IF NOT EXISTS stripe_customer_id text UNIQUE;
 CREATE TABLE IF NOT EXISTS customer_sessions (
     token_hash text PRIMARY KEY,
     customer_id bigint NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
@@ -368,6 +369,7 @@ func (a *api) accountRoutes() {
 	a.bind("POST /v1/account/password", "customer", "", a.accountPassword)
 	a.bind("POST /v1/account/password/forgot", "", "", a.accountPasswordForgot)
 	a.bind("POST /v1/account/password/reset", "", "", a.accountPasswordReset)
+	a.billingRoutes()
 }
 
 func (a *api) accountRateLimit(action, email, address string) error {
@@ -487,7 +489,11 @@ func (a *api) accountMe(r *apiRequest) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	return ok(object{"customer": customer, "csrf": r.Customer.CSRF, "subscription": nil, "proxy": nil, "mailbox": nil}, nil)
+	subscription, proxy, err := a.store.customerEntitlement(r.Context(), customer.ID)
+	if err != nil {
+		return response{}, err
+	}
+	return ok(object{"customer": customer, "csrf": r.Customer.CSRF, "subscription": subscription, "proxy": proxy, "mailbox": nil}, nil)
 }
 
 func (a *api) accountPassword(r *apiRequest) (response, error) {

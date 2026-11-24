@@ -323,7 +323,21 @@ func (s *store) evaluateAlerts(ctx context.Context, send func(context.Context, s
 		if err != nil {
 			return err
 		}
-		queued, err = updateAlerts(ctx, tx, topo.Now, cfg, alertConditions(topo, cfg))
+		conditions := alertConditions(topo, cfg)
+		waiting, err := rowsOf[struct{ UserName string }](ctx, tx, `SELECT cp.user_name FROM customer_proxy cp
+			JOIN users u ON u.name=cp.user_name WHERE cp.state IN ('waiting_ip','ready') AND u.egress_ip IS NULL
+			AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.customer_id=cp.customer_id AND s.status IN ('active','past_due'))`)
+		if err != nil {
+			return err
+		}
+		for _, item := range waiting {
+			const rule = "subscription_waiting_ip"
+			conditions[rule+"/"+item.UserName] = alertCondition{
+				Rule: rule, Subject: item.UserName, Severity: "warning",
+				Summary: fmt.Sprintf("Paid customer proxy %s is waiting for an exclusive egress IP.", item.UserName),
+			}
+		}
+		queued, err = updateAlerts(ctx, tx, topo.Now, cfg, conditions)
 		return err
 	})
 	if err != nil {

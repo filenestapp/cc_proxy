@@ -512,15 +512,22 @@ func (a *api) login(r *apiRequest) (response, error) {
 		return response{}, failure(429, "too many failed sign-ins; try again later")
 	}
 	if strings.Contains(body.Username, "@") {
-		_, err := a.store.checkCustomerCredentials(r.Context(), body.Username, body.Password)
+		customer, err := a.store.checkCustomerCredentials(r.Context(), body.Username, body.Password)
 		if err != nil && statusOf(err) == http.StatusUnauthorized {
 			a.limiter.fail(a.store.clock(), keys...)
 		}
 		if err != nil {
 			return response{}, err
 		}
-		// WP4 will resolve the customer's active subscription and customer_proxy row here.
-		return response{}, failureCode(403, "no_active_subscription", "no active subscription")
+		token, user, err := a.store.loginCustomerProxy(r.Context(), customer.ID, body.Device, body.Platform)
+		if err != nil {
+			return response{}, err
+		}
+		return ok(struct {
+			userSummary
+			Token  string `json:"token"`
+			Device string `json:"device"`
+		}{user, token, body.Device}, nil)
 	}
 	token, user, err := a.store.loginUser(r.Context(), body.Username, body.Password, body.Device, body.Platform)
 	if err != nil && statusOf(err) == 401 {

@@ -30,8 +30,9 @@ type database interface {
 }
 
 type store struct {
-	pool  *pgxpool.Pool
-	clock func() time.Time
+	pool   *pgxpool.Pool
+	clock  func() time.Time
+	stripe stripeClient
 }
 
 func openStore(ctx context.Context, dsn string) (*store, error) {
@@ -40,7 +41,7 @@ func openStore(ctx context.Context, dsn string) (*store, error) {
 		// The connection parser may include the full DSN in errors.
 		return nil, errors.New("invalid PostgreSQL connection configuration")
 	}
-	s := &store{pool: pool, clock: time.Now}
+	s := &store{pool: pool, clock: time.Now, stripe: newStripeClientFromEnv()}
 	if err := s.initializeSchema(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("initialize PostgreSQL: %w", err)
@@ -64,7 +65,10 @@ func (s *store) initializeSchema(ctx context.Context) error {
 			if err := ensureXTCPTable(ctx, tx); err != nil {
 				return err
 			}
-			return ensureCustomerTables(ctx, tx)
+			if err := ensureCustomerTables(ctx, tx); err != nil {
+				return err
+			}
+			return ensureBillingTables(ctx, tx)
 		}
 		var version int
 		if err := tx.QueryRow(ctx, "SELECT value::integer FROM settings WHERE key = 'schema'").Scan(&version); err != nil {
@@ -93,7 +97,10 @@ func (s *store) initializeSchema(ctx context.Context) error {
 		if err := ensureXTCPTable(ctx, tx); err != nil {
 			return err
 		}
-		return ensureCustomerTables(ctx, tx)
+		if err := ensureCustomerTables(ctx, tx); err != nil {
+			return err
+		}
+		return ensureBillingTables(ctx, tx)
 	})
 }
 
@@ -104,11 +111,16 @@ func (s *store) now() float64 {
 // Serialize configuration and account mutations across all control plane processes in this schema.
 func (s *store) write(ctx context.Context, change func(pgx.Tx) error) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(67143001, hashtext(current_schema()))"); err != nil {
+		if err := lockControlPlaneWrite(ctx, tx); err != nil {
 			return err
 		}
 		return change(tx)
 	})
+}
+
+func lockControlPlaneWrite(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(67143001, hashtext(current_schema()))")
+	return err
 }
 
 func (s *store) mutate(ctx context.Context, change func(pgx.Tx) error) error {
@@ -176,10 +188,11 @@ func rowsChanged(tag pgconn.CommandTag, err error, label string) error {
 }
 
 type settings struct {
-	ClientPolicy json.RawMessage `db:"client_policy" json:"client_policy"`
-	Cooldown     int64           `db:"cooldown_seconds" json:"cooldown_seconds"`
-	Monitor      json.RawMessage `json:"monitor"`
-	Alerts       json.RawMessage `json:"alerts"`
+	ClientPolicy      json.RawMessage `db:"client_policy" json:"client_policy"`
+	Cooldown          int64           `db:"cooldown_seconds" json:"cooldown_seconds"`
+	Monitor           json.RawMessage `json:"monitor"`
+	Alerts            json.RawMessage `json:"alerts"`
+	SubscriptionGrace float64         `db:"subscription_grace_seconds" json:"subscription_grace_seconds"`
 }
 
 func loadSettings(ctx context.Context, db database) (settings, error) {
@@ -187,21 +200,25 @@ func loadSettings(ctx context.Context, db database) (settings, error) {
 		COALESCE((SELECT value FROM settings WHERE key = 'client_policy'), '{}') AS client_policy,
 		COALESCE((SELECT value::bigint FROM settings WHERE key = 'cooldown_seconds'), $1) AS cooldown_seconds,
 		COALESCE((SELECT value FROM settings WHERE key = 'monitor'), '{"egress_targets":[],"entries":[]}') AS monitor,
-		COALESCE((SELECT value FROM settings WHERE key = 'alerts'), '{}') AS alerts`, defaultCooldown)
+		COALESCE((SELECT value FROM settings WHERE key = 'alerts'), '{}') AS alerts,
+		`+subscriptionGraceSQL+` AS subscription_grace_seconds`, defaultCooldown)
 }
 
 func settingsPatch(body fields) (map[string]any, error) {
 	values := make(map[string]any)
-	for _, key := range []string{"client_policy", "cooldown_seconds", "monitor", "alerts"} {
+	for _, key := range []string{"client_policy", "cooldown_seconds", "monitor", "alerts", "subscription_grace_seconds"} {
 		raw := body[key]
 		if len(raw) == 0 || string(raw) == "null" {
 			continue
 		}
 		switch key {
-		case "cooldown_seconds":
+		case "cooldown_seconds", "subscription_grace_seconds":
 			var seconds integer
 			if err := json.Unmarshal(raw, &seconds); err != nil {
-				return nil, failure(400, "cooldown_seconds must be an integer")
+				return nil, failure(400, "%s must be an integer", key)
+			}
+			if key == "subscription_grace_seconds" && seconds < 0 {
+				return nil, failure(400, "subscription_grace_seconds must be non-negative")
 			}
 			values[key] = int(seconds)
 			continue
