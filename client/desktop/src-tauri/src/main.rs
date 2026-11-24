@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod exit_probe;
+mod netcheck;
 mod tray;
 
 use anyhow::Result;
@@ -328,7 +329,8 @@ fn main() {
         })
         .on_window_event(tray::window_event)
         .invoke_handler(tauri::generate_handler![
-            system_languages, set_tray_language, get_state, login, logout, connect, disconnect
+            system_languages, set_tray_language, get_state, login, logout, connect, disconnect,
+            netcheck::run_environment_check
         ])
         .build(tauri::generate_context!())
         .expect("building the app")

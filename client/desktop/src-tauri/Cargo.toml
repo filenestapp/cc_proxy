@@ -10,12 +10,21 @@ tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
 anyhow.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+getrandom = "0.3"
+iana-time-zone = "0.1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde.workspace = true
 serde_json.workspace = true
 ccproxy-core = { path = "../../core" }
 sys-locale = "0.3"
 tauri = { version = "2.12", features = ["image-png", "tray-icon"] }
 tauri-plugin-single-instance = "2.5"
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+ureq = { workspace = true, features = ["socks-proxy"] }
+url = "2"
+webpki-roots = "1"
+x509-cert = { version = "0.2", default-features = false, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gio = "0.18"

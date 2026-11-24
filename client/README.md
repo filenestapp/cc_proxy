@@ -42,6 +42,8 @@ Use **Language** in the header to choose **System**, **English**, or **Simplifie
 
 The system tray icon shows connection status. Close the window to keep the app and tunnel running in a supported tray. Select **Open CC Proxy** to bring the window back or **Quit CC Proxy** to exit and stop the tunnel. The macOS and Windows hover tooltip shows the current status and verified public exit IP. On Linux, open the tray menu for this information.
 
+Open **Environment check** to compare the current device's HTTPS exits, DNS, UDP and STUN observations, TLS measurements, and local network settings. The Rust implementation uses Netcheck's public report interface for IP reputation and findings. It sends observed addresses, system language, time zone, OS version, and timings. Routes, adapters, configured proxies, and certificate details are included in the local result. [Netcheck CLI reference](https://netcheck.wenbo.io/cli)
+
 ## 命令行（ccproxy）
 
 ```bash
