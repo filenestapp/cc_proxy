@@ -22,17 +22,11 @@
     apply();
 
     return {
-      bind() {
-        const controls = Array.from(document.querySelectorAll(".appearance"));
-        controls.forEach((control) => {
-          control.value = preference;
-          control.addEventListener("change", () => {
-            preference = control.value;
-            try { localStorage.setItem(key, preference); } catch { /* Keep the in-memory selection. */ }
-            controls.forEach((item) => { item.value = preference; });
-            apply();
-          });
-        });
+      get value() { return preference; },
+      select(value) {
+        preference = value;
+        try { localStorage.setItem(key, preference); } catch { /* Keep the in-memory selection. */ }
+        apply();
       },
     };
   })();
@@ -56,15 +50,14 @@
   ::selection { background: var(--accent); color: var(--accent-ink); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   main { padding: 0 22px 22px; max-width: 520px; margin-inline: auto; }
-  .app-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-height: 66px; padding: 8px 0; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
-  .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 680; }
+  .app-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 66px; padding: 8px 0; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+  .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 680; white-space: nowrap; }
   .brand svg { color: var(--accent); flex: none; }
   h1, h2, p, dl { margin: 0; }
   h1 { font-size: 25px; line-height: 1.15; letter-spacing: -.025em; }
   h2 { font-size: 15px; letter-spacing: -.01em; }
-  input, button, select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
-  input, select { padding: 7px 9px; }
-  input { width: 100%; min-height: 40px; }
+  input, button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  input { width: 100%; min-height: 40px; padding: 7px 9px; }
   input::placeholder { color: var(--muted); opacity: 1; }
   button { cursor: pointer; }
   button:disabled { opacity: .55; cursor: default; }
@@ -72,9 +65,41 @@
   button.primary:not(:disabled):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   button.primary.on { background: var(--accent-soft); color: var(--accent); }
   button.primary.on:not(:disabled):hover { background: var(--panel); border-color: var(--accent); }
-  .preferences { display: flex; flex-wrap: wrap; gap: 8px; }
-  .preference { display: grid; gap: 3px; color: var(--muted); font-size: 12px; }
-  .preference select { min-height: 32px; color: var(--ink); }
+  .preferences { display: flex; align-items: center; flex: none; gap: 8px; }
+  .preference-symbols { position: absolute; width: 0; height: 0; pointer-events: none; }
+  .preference-menu { position: relative; }
+  .preference-trigger {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    min-width: 36px; min-height: 34px; padding: 0 8px; list-style: none; cursor: pointer;
+    color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  }
+  .preference-trigger::-webkit-details-marker { display: none; }
+  .preference-trigger:hover, .preference-menu[open] .preference-trigger {
+    color: var(--accent); border-color: var(--accent);
+  }
+  .preference-icon { display: block; width: 17px; height: 17px; flex: none; }
+  .preference-flag {
+    display: block; width: 19px; height: 13px; flex: none; border-radius: 2px;
+    outline: 1px solid var(--line); outline-offset: -1px; overflow: hidden;
+  }
+  .preference-options {
+    position: absolute; z-index: 5; inset-inline-end: 0; top: calc(100% + 7px);
+    min-width: 150px; width: max-content; padding: 4px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  }
+  .preference-option {
+    display: grid; grid-template-columns: 19px 1fr 12px; align-items: center; gap: 9px;
+    width: 100%; min-height: 34px; padding: 4px 8px; border: 0; background: transparent;
+    text-align: start; font-size: 13px; white-space: nowrap;
+  }
+  .preference-option:hover, .preference-option[aria-checked="true"] {
+    color: var(--accent); background: var(--accent-soft);
+  }
+  .preference-option:focus-visible { outline-offset: -2px; }
+  .preference-option[aria-checked="true"]::after {
+    content: ""; width: 5px; height: 9px; justify-self: center;
+    border: solid currentColor; border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg);
+  }
   .fields { display: grid; gap: 12px; margin: 17px 0; }
   .field label { font-weight: 600; font-size: 13px; display: block; margin-bottom: 4px; }
   .field small { color: var(--muted); font-weight: 400; }
@@ -111,6 +136,43 @@
 </style>
 </head>
 <body>
+<svg class="preference-symbols" width="0" height="0" aria-hidden="true">
+  <defs>
+    <symbol id="preference-globe" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><ellipse cx="12" cy="12" rx="4" ry="9"/>
+      </g>
+    </symbol>
+    <symbol id="preference-system" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="13" rx="2"/><path d="M12 17v4m-4 0h8"/>
+      </g>
+    </symbol>
+    <symbol id="preference-light" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+        <circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2m10-10h-2M4 12H2m17.1-7.1-1.4 1.4M6.3 17.7l-1.4 1.4m14.2 0-1.4-1.4M6.3 6.3 4.9 4.9"/>
+      </g>
+    </symbol>
+    <symbol id="preference-dark" viewBox="0 0 24 24">
+      <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M20.9 14.1A8.8 8.8 0 0 1 9.9 3.1 9 9 0 1 0 20.9 14.1Z"/>
+    </symbol>
+    <pattern id="preference-en-stars" width="3.8" height="3.2" patternUnits="userSpaceOnUse">
+      <circle cx=".9" cy=".8" r=".47" fill="#fff"/><circle cx="2.8" cy="2.4" r=".47" fill="#fff"/>
+    </pattern>
+    <symbol id="preference-flag-en" viewBox="0 0 30 20">
+      <rect width="30" height="20" fill="#B31942"/>
+      <path d="M0 2.3h30M0 5.38h30M0 8.46h30M0 11.54h30M0 14.62h30M0 17.69h30" stroke="#fff" stroke-width="1.54"/>
+      <rect width="12.6" height="10.77" fill="#0A3161"/><rect width="12.6" height="10.77" fill="url(#preference-en-stars)"/>
+    </symbol>
+    <symbol id="preference-flag-zh" viewBox="0 0 30 20">
+      <rect width="30" height="20" fill="#DE2910"/>
+      <g fill="#FFDE00">
+        <path d="m5 2.2.672 2.069h2.176l-1.76 1.279.672 2.069L5 6.338 3.24 7.617l.672-2.069-1.76-1.279h2.176Z"/>
+        <path d="m9.4 2 .32.61.68-.1-.48.49.31.6-.61-.28-.5.48.08-.68-.61-.3.67-.13Zm2.1 2.2.03.68.64.25-.65.19-.04.69-.4-.55-.66.17.39-.55-.37-.57.64.2Zm.06 2.8-.14.67.6.34-.68.1-.14.67-.31-.61-.68.07.49-.48-.3-.62.61.3ZM9.5 9.4l.08.68.67.16-.62.29.06.68-.48-.5-.64.28.33-.6-.46-.51.69.12Z"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
 <main>
   <header class="app-header">
     <div class="brand">
@@ -118,22 +180,39 @@
       CC Proxy
     </div>
     <div class="preferences">
-      <label class="preference">
-        <span data-i18n="language">Language</span>
-        <select id="language">
-          <option value="system" data-i18n="system">System</option>
-          <option value="en" lang="en" data-i18n="english">English</option>
-          <option value="zh-Hans" lang="zh-Hans" data-i18n="simplified_chinese"></option>
-        </select>
-      </label>
-      <label class="preference">
-        <span data-i18n="appearance">Appearance</span>
-        <select class="appearance">
-          <option value="system" data-i18n="system">System</option>
-          <option value="light" data-i18n="light">Light</option>
-          <option value="dark" data-i18n="dark">Dark</option>
-        </select>
-      </label>
+      <details id="language" class="preference-menu">
+        <summary class="preference-trigger" aria-label="Language" aria-haspopup="menu" aria-expanded="false">
+          <svg class="preference-icon" aria-hidden="true"><use href="#preference-globe"/></svg>
+          <svg class="preference-flag" aria-hidden="true"><use id="active-language-flag" href="#preference-flag-en"/></svg>
+        </summary>
+        <div class="preference-options" role="menu" aria-label="Language" data-i18n-label="language">
+          <button class="preference-option" type="button" role="menuitemradio" tabindex="-1" data-value="system" aria-checked="true">
+            <svg class="preference-icon" aria-hidden="true"><use href="#preference-system"/></svg><span data-i18n="system">System</span>
+          </button>
+          <button class="preference-option" type="button" role="menuitemradio" tabindex="-1" data-value="en" aria-checked="false">
+            <svg class="preference-flag" aria-hidden="true"><use href="#preference-flag-en"/></svg><span lang="en" data-i18n="english">English</span>
+          </button>
+          <button class="preference-option" type="button" role="menuitemradio" tabindex="-1" data-value="zh-Hans" aria-checked="false">
+            <svg class="preference-flag" aria-hidden="true"><use href="#preference-flag-zh"/></svg><span lang="zh-Hans" data-i18n="simplified_chinese"></span>
+          </button>
+        </div>
+      </details>
+      <details id="appearance" class="preference-menu">
+        <summary class="preference-trigger" aria-label="Appearance" aria-haspopup="menu" aria-expanded="false">
+          <svg class="preference-icon" aria-hidden="true"><use id="active-appearance-icon" href="#preference-system"/></svg>
+        </summary>
+        <div class="preference-options" role="menu" aria-label="Appearance" data-i18n-label="appearance">
+          <button class="preference-option" type="button" role="menuitemradio" tabindex="-1" data-value="system" aria-checked="true">
+            <svg class="preference-icon" aria-hidden="true"><use href="#preference-system"/></svg><span data-i18n="system">System</span>
+          </button>
+          <button class="preference-option" type="button" role="menuitemradio" tabindex="-1" data-value="light" aria-checked="false">
+            <svg class="preference-icon" aria-hidden="true"><use href="#preference-light"/></svg><span data-i18n="light">Light</span>
+          </button>
+          <button class="preference-option" type="button" role="menuitemradio" tabindex="-1" data-value="dark" aria-checked="false">
+            <svg class="preference-icon" aria-hidden="true"><use href="#preference-dark"/></svg><span data-i18n="dark">Dark</span>
+          </button>
+        </div>
+      </details>
     </div>
   </header>
 
@@ -213,16 +292,16 @@
 <script type="module">
 import { createEnvironmentPage } from "./environment.mjs";
 import { messages, resolveLanguage } from "./locale.mjs";
+import { createPreferenceMenu } from "./preferences.mjs";
 
 (() => {
   const $ = (id) => document.getElementById(id);
   const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args || {});
-  const language = $("language");
   const loginInputs = [$("server"), $("username"), $("password"), $("device")];
   const languageKey = "ccproxy.language";
   const webviewLanguages = () => navigator.languages?.length ? navigator.languages : [navigator.language];
   let systemLanguages = webviewLanguages();
-  let activeLanguage, readingSystemLanguage = false;
+  let languagePreference = "system", activeLanguage, readingSystemLanguage = false;
   let view, pending = "", operationError = null, stopping = false, revision = 0;
   let loadingFailed = false;
 
@@ -236,14 +315,34 @@ import { messages, resolveLanguage } from "./locale.mjs";
 
   const t = (key) => messages[activeLanguage][key] ?? messages.en.operation_failed;
   const environment = createEnvironmentPage({ invoke, translate: t, onNavigate: render });
+  const languageMenu = createPreferenceMenu($("language"), (value) => {
+    languagePreference = value;
+    try { localStorage.setItem(languageKey, value); } catch { /* Keep the in-memory selection. */ }
+    applyLanguage();
+    readSystemLanguages();
+  });
+  const appearanceMenu = createPreferenceMenu($("appearance"), (value) => {
+    appearance.select(value);
+    syncPreferences();
+  });
   const text = (id, value) => {
     const el = $(id);
     if (el.textContent !== value) el.textContent = value;
   };
 
+  function syncPreferences() {
+    languageMenu.update(languagePreference, t("language"));
+    appearanceMenu.update(appearance.value, t("appearance"));
+    $("active-language-flag").setAttribute("href", activeLanguage === "zh-Hans" ? "#preference-flag-zh" : "#preference-flag-en");
+    $("active-appearance-icon").setAttribute("href", "#preference-" + appearance.value);
+  }
+
   function applyLanguage() {
-    const next = resolveLanguage(language.value, systemLanguages);
-    if (next === activeLanguage) return;
+    const next = resolveLanguage(languagePreference, systemLanguages);
+    if (next === activeLanguage) {
+      syncPreferences();
+      return;
+    }
     activeLanguage = next;
     document.documentElement.lang = next;
     invoke("set_tray_language", { language: next }).catch(() => {});
@@ -256,12 +355,13 @@ import { messages, resolveLanguage } from "./locale.mjs";
     for (const input of loginInputs) {
       if (input.dataset.validationError) input.setCustomValidity(t(input.dataset.validationError));
     }
+    syncPreferences();
     environment.render();
     render();
   }
 
   async function readSystemLanguages() {
-    if (language.value !== "system" || readingSystemLanguage) return;
+    if (languagePreference !== "system" || readingSystemLanguage) return;
     readingSystemLanguage = true;
     try {
       const preferred = await invoke("system_languages");
@@ -398,19 +498,13 @@ import { messages, resolveLanguage } from "./locale.mjs";
 
   try {
     const stored = localStorage.getItem(languageKey);
-    if (stored === "en" || stored === "zh-Hans") language.value = stored;
+    if (stored === "en" || stored === "zh-Hans") languagePreference = stored;
   } catch { /* Storage may be unavailable. */ }
-  language.addEventListener("change", () => {
-    try { localStorage.setItem(languageKey, language.value); } catch { /* Keep the in-memory selection. */ }
-    applyLanguage();
-    readSystemLanguages();
-  });
   window.addEventListener("languagechange", readSystemLanguages);
   window.addEventListener("focus", readSystemLanguages);
   applyLanguage();
   readSystemLanguages();
 
-  appearance.bind();
   $("show-password").addEventListener("click", () => showPassword($("password").type === "password"));
   for (const input of loginInputs) {
     input.addEventListener("input", () => {
