@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<meta name="referrer" content="same-origin">
+<meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#14213D">
 <title>用户中心 · aifree</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2314213D'/%3E%3Ccircle cx='28' cy='38' r='10.5' fill='none' stroke='%23F2643D' stroke-width='6'/%3E%3Cpath d='M39 30V49' fill='none' stroke='%23F2643D' stroke-width='6' stroke-linecap='round'/%3E%3Ccircle cx='39' cy='18' r='4.5' fill='%23F2643D'/%3E%3C/svg%3E">
@@ -491,6 +491,17 @@ footer .row-between{gap:8px 20px}
     }
   };
 
+  var linkToken = { verify: "", reset: "" };
+  function captureLinkToken() {
+    var page = location.pathname.replace(/\/+$/, "").replace(/^\/account\//, "");
+    var q = new URLSearchParams(location.search);
+    if ((page !== "verify" && page !== "reset") || !q.has("token")) return;
+    linkToken[page] = q.get("token") || "";
+    q.delete("token");
+    var rest = q.toString();
+    history.replaceState(null, "", location.pathname + (rest ? "?" + rest : ""));
+  }
+
   var state = { lang: "zh", me: null, csrf: "", view: "", plans: null, polling: false };
 
   function pickLang() {
@@ -648,8 +659,8 @@ footer .row-between{gap:8px 20px}
       case "login": return state.me ? navigate("/account", true) : showForm("login");
       case "register": return state.me ? navigate("/account", true) : showForm("register");
       case "forgot": return showForm("forgot");
-      case "reset": return showReset(q.get("token"));
-      case "verify": return runVerify(q.get("token"));
+      case "reset": return showReset(linkToken.reset);
+      case "verify": var token = linkToken.verify; linkToken.verify = ""; return runVerify(token);
       case "checkout": return checkoutIntent(q.get("plan"));
       default:
         if (!state.me) return showForm("login");
@@ -744,8 +755,8 @@ footer .row-between{gap:8px 20px}
 
   bindForm("reset", function (v, box) {
     if (v.password !== v.password2) { notice(box, "err", t("mismatch")); return; }
-    var token = new URLSearchParams(location.search).get("token");
-    return api("POST", "/v1/account/password/reset", { token: token, new_password: v.password }).then(function () {
+    return api("POST", "/v1/account/password/reset", { token: linkToken.reset, new_password: v.password }).then(function () {
+      linkToken.reset = "";
       document.getElementById("reset-password").value = ""; document.getElementById("reset-password2").value = "";
       state.me = null; state.csrf = "";
       navigate("/account/login", true);
@@ -767,7 +778,6 @@ footer .row-between{gap:8px 20px}
     if (!token) { notice(box, "err", t("verify_missing")); failed.hidden = false; return Promise.resolve(); }
     notice(box, "info", t("verifying"));
     return api("POST", "/v1/account/verify", { token: token }).then(function () {
-      history.replaceState(null, "", "/account/verify");
       notice(box, "ok", t("verify_done"));
       ok.hidden = false;
       return loadMe().then(function () {
@@ -1113,6 +1123,10 @@ footer .row-between{gap:8px 20px}
   window.addEventListener("popstate", function () { route(); });
 
   // ---------- boot ----------
+  // Verify and reset links carry a one-time token. Move it into memory and out of the
+  // address bar before the first request, so it never reaches a Referer header,
+  // browser history or a shoulder-surfer after a failed attempt.
+  captureLinkToken();
   state.lang = pickLang();
   applyLang();
   loadMe().then(route, function (err) {

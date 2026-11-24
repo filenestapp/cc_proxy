@@ -1,6 +1,9 @@
 package main
 
-import _ "embed"
+import (
+	_ "embed"
+	"net/http"
+)
 
 //go:embed account.html
 var accountPage []byte
@@ -14,10 +17,13 @@ var accountPagePaths = []string{
 
 func (a *api) accountPageRoutes() {
 	for _, path := range accountPagePaths {
-		a.bind("GET "+path, "", "", a.accountPage)
+		a.mux.HandleFunc("GET "+path, serveAccountPage)
 	}
 }
 
-func (a *api) accountPage(_ *apiRequest) (response, error) {
-	return response{status: 200, body: accountPage, contentType: "text/html; charset=utf-8"}, nil
+// serveAccountPage sends the page with no-referrer: verify and reset URLs carry a
+// one-time token, which must not leak through the Referer of any request or link.
+func serveAccountPage(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	sendResponse(w, response{status: 200, body: accountPage, contentType: "text/html; charset=utf-8"})
 }
