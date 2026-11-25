@@ -16,8 +16,11 @@ The following are external release inputs and are intentionally absent from the 
    for release configuration.
 3. `downloads.aifree.sg` serves immutable package files at
    `/desktop/<version>/<target>/<file>` and the current manifest at `/desktop/stable.json` over HTTPS.
-4. macOS builds need an Apple Developer signing identity and notarization. Windows builds need a
-   Windows code-signing certificate. Linux packages rely on the updater signature.
+4. macOS builds need an Apple Developer signing identity and notarization. Windows builds use Azure
+   Artifact Signing through OIDC in the main-only GitHub `release` environment. The signing principal
+   needs the Certificate Profile Signer role on the selected profile. The workflow verifies the
+   Windows Authenticode signatures before signing the installer for updates. Linux packages rely on
+   the updater signature.
 
 The existing 0.1.0 application did not contain an updater. Customers need a one-time manual
 installation of an updater-capable release before later releases can update themselves.

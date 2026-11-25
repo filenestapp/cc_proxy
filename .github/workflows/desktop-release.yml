@@ -26,12 +26,6 @@ jobs:
           - os: macos-15
             target: aarch64-apple-darwin
             bundles: app,dmg
-          - os: windows-2022
-            target: x86_64-pc-windows-msvc
-            bundles: nsis
-          - os: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            bundles: nsis
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             bundles: deb,appimage
@@ -97,14 +91,152 @@ jobs:
             client/target/${{ matrix.target }}/release/bundle/**/*.dmg
             client/target/${{ matrix.target }}/release/bundle/**/*.AppImage
             client/target/${{ matrix.target }}/release/bundle/**/*.deb
-            client/target/${{ matrix.target }}/release/bundle/**/*.exe
             client/target/${{ matrix.target }}/release/bundle/**/*.sig
+          if-no-files-found: error
+          retention-days: 30
+
+  windows:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: windows-2022
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    timeout-minutes: 35
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    defaults:
+      run:
+        shell: bash
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup target add ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Sidecars
+        run: desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
+      - name: Render release-only updater configuration
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          AIFREE_UPDATER_PUBLIC_KEY: ${{ secrets.AIFREE_UPDATER_PUBLIC_KEY }}
+        run: node desktop/scripts/release-config.mjs desktop/src-tauri/tauri.conf.json desktop/src-tauri/tauri.release.conf.json "$RELEASE_VERSION" "$AIFREE_UPDATER_PUBLIC_KEY" https://downloads.aifree.sg/desktop/stable.json
+      - name: Build Windows executable
+        working-directory: client/desktop/src-tauri
+        run: npx --yes @tauri-apps/cli@2.12.6 build --target ${{ matrix.target }} --no-bundle --no-sign --config tauri.release.conf.json -- --locked
+      - name: Collect Windows executables
+        id: executables
+        shell: pwsh
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: |
+          $release = Join-Path $PWD "target/$env:RELEASE_TARGET/release"
+          $sidecars = Join-Path $PWD "desktop/src-tauri/binaries"
+          $files = @((Join-Path $release "ccproxy-desktop.exe"))
+          foreach ($name in "ccproxy", "sing-box", "frpc") {
+            $files += Join-Path $sidecars "${name}-$($env:RELEASE_TARGET).exe"
+          }
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Missing Windows executable $file"
+            }
+          }
+          "files<<AIFREE_EXECUTABLES" >> $env:GITHUB_OUTPUT
+          $files >> $env:GITHUB_OUTPUT
+          "AIFREE_EXECUTABLES" >> $env:GITHUB_OUTPUT
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign Windows executables
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ steps.executables.outputs.files }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-azure-cli-credential: false
+          exclude-interactive-browser-credential: true
+      - name: Verify executable signatures
+        shell: pwsh
+        env:
+          SIGNED_FILES: ${{ steps.executables.outputs.files }}
+        run: |
+          foreach ($file in ($env:SIGNED_FILES -split '\r?\n')) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne "Valid" -or -not $signature.TimeStamperCertificate) {
+              throw "Windows signature verification failed for $file ($($signature.Status))"
+            }
+          }
+      - name: Bundle signed Windows installer
+        working-directory: client/desktop/src-tauri
+        run: npx --yes @tauri-apps/cli@2.12.6 bundle --target ${{ matrix.target }} --bundles nsis --config tauri.release.conf.json --no-sign
+      - name: Collect Windows installer
+        id: installer
+        shell: pwsh
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: |
+          $directory = Join-Path $PWD "target/$env:RELEASE_TARGET/release/bundle/nsis"
+          $installers = @(Get-ChildItem -LiteralPath $directory -Filter "*.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected one Windows installer, found $($installers.Count)"
+          }
+          "file=$($installers[0].FullName)" >> $env:GITHUB_OUTPUT
+      - name: Sign Windows installer
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ steps.installer.outputs.file }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-azure-cli-credential: false
+          exclude-interactive-browser-credential: true
+      - name: Verify installer and sign updater artifact
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          SIGNED_INSTALLER: ${{ steps.installer.outputs.file }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $signature = Get-AuthenticodeSignature -LiteralPath $env:SIGNED_INSTALLER
+          if ($signature.Status -ne "Valid" -or -not $signature.TimeStamperCertificate) {
+            throw "Windows installer signature verification failed ($($signature.Status))"
+          }
+          npx --yes @tauri-apps/cli@2.12.6 signer sign --app-version $env:RELEASE_VERSION $env:SIGNED_INSTALLER
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath "$env:SIGNED_INSTALLER.sig" -PathType Leaf)) {
+            throw "The Windows updater signature was not produced"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aifree-update-${{ matrix.target }}
+          path: |
+            ${{ steps.installer.outputs.file }}
+            ${{ steps.installer.outputs.file }}.sig
           if-no-files-found: error
           retention-days: 30
 
   manifest:
     if: ${{ github.ref == 'refs/heads/main' }}
-    needs: build
+    needs: [build, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
