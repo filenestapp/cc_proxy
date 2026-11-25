@@ -161,7 +161,7 @@ td{color:#3A4456}
 .prose code{font-family:var(--mono);font-size:.9em;background:#EFEAE1;padding:1px 6px;border-radius:5px}
 .dl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:24px 0}
 .dl-grid .node{display:flex;flex-direction:column;gap:6px}
-.dl-grid .btn{margin-top:auto}
+.dl-grid .dl-options{display:grid;gap:8px;margin-top:4px}
 @media (max-width:760px){.dl-grid{grid-template-columns:1fr}}
 
 /* footer */
