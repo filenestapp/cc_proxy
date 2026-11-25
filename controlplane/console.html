@@ -296,7 +296,7 @@
 </head>
 <body>
 <div id="login" class="login" hidden>
-  <form class="card" id="login-form">
+  <form class="card" id="login-form" novalidate>
     <div class="console-controls">
       <select class="language" data-l10n-label="Language" aria-label="Language"><option value="system" data-l10n="Browser language">Browser language</option><option value="en" lang="en">English</option><option value="zh-Hans" lang="zh-Hans">Simplified Chinese</option></select>
       <select class="appearance" data-l10n-label="Appearance" aria-label="Appearance"><option value="system" data-l10n="System appearance">System appearance</option><option value="light" data-l10n="Light">Light</option><option value="dark" data-l10n="Dark">Dark</option></select>
@@ -527,6 +527,15 @@
     catch (e) { if (e.message !== "Signed out") toast(e.message, true); return undefined; }
   }
 
+  // Keep the browser's input constraints and render their feedback in the console language.
+  function validateForm(form, showError) {
+    const invalid = Array.from(form.elements).find((field) => field.willValidate && !field.validity.valid);
+    if (!invalid) return true;
+    showError(invalid.validity.valueMissing ? "Complete this required field." : "Enter a valid value.");
+    invalid.focus();
+    return false;
+  }
+
   // ---- modals ---------------------------------------------------------------------------------------------
   function overlay(html) {
     const ov = document.createElement("div");
@@ -559,10 +568,12 @@
       }).join("");
       const { ov, close } = overlay('<h3>' + esc(title) + '</h3><form novalidate>' + rows + `<div class="err" role="alert"></div><div class="buttons"><button type="button" data-cancel>${trHTML("Cancel")}</button><button class="primary" type="submit">` + esc(submitText) + "</button></div></form>");
       const formEl = $("form", ov);
+      const error = $(".err", ov);
       $("[data-cancel]", ov).onclick = () => { close(); resolve(undefined); };
       formEl.onsubmit = async (e) => {
         e.preventDefault();
-        if (!formEl.reportValidity()) return;
+        error.textContent = "";
+        if (!validateForm(formEl, (message) => { error.textContent = tr(message); })) return;
         const values = {};
         fields.forEach((f, i) => {
           const el = $("#f" + i, ov);
@@ -571,7 +582,7 @@
         const btn = $("button[type=submit]", ov);
         btn.disabled = true;
         try { const r = await onSubmit(values); close(); resolve(r === undefined ? true : r); }
-        catch (err) { $(".err", ov).textContent = consoleMessage(err.message); btn.disabled = false; }
+        catch (err) { error.textContent = consoleMessage(err.message); btn.disabled = false; }
       };
       const first = $("input,select,textarea", ov); if (first) first.focus();
     });
@@ -598,6 +609,11 @@
   }
 
   // ---- auth -----------------------------------------------------------------------------------------------
+  function setLoginMessage(message) {
+    loginMessage = message;
+    $("#l-err").textContent = consoleMessage(message);
+  }
+
   function showLogin(msg) {
     stopUpdates();
     routeToken++;
@@ -605,8 +621,7 @@
     languageDraft = null;
     $("#app").hidden = true;
     $("#login").hidden = false;
-    loginMessage = msg || "";
-    $("#l-err").textContent = consoleMessage(loginMessage);
+    setLoginMessage(msg || "");
     document.title = tr("aifree Console");
     $("#l-user").focus();
   }
@@ -628,16 +643,15 @@
 
   $("#login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    loginMessage = "";
-    $("#l-err").textContent = loginMessage;
+    setLoginMessage("");
+    if (!validateForm(e.currentTarget, setLoginMessage)) return;
     try {
       const s = await api("POST", "/admin/session", { username: $("#l-user").value.trim(), password: $("#l-pass").value });
       csrf = s.csrf; me = s.admin;
       $("#l-pass").value = "";
       start();
     } catch (err) {
-      loginMessage = err.message === "wrong username or password" ? "Incorrect username or password." : err.message;
-      $("#l-err").textContent = consoleMessage(loginMessage);
+      setLoginMessage(err.message === "wrong username or password" ? "Incorrect username or password." : err.message);
     }
   });
   $("#logout").onclick = async () => { await act(() => api("DELETE", "/admin/session")); showLogin("Signed out."); };
@@ -1662,7 +1676,17 @@
       field("sync", tr("Config sync threshold (seconds)"), al.out_of_sync_seconds ?? 300, { type: "number" }) +
       field("repeat", tr("Alert repeat interval (seconds, 0 disables repeats)"), al.repeat_seconds ?? 0, { type: "number" }) +
       `<button class="primary" type="submit">${trHTML("Save alert settings")}</button></form></div>`;
-    const save = (id, build, text) => { $(id).onsubmit = async (e) => { e.preventDefault(); let body; try { body = build(); } catch (err) { return toast(err.message, true); } if (await act(() => api("PUT", "/admin/settings", body), text)) route(); }; };
+    const save = (id, build, text) => {
+      const formEl = $(id);
+      formEl.noValidate = true;
+      formEl.onsubmit = async (e) => {
+        e.preventDefault();
+        if (!validateForm(formEl, (message) => toast(message, true))) return;
+        let body;
+        try { body = build(); } catch (err) { return toast(err.message, true); }
+        if (await act(() => api("PUT", "/admin/settings", body), text)) route();
+      };
+    };
     save("#s-policy", () => ({ client_policy: Object.assign({}, cp, { domain_suffix: lines($("#domains").value).map((d) => d.replace(/^\./, "").toLowerCase()), direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked }) }), tr("Routing policy saved."));
     save("#s-ip", () => ({ cooldown_seconds: Math.round(Number($("#cooldown").value) * 86400) }), tr("Saved."));
     save("#s-monitor", () => ({ monitor: { egress_targets: lines($("#targets").value), entries: lines($("#entries").value).map((l) => {

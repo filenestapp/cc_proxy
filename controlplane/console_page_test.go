@@ -70,6 +70,11 @@ func TestConsoleLocaleKeysAndParameters(t *testing.T) {
 			t.Errorf("missing console translation for %q", key)
 		}
 	}
+	for _, key := range []string{"Complete this required field.", "Enter a valid value."} {
+		if catalog.Messages[key] == "" {
+			t.Errorf("missing console validation translation for %q", key)
+		}
+	}
 	parameters := regexp.MustCompile(`\{\w+\}`)
 	for _, group := range []map[string]string{catalog.Messages, catalog.ServerMessages} {
 		for key, translated := range group {
