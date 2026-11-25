@@ -4,6 +4,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY *.go schema.sql console.html account.html sqlite_export.py ./
 COPY install ./install
+COPY locales ./locales
 RUN CGO_ENABLED=0 go build -trimpath -o /out/cc-controlplane .
 
 FROM alpine:3.22

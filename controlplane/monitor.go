@@ -53,15 +53,15 @@ type probeInput struct {
 
 type heartbeat struct {
 	ConfigETag      string  `json:"config_etag"`
+	AgentVersion    string  `json:"agent_version"`
 	SingboxRunning  *bool   `json:"singbox_running"`
 	ApplyError      *string `json:"apply_error"`
 	ApplyState      string  `json:"apply_state"`
 	LocalEgressIPv4 string  `json:"local_egress_ipv4"`
 	// Sent by agents with XTCP sync (xtcp_sync.go); absent from older agents.
 	XTCP *xtcpReport `json:"xtcp"`
-	// The running agent build (#66) and its managed-update outcome (agent_update.go); absent from older agents.
-	AgentVersion string             `json:"agent_version"`
-	Update       *agentUpdateReport `json:"update"`
+	// The managed-update outcome (agent_update.go); absent from older agents.
+	Update *agentUpdateReport `json:"update"`
 }
 
 // IsGlobalUnicast also includes locally scoped and special-purpose IPv4 ranges.
@@ -127,11 +127,13 @@ func (s *store) reportAgent(ctx context.Context, name, token string, address net
 		case "confirmed", "pending", "failed", "unknown":
 			state = &hb.ApplyState
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO agents(name, last_seen, config_etag, singbox_running, apply_error, apply_state)
-			VALUES ($1,$2,NULLIF($3,''),$4,NULLIF($5,''),$6) ON CONFLICT (name) DO UPDATE SET
-			last_seen = excluded.last_seen, config_etag = excluded.config_etag,
-			singbox_running = excluded.singbox_running, apply_error = excluded.apply_error, apply_state = excluded.apply_state`,
-			name, s.now(), strings.Trim(hb.ConfigETag, `"`), hb.SingboxRunning, applied, state)
+		agentVersion := truncate(strings.TrimSpace(hb.AgentVersion), 100)
+		_, err = tx.Exec(ctx, `INSERT INTO agents(name, last_seen, agent_version, config_etag, singbox_running, apply_error, apply_state)
+			VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,NULLIF($6,''),$7) ON CONFLICT (name) DO UPDATE SET
+			last_seen = excluded.last_seen, agent_version = excluded.agent_version,
+			config_etag = excluded.config_etag, singbox_running = excluded.singbox_running,
+			apply_error = excluded.apply_error, apply_state = excluded.apply_state`,
+			name, s.now(), agentVersion, strings.Trim(hb.ConfigETag, `"`), hb.SingboxRunning, applied, state)
 		if err != nil {
 			return err
 		}
@@ -140,7 +142,7 @@ func (s *store) reportAgent(ctx context.Context, name, token string, address net
 				return err
 			}
 		}
-		if err := recordAgentUpdate(ctx, tx, name, s.now(), hb.AgentVersion, hb.Update); err != nil {
+		if err := recordAgentUpdate(ctx, tx, name, s.now(), hb.Update); err != nil {
 			return err
 		}
 		changed := false
@@ -246,6 +248,7 @@ type agentView struct {
 	Name           string  `json:"name"`
 	LastSeen       float64 `json:"last_seen"`
 	Age            float64 `db:"-" json:"age"`
+	AgentVersion   *string `json:"agent_version"`
 	ConfigETag     *string `json:"config_etag"`
 	InSync         bool    `db:"-" json:"in_sync"`
 	SingboxRunning *bool   `json:"singbox_running"`
@@ -304,7 +307,7 @@ func (s *store) topology(ctx context.Context, db database, monitor monitorSettin
 		}
 		topo.ServerConfigETags[view.Name] = cfg.ETag
 	}
-	topo.Agents, err = rowsOf[agentView](ctx, db, `SELECT a.name, a.last_seen, a.config_etag, a.singbox_running, a.apply_error, a.apply_state
+	topo.Agents, err = rowsOf[agentView](ctx, db, `SELECT a.name, a.last_seen, a.agent_version, a.config_etag, a.singbox_running, a.apply_error, a.apply_state
 		FROM agents a JOIN hosts h ON h.name = a.name ORDER BY a.name`)
 	if err != nil {
 		return topo, err

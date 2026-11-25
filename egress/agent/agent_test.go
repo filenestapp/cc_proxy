@@ -29,8 +29,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv("CCPROXY_FAKE_SINGBOX") == "1" && len(os.Args) > 2 && (os.Args[1] == "check" || os.Args[1] == "run") {
 		os.Exit(fakeSingBox(os.Args[1], os.Args[3]))
 	}
-	if os.Getenv("CCPROXY_FAKE_FRPC") == "1" && len(os.Args) > 1 && (os.Args[1] == "verify" || os.Args[1] == "frpc-restart") {
-		os.Exit(fakeFrpcCommand(os.Args[1:]))
+	if os.Getenv("CCPROXY_FAKE_FRPC") == "1" && len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "verify", "frpc-restart", "frpc-hang":
+			os.Exit(fakeFrpcCommand(os.Args[1:]))
+		}
 	}
 	if os.Getenv("CCPROXY_FAKE_AGENT") == "1" && len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "check-args") {
 		os.Exit(fakeAgentCommand(os.Args[1]))
@@ -290,7 +293,7 @@ func TestFirstConfigIsConfirmedAndReported(t *testing.T) {
 	a, dir := newTestAgent(t, cp, nil)
 	a.Cycle()
 	r := cp.last()
-	if r["apply_state"] != "confirmed" || r["config_etag"] == nil || r["candidate_etag"] != nil || r["singbox_running"] != true {
+	if r["agent_version"] != version || r["apply_state"] != "confirmed" || r["config_etag"] == nil || r["candidate_etag"] != nil || r["singbox_running"] != true {
 		t.Fatalf("unexpected heartbeat %v", r)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "config.json"))

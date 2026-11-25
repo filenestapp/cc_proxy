@@ -19,8 +19,8 @@ package main
 //
 // Every PUT starts a new rollout id, also for the same version and hosts: that is how an operator retries hosts
 // that rolled back or refused the release (an agent does not retry the same rollout id on its own). Pause and resume
-// keep the id. Hosts report their running version ("agent_version", #66) and the update outcome ("update") in every
-// heartbeat; GET /admin/agent-rollout combines them with the rollout.
+// keep the id. Hosts report their running version ("agent_version", stored by #66 in agents.agent_version) and the
+// update outcome ("update") in every heartbeat; GET /admin/agent-rollout combines them with the rollout.
 
 import (
 	"context"
@@ -54,8 +54,6 @@ var agentUpdateSQL = []string{
 	`CREATE TABLE IF NOT EXISTS agent_update_status (
 		host text COLLATE "C" PRIMARY KEY REFERENCES hosts(name) ON DELETE CASCADE,
 		reported_at double precision NOT NULL,
-		agent_version text NOT NULL DEFAULT '',
-		reports_update boolean NOT NULL DEFAULT false,
 		state text NOT NULL DEFAULT '',
 		target_version text NOT NULL DEFAULT '',
 		target_sequence bigint NOT NULL DEFAULT 0,
@@ -93,40 +91,32 @@ type agentUpdateReport struct {
 	At              *float64 `json:"at"`
 }
 
-// recordAgentUpdate stores a heartbeat's running version and update outcome. Malformed values are dropped rather
-// than failing the heartbeat, which also carries sing-box health.
-func recordAgentUpdate(ctx context.Context, tx pgx.Tx, hostName string, now float64, agentVersion string, rep *agentUpdateReport) error {
-	if !agentVersionPattern.MatchString(agentVersion) {
-		agentVersion = ""
-	}
-	if agentVersion == "" && rep == nil {
+// recordAgentUpdate stores a heartbeat's update outcome (the running version is agents.agent_version, #66).
+// Malformed values are dropped rather than failing the heartbeat, which also carries sing-box health.
+func recordAgentUpdate(ctx context.Context, tx pgx.Tx, hostName string, now float64, rep *agentUpdateReport) error {
+	if rep == nil {
 		return nil
 	}
-	var r agentUpdateReport
-	if rep != nil {
-		r = *rep
-		if !slices.Contains(agentUpdateStates, r.State) {
-			r.State = "unknown"
-		}
-		if r.TargetVersion != "" && !agentVersionPattern.MatchString(r.TargetVersion) {
-			r.TargetVersion = "invalid"
-		}
-		if r.PreviousVersion != "" && !agentVersionPattern.MatchString(r.PreviousVersion) {
-			r.PreviousVersion = ""
-		}
-		r.TargetSequence, r.RolloutID, r.RunningSequence = max(r.TargetSequence, 0), max(r.RolloutID, 0), max(r.RunningSequence, 0)
+	r := *rep
+	if !slices.Contains(agentUpdateStates, r.State) {
+		r.State = "unknown"
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO agent_update_status(host, reported_at, agent_version, reports_update, state,
-		target_version, target_sequence, rollout_id, running_sequence, previous_version, error, state_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		ON CONFLICT (host) DO UPDATE SET reported_at = excluded.reported_at,
-		agent_version = CASE WHEN excluded.agent_version = '' THEN agent_update_status.agent_version ELSE excluded.agent_version END,
-		reports_update = excluded.reports_update, state = excluded.state, target_version = excluded.target_version,
-		target_sequence = excluded.target_sequence, rollout_id = excluded.rollout_id,
-		running_sequence = excluded.running_sequence, previous_version = excluded.previous_version,
-		error = excluded.error, state_at = excluded.state_at`,
-		hostName, now, agentVersion, rep != nil, r.State, r.TargetVersion, r.TargetSequence, r.RolloutID,
-		r.RunningSequence, r.PreviousVersion, truncate(r.Error, 300), r.At)
+	if r.TargetVersion != "" && !agentVersionPattern.MatchString(r.TargetVersion) {
+		r.TargetVersion = "invalid"
+	}
+	if r.PreviousVersion != "" && !agentVersionPattern.MatchString(r.PreviousVersion) {
+		r.PreviousVersion = ""
+	}
+	r.TargetSequence, r.RolloutID, r.RunningSequence = max(r.TargetSequence, 0), max(r.RolloutID, 0), max(r.RunningSequence, 0)
+	_, err := tx.Exec(ctx, `INSERT INTO agent_update_status(host, reported_at, state, target_version, target_sequence,
+		rollout_id, running_sequence, previous_version, error, state_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (host) DO UPDATE SET reported_at = excluded.reported_at, state = excluded.state,
+		target_version = excluded.target_version, target_sequence = excluded.target_sequence,
+		rollout_id = excluded.rollout_id, running_sequence = excluded.running_sequence,
+		previous_version = excluded.previous_version, error = excluded.error, state_at = excluded.state_at`,
+		hostName, now, r.State, r.TargetVersion, r.TargetSequence, r.RolloutID, r.RunningSequence, r.PreviousVersion,
+		truncate(r.Error, 300), r.At)
 	return err
 }
 
@@ -312,7 +302,7 @@ type agentHostStatus struct {
 	Host            string   `json:"host" db:"host"`
 	LastSeen        *float64 `json:"last_seen" db:"last_seen"`
 	AgentVersion    string   `json:"agent_version" db:"agent_version"`
-	ReportsUpdate   bool     `json:"-" db:"reports_update"`
+	ReportsUpdate   bool     `json:"-" db:"reports_update"` // false: the agent has no updater (or has not reported yet)
 	State           string   `json:"state" db:"state"`
 	TargetVersion   string   `json:"target_version" db:"target_version"`
 	TargetSequence  int64    `json:"target_sequence" db:"target_sequence"`
@@ -368,7 +358,7 @@ func (a *api) agentRolloutGet(r *apiRequest) (response, error) {
 			return err
 		}
 		hosts, err = rowsOf[agentHostStatus](ctx, tx, `SELECT h.name AS host, ag.last_seen,
-			COALESCE(s.agent_version, '') AS agent_version, COALESCE(s.reports_update, false) AS reports_update,
+			COALESCE(ag.agent_version, '') AS agent_version, s.host IS NOT NULL AS reports_update,
 			COALESCE(s.state, '') AS state, COALESCE(s.target_version, '') AS target_version,
 			COALESCE(s.target_sequence, 0) AS target_sequence, COALESCE(s.rollout_id, 0) AS rollout_id,
 			COALESCE(s.running_sequence, 0) AS running_sequence, COALESCE(s.previous_version, '') AS previous_version,

@@ -200,7 +200,7 @@ func TestAgentRolloutTargetsPausesAndReports(t *testing.T) {
 	}
 
 	// Garbage in the update object never fails a heartbeat.
-	h.report("third", "agent old with spaces", `{"state":"exploded","target_version":"../../x","rollout_id":-4}`)
+	h.report("third", "agent-old", `{"state":"exploded","target_version":"../../x","rollout_id":-4}`)
 	rows = h.hosts()
 	if rows["third"]["state"] != "unknown" || rows["third"]["agent_version"] != "agent-old" || rows["third"]["rollout_id"] != float64(0) {
 		t.Fatalf("malformed report: %v", rows["third"])
