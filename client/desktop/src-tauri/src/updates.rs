@@ -9,45 +9,27 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use crate::App;
 
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-const RETRY_WHEN_CONNECTED: Duration = Duration::from_secs(30);
+const PRESENTATION_RETRY: Duration = Duration::from_secs(5);
+const CONNECTION_RETRY: Duration = Duration::from_secs(30);
 const INSTALL_GRACE: Duration = Duration::from_secs(30);
+const RETRY_MIN: Duration = Duration::from_secs(60);
+const RETRY_MAX: Duration = Duration::from_secs(60 * 60);
 
 pub(crate) const CONFIGURED: bool = option_env!("AIFREE_UPDATER_PUBLIC_KEY").is_some();
 
-/// Serializes update work without holding a lock across a network request or installer call.
 #[derive(Default)]
 struct Gate {
     checking: bool,
     installing: bool,
     deferred: bool,
+    presented: bool,
 }
 
-impl Gate {
-    fn begin_check(&mut self) -> bool {
-        if self.checking || self.installing || self.deferred {
-            return false;
-        }
-        self.checking = true;
-        true
-    }
-
-    fn finish_check(&mut self) {
-        self.checking = false;
-    }
-
-    fn finish_install(&mut self) {
-        self.installing = false;
-    }
-
-    fn defer(&mut self) {
-        self.deferred = true;
-    }
-}
-
-/// A pending update belongs only to this process. "Later" suppresses automatic installation until
-/// the next launch, when the signed feed is checked again.
+/// A pending update belongs only to this process. The frontend marks a queued offer as presented
+/// before the scheduler may activate it, giving the user a chance to select Later.
 pub(crate) struct PendingUpdate {
     update: Mutex<Option<Update>>,
+    failed: Mutex<bool>,
     gate: Mutex<Gate>,
 }
 
@@ -55,6 +37,7 @@ impl Default for PendingUpdate {
     fn default() -> Self {
         Self {
             update: Mutex::new(None),
+            failed: Mutex::new(false),
             gate: Mutex::new(Gate::default()),
         }
     }
@@ -64,6 +47,20 @@ impl Default for PendingUpdate {
 pub(crate) struct UpdateInfo {
     version: String,
     notes: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct UpdateState {
+    update: Option<UpdateInfo>,
+    failed: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum InstallResult {
+    WaitingForPresentation,
+    Connected,
+    Deferred,
+    Failed,
 }
 
 fn info(update: &Update) -> UpdateInfo {
@@ -84,36 +81,59 @@ impl PendingUpdate {
 
     fn begin_check(&self) -> bool {
         let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
-        gate.begin_check()
+        if gate.checking || gate.installing || gate.deferred {
+            return false;
+        }
+        gate.checking = true;
+        true
     }
 
     fn finish_check(&self, update: Option<Update>) {
         let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
-        gate.finish_check();
+        gate.checking = false;
         if !gate.deferred {
+            gate.presented = false;
             *self
                 .update
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()) = update;
+            *self
+                .failed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = false;
         }
     }
 
-    fn begin_install(&self) -> Result<Update, String> {
+    fn finish_failed_check(&self) {
         let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
-        if gate.checking || gate.installing || gate.deferred {
-            return Err(if gate.deferred {
-                "The update was deferred until the next launch."
-            } else {
-                "An update is already being prepared."
-            }
-            .into());
+        gate.checking = false;
+        if !gate.deferred {
+            *self
+                .failed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = true;
         }
-        let update = self
+    }
+
+    fn begin_install(&self, require_presentation: bool) -> Result<Update, InstallResult> {
+        let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+        if gate.deferred {
+            return Err(InstallResult::Deferred);
+        }
+        if require_presentation && !gate.presented {
+            return Err(InstallResult::WaitingForPresentation);
+        }
+        if gate.checking || gate.installing {
+            return Err(InstallResult::WaitingForPresentation);
+        }
+        let Some(update) = self
             .update
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
-            .ok_or_else(|| "No update is ready. Check for updates again.".to_owned())?;
+        else {
+            return Err(InstallResult::Failed);
+        };
         gate.installing = true;
         Ok(update)
     }
@@ -122,14 +142,30 @@ impl PendingUpdate {
         self.gate
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .finish_install();
+            .installing = false;
+    }
+
+    fn fail_offer(&self) {
+        let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+        gate.installing = false;
+        gate.presented = false;
+        if !gate.deferred {
+            *self
+                .update
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = None;
+            *self
+                .failed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = true;
+        }
     }
 
     fn defer(&self) {
         self.gate
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .defer();
+            .deferred = true;
     }
 
     fn deferred(&self) -> bool {
@@ -137,6 +173,26 @@ impl PendingUpdate {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .deferred
+    }
+
+    fn state_for_frontend(&self) -> UpdateState {
+        let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+        let update = self
+            .update
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .map(info);
+        if update.is_some() {
+            gate.presented = true;
+        }
+        UpdateState {
+            update,
+            failed: *self
+                .failed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        }
     }
 }
 
@@ -150,12 +206,10 @@ async fn check(app: &AppHandle, pending: &PendingUpdate) -> Result<Option<Update
     if !pending.begin_check() {
         return Ok(pending.cached());
     }
-    let result = app
-        .updater()
-        .map_err(|error| error.to_string())?
-        .check()
-        .await
-        .map_err(|error| error.to_string());
+    let result = match app.updater() {
+        Ok(updater) => updater.check().await.map_err(|error| error.to_string()),
+        Err(error) => Err(error.to_string()),
+    };
     match result {
         Ok(update) => {
             let info = update.as_ref().map(info);
@@ -163,63 +217,87 @@ async fn check(app: &AppHandle, pending: &PendingUpdate) -> Result<Option<Update
             Ok(info)
         }
         Err(error) => {
-            pending.finish_check(None);
+            pending.finish_failed_check();
             Err(error)
         }
     }
 }
 
-async fn install(app_handle: &AppHandle, app: &App, pending: &PendingUpdate) -> Result<(), String> {
+async fn install(
+    app_handle: &AppHandle,
+    app: &App,
+    pending: &PendingUpdate,
+    require_presentation: bool,
+) -> Result<(), InstallResult> {
     if !CONFIGURED {
-        return Err("Desktop updates are not configured in this build.".into());
+        return Err(InstallResult::Failed);
     }
     if app.tunnel.wants_connection() {
-        return Err("The proxy tunnel is still connected.".into());
+        return Err(InstallResult::Connected);
     }
-    let update = pending.begin_install()?;
-    // Downloading does not change the installation or the running tunnel. The session lock shares
-    // the same connection commit point as `commands::connect`, so a reconnect cannot slip between
-    // this final check and activation of the platform installer.
+    let update = pending.begin_install(require_presentation)?;
     let package = match update.download(|_, _| {}, || {}).await {
         Ok(package) => package,
-        Err(error) => {
-            pending.finish_install();
-            return Err(error.to_string());
+        Err(_) => {
+            pending.fail_offer();
+            return Err(InstallResult::Failed);
         }
     };
     let _session = ccproxy_core::session::lock();
-    if app.tunnel.wants_connection() || pending.deferred() {
+    if pending.deferred() {
         pending.finish_install();
-        return Err("The update was deferred before installation.".into());
+        return Err(InstallResult::Deferred);
     }
-    if let Err(error) = update.install(&package) {
+    if app.tunnel.wants_connection() {
         pending.finish_install();
-        return Err(error.to_string());
+        return Err(InstallResult::Connected);
+    }
+    if update.install(&package).is_err() {
+        pending.fail_offer();
+        return Err(InstallResult::Failed);
     }
     app_handle.restart();
 }
 
-/// Check automatically, leave time for the user to choose Later, and install only while
-/// disconnected. A connected tunnel causes a later safe-point retry instead of a restart.
+fn next_backoff(current: Duration) -> Duration {
+    current.checked_mul(2).unwrap_or(RETRY_MAX).min(RETRY_MAX)
+}
+
+/// Checks automatically, waits for the frontend to expose the offer, and activates only while
+/// disconnected. Terminal failures clear the cached release and use a bounded retry delay so a
+/// repaired feed is fetched again rather than repeatedly installing stale bytes.
 pub(crate) fn start_automatic_updates(app_handle: AppHandle) {
     if !CONFIGURED {
         return;
     }
     tauri::async_runtime::spawn(async move {
+        let mut backoff = RETRY_MIN;
         loop {
             let pending = app_handle.state::<PendingUpdate>();
             let app = app_handle.state::<std::sync::Arc<App>>();
-            let found = check(&app_handle, &pending).await.ok().flatten().is_some();
-            if found {
-                tokio::time::sleep(INSTALL_GRACE).await;
-                let _ = install(&app_handle, &app, &pending).await;
+            match check(&app_handle, &pending).await {
+                Ok(Some(_)) => {
+                    tokio::time::sleep(INSTALL_GRACE).await;
+                    match install(&app_handle, &app, &pending, true).await {
+                        Ok(()) => unreachable!("restart exits the process"),
+                        Err(InstallResult::WaitingForPresentation) => {
+                            tokio::time::sleep(PRESENTATION_RETRY).await
+                        }
+                        Err(InstallResult::Connected) => tokio::time::sleep(CONNECTION_RETRY).await,
+                        Err(InstallResult::Deferred) => tokio::time::sleep(CHECK_EVERY).await,
+                        Err(InstallResult::Failed) => {
+                            tokio::time::sleep(backoff).await;
+                            backoff = next_backoff(backoff);
+                        }
+                    }
+                }
+                Ok(None) => tokio::time::sleep(CHECK_EVERY).await,
+                Err(error) => {
+                    eprintln!("Update check failed: {error}");
+                    tokio::time::sleep(backoff).await;
+                    backoff = next_backoff(backoff);
+                }
             }
-            let delay = if pending.cached().is_some() && !pending.deferred() {
-                RETRY_WHEN_CONNECTED
-            } else {
-                CHECK_EVERY
-            };
-            tokio::time::sleep(delay).await;
         }
     });
 }
@@ -233,12 +311,19 @@ pub(crate) async fn check_for_update(
 }
 
 #[tauri::command]
+pub(crate) fn update_state(pending: State<'_, PendingUpdate>) -> UpdateState {
+    pending.state_for_frontend()
+}
+
+#[tauri::command]
 pub(crate) async fn install_update(
     app_handle: AppHandle,
     app: State<'_, std::sync::Arc<App>>,
     pending: State<'_, PendingUpdate>,
 ) -> Result<(), String> {
-    install(&app_handle, &app, &pending).await
+    install(&app_handle, &app, &pending, false)
+        .await
+        .map_err(|result| format!("{result:?}"))
 }
 
 #[tauri::command]
@@ -248,29 +333,50 @@ pub(crate) fn defer_update(pending: State<'_, PendingUpdate>) {
 
 #[cfg(test)]
 mod tests {
-    use super::Gate;
+    use super::{next_backoff, Gate, InstallResult, PendingUpdate, RETRY_MAX, RETRY_MIN};
+    use std::time::Duration;
 
     #[test]
     fn gate_serializes_check_and_install() {
         let mut gate = Gate::default();
-        assert!(gate.begin_check());
-        assert!(!gate.begin_check());
+        gate.checking = true;
+        assert!(gate.checking);
         assert!(!gate.installing);
-        gate.finish_check();
+        gate.checking = false;
         gate.installing = true;
         assert!(gate.installing);
-        assert!(!gate.begin_check());
-        gate.finish_install();
-        assert!(!gate.installing);
-        assert!(gate.begin_check());
     }
 
     #[test]
-    fn deferred_gate_blocks_future_automatic_work() {
-        let mut gate = Gate::default();
-        gate.defer();
-        assert!(gate.deferred);
-        assert!(!gate.begin_check());
-        assert!(!gate.installing);
+    fn retry_backoff_is_bounded() {
+        assert_eq!(next_backoff(RETRY_MIN), Duration::from_secs(120));
+        assert_eq!(next_backoff(RETRY_MAX), RETRY_MAX);
+    }
+
+    #[test]
+    fn missing_offer_does_not_leave_installation_in_flight() {
+        let pending = PendingUpdate::default();
+        assert!(matches!(
+            pending.begin_install(false),
+            Err(InstallResult::Failed)
+        ));
+        assert!(matches!(
+            pending.begin_install(false),
+            Err(InstallResult::Failed)
+        ));
+    }
+
+    #[test]
+    fn later_blocks_manual_and_automatic_activation() {
+        let pending = PendingUpdate::default();
+        pending.defer();
+        assert!(matches!(
+            pending.begin_install(false),
+            Err(InstallResult::Deferred)
+        ));
+        assert!(matches!(
+            pending.begin_install(true),
+            Err(InstallResult::Deferred)
+        ));
     }
 }

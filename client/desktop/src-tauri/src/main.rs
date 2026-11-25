@@ -338,7 +338,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             system_languages, set_tray_language, get_state, login, logout, connect, disconnect,
             netcheck::run_environment_check, updates::check_for_update, updates::install_update,
-            updates::defer_update,
+            updates::defer_update, updates::update_state,
         ])
         .build(tauri::generate_context!())
         .expect("building the app")

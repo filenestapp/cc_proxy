@@ -517,7 +517,18 @@ import { createPreferenceMenu } from "./preferences.mjs";
     } catch (error) {
       updateError = String(error);
     }
+    await syncUpdateState();
     render();
+  }
+
+  async function syncUpdateState() {
+    try {
+      const state = await invoke("update_state");
+      availableUpdate = state.update;
+      updateError = state.failed ? "failed" : "";
+    } catch {
+      // Update checks must never interfere with connection controls.
+    }
   }
 
   async function installUpdate() {
@@ -599,6 +610,7 @@ import { createPreferenceMenu } from "./preferences.mjs";
   refresh(true);
   checkForUpdate();
   setTimeout(checkForUpdate, 15000);
+  setInterval(() => { syncUpdateState().then(render); }, 5000);
   setInterval(() => refresh(false), 1500);
   setInterval(() => refresh(true), 60000);
 })();

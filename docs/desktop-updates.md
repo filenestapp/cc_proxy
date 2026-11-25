@@ -40,10 +40,12 @@ installer mode and may show installer progress while it applies the update.
 ## Client behavior
 
 The app checks for a signed update at launch and when the window opens. It queues a valid update,
-then enables installation after the proxy tunnel disconnects. The install command checks the tunnel
-state again immediately before activation. A failed download, signature verification failure, or
-installation error leaves the current app in place. The user can dismiss an update and receive it
-again on the next launch.
+waits for the window to show the offer, then automatically installs after the proxy tunnel
+disconnects. The install command checks the tunnel state and the Later choice again immediately
+before activation. A failed download, signature verification failure, or installation error leaves
+the current app in place, clears the stale offer, reports the failure in the window, and retries the
+signed manifest with bounded backoff. The user can dismiss an update and receive it again on the
+next launch.
 
 Before replacing the stable manifest, test it through a separate update feed. Confirm that an
 updater-capable earlier build detects the new manifest, installs it after disconnecting, restarts,
