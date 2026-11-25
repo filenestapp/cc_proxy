@@ -4,6 +4,7 @@
 !go.sum
 !schema.sql
 !console.html
+!account.html
 !install/
 !install/**
 !sqlite_export.py
