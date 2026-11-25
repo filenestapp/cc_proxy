@@ -1,9 +1,10 @@
 # Sourced by run-e2e.sh after the exit host is installed and synced (issue #61). Uses its variables and helpers
 # (api, check, waitfor, port_status, frps_bytes, rnd, DB, NET, IP_*, FRP_DIR, SB_BIN, FRPS_TOKEN, OUT).
 #
-# The real ccproxy client on a Linux TUN (app mode) with `up --visitor`: it fetches its own visitor settings from
-# /v1/xtcp-visitor and runs frpc 0.72.0 unprivileged-style through the `ccproxy visitor` guard. The desktop app runs
-# the same core code (ccproxy_core::visitor); only its window is not exercised here.
+# The real ccproxy client on a Linux TUN (app mode), split as the desktop app is: the signed-in user `cust` runs
+# `ccproxy headless` (the app's unprivileged half: sync, heartbeat, and the XTCP visitor through the `ccproxy visitor`
+# guard and frpc 0.72.0), and root runs only the privileged supervisor `ccproxy tunnel` against cust's state directory,
+# as the app's authorisation prompt does. The desktop app runs the same core code; only its window is not exercised.
 
 echo "== desktop client: ccproxy runs the XTCP visitor itself (issue #61)"
 docker run -d --name ccx-cp-http --network $NET --ip $IP_CP_HTTP -e DATABASE_URL="$DB" -e CP_ADMIN_TOKEN="$ADMIN_TOKEN" \
@@ -21,9 +22,15 @@ else echo "FAIL carol's mapping: $(port_status)"; status=1; fi
 docker run -d --name ccx-desktop --network $NET --ip $IP_DESKTOP --cap-add NET_ADMIN --device /dev/net/tun --init \
   --add-host other.test:$IP_ECHO -v "$FRP_DIR/frpc:/opt/aifree/frpc:ro" -v "$SB_BIN:/opt/aifree/sing-box:ro" \
   ccx-desktop sh -c "echo 'nameserver 192.0.2.53' > /etc/resolv.conf && exec sleep infinity" >/dev/null
-STATE=/root/.config/cc-proxy
-dx() { docker exec ccx-desktop "$@"; }
-up() { dx sh -c 'rm -f /tmp/up.log; nohup ccproxy up --interval 2 --visitor > /tmp/up.log 2>&1 &'; }
+docker exec ccx-desktop useradd -m -s /bin/sh cust
+STATE=/home/cust/.config/cc-proxy
+dx() { docker exec ccx-desktop "$@"; }          # root: the privileged supervisor, and inspection
+ux() { docker exec -u cust ccx-desktop "$@"; }  # the signed-in user: everything the desktop app does unprivileged
+up() {
+  ux sh -c 'rm -f /tmp/up.log; nohup ccproxy headless --interval 2 > /tmp/up.log 2>&1 &'
+  waitfor 30 "the unprivileged half" "logged 'start the tunnel with'"
+  dx sh -c "nohup ccproxy --state-dir $STATE tunnel --singbox /opt/aifree/sing-box --heartbeat-timeout 10 > /tmp/tunnel.log 2>&1 &"
+}
 stop_up() { dx pkill -INT -x ccproxy || true; waitfor 20 "ccproxy to stop" "gone ccproxy"; }
 gone() { ! dx pgrep -x "$1" >/dev/null; }
 logged() { dx grep -q -- "$1" /tmp/up.log; }
@@ -31,7 +38,13 @@ via() { dx curl -q -sS --max-time 15 "http://$1:8080/${2:-}" 2>/dev/null || true
 frpc_env_token() { dx sh -c 'p=$(pgrep -x frpc) && tr "\0" "\n" < /proc/$p/environ' 2>/dev/null | sed -n 's/^FRP_AUTH_TOKEN=//p'; }
 start_jiffies() { dx sh -c "cut -d' ' -f22 /proc/\$(pgrep -x $1)/stat"; }
 
-dx sh -c "CCPROXY_PASSWORD=carol-password-0123 ccproxy login --server $CPH --user carol --device carol-linux" || status=1
+docker exec -u cust -e CCPROXY_PASSWORD=carol-password-0123 ccx-desktop ccproxy login --server $CPH --user carol --device carol-linux || status=1
+
+echo "-- the privileged path runs no visitor (PR #64 review)"
+check "ccproxy up (root) has no visitor option" "dx ccproxy up --visitor 2>&1 | grep -q \"unexpected argument '--visitor'\""
+check "the visitor guard refuses root and starts no frpc" \
+  "dx sh -c 'ccproxy --state-dir $STATE visitor --frpc /opt/aifree/frpc < /dev/null 2>&1' | grep -q 'must not run as root' && gone frpc"
+check "ccproxy headless refuses root" "dx ccproxy --state-dir $STATE headless 2>&1 | grep -q 'must not run as root'"
 
 echo "-- a busy local port is reported as such"
 dx sh -c 'nohup python3 -m http.server 20445 --bind 127.0.0.1 >/dev/null 2>&1 &'
@@ -80,8 +93,11 @@ check "visitor files are 0600" \
   "[ \"\$(dx sh -c 'cd $STATE && stat -c %a frpc-visitor.toml frp-ca.pem frp-token visitor.json frpc.log visitor-status.json | sort -u')\" = 600 ]"
 check "the frps token is on no command line" "! dx ps -eo args | grep -qF -- '$FRPS_TOKEN'"
 check "the token reached frpc through its environment" "[ \"\$(frpc_env_token)\" = '$FRPS_TOKEN' ]"
+check "frpc runs as the signed-in user, not root" "[ \"\$(dx ps -o user= -p \$(dx pgrep -x frpc))\" = cust ] && ! dx pgrep -u root -x frpc >/dev/null"
+check "the visitor guard runs as the signed-in user" "[ \"\$(dx ps -o user= -p \$(dx pgrep -f 'ccproxy --state-dir $STATE visitor'))\" = cust ]"
+check "root runs only the supervisor and sing-box" "dx pgrep -u root -f 'ccproxy --state-dir $STATE tunnel' >/dev/null && dx pgrep -u root -x sing-box >/dev/null"
 check "the frps token and visitor key appear in no log, status or info file" \
-  "! dx sh -c 'cat /tmp/up.log $STATE/frpc.log $STATE/visitor-status.json $STATE/visitor.json /var/lib/ccproxy/status.json /var/lib/ccproxy/tunnel.log 2>/dev/null' | grep -q -e '$FRPS_TOKEN' -e 'secretKey'"
+  "! dx sh -c 'cat /tmp/up.log $STATE/frpc.log $STATE/visitor-status.json $STATE/visitor.json /var/lib/ccproxy/status.json /var/lib/ccproxy/tunnel.log /tmp/tunnel.log 2>/dev/null' | grep -q -e '$FRPS_TOKEN' -e 'secretKey'"
 
 echo "-- stop (Ctrl-C): no frpc, no sing-box"
 stop_up
@@ -100,13 +116,12 @@ docker exec ccx-exit sh -c "iptables -D INPUT -p udp -s $IP_DESKTOP -j DROP && i
 echo "-- the client crashes (SIGKILL): frpc goes with it"
 up
 waitfor 90 "visitor ready" "logged 'xtcp visitor: running'" || status=1
-dx pkill -KILL -x ccproxy || true
+dx pkill -KILL -f 'ccproxy headless' || true
 if waitfor 15 "frpc after the crash" "gone frpc"; then echo "PASS frpc exited after the client was killed"
 else echo "FAIL frpc outlived a killed client"; status=1; fi
-# The CLI's in-process supervisor cannot clean up after SIGKILL; the desktop app's separate supervisor stops on its
-# stale heartbeat instead (phase 3b of controlplane/test/run-e2e.sh).
-dx pkill -x sing-box || true
-waitfor 20 "sing-box to stop" "gone sing-box"
+if waitfor 30 "sing-box after the crash" "gone sing-box"; then echo "PASS the supervisor stopped on the stale heartbeat"
+else echo "FAIL sing-box outlived a killed client"; status=1; fi
+waitfor 20 "the supervisor to exit" "gone ccproxy" || status=1
 
 echo "-- the frps token is rotated: the next sync applies it and the tunnel recovers"
 up
@@ -123,7 +138,7 @@ check "the old and new tokens appear in no client log" "! dx sh -c 'cat /tmp/up.
 
 echo "-- the device is revoked: the client signs out, stops, and removes the visitor"
 api POST /admin/users/carol/devices/carol-linux/revoke >/dev/null
-if waitfor 30 "ccproxy to exit after revocation" "gone ccproxy"; then echo "PASS ccproxy up exited after revocation"
+if waitfor 30 "ccproxy to exit after revocation" "gone ccproxy"; then echo "PASS the client and the supervisor exited after revocation"
 else echo "FAIL ccproxy still running after revocation"; status=1; fi
 check "revocation leaves no frpc and no sing-box" "gone frpc && gone sing-box"
 check "session and visitor files removed" \

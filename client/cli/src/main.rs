@@ -5,8 +5,12 @@
 //!   ccproxy status | ccproxy logout
 //!
 //! `ccproxy tunnel` is the privileged half the desktop app launches through the OS authorisation prompt.
-//! `ccproxy visitor` is the unprivileged XTCP visitor guard (frpc) the desktop app starts once the tunnel runs.
-//! `ccproxy up --visitor` runs that same visitor for an exit host on XTCP; without it, a hand-run frpc is expected.
+//! `ccproxy visitor` is the unprivileged XTCP visitor guard (frpc) the desktop app starts once the tunnel runs. It
+//! refuses to run with root or Administrator rights: frpc reads its configuration from the user's state directory,
+//! which only the privileged supervisor's own validation boundary may consume.
+//! `ccproxy headless` is the desktop app's unprivileged half without a window (sync, heartbeat, XTCP visitor); start the
+//! privileged half with `sudo ccproxy --state-dir <dir> tunnel` as the app does through its authorisation prompt.
+//! `ccproxy up` (root) never runs a visitor: on an XTCP exit it expects a hand-run frpc, as before.
 
 use anyhow::{anyhow, bail, Context, Result};
 use ccproxy_core::api::Api;
@@ -61,10 +65,15 @@ enum Cmd {
         interval: u64,
         #[arg(long)]
         singbox: Option<PathBuf>,
-        /// Run the XTCP visitor (frpc) when the exit host uses XTCP, instead of expecting a hand-run frpc.
-        #[arg(long)]
-        visitor: bool,
-        /// frpc for --visitor. Default: next to this executable, else on PATH.
+    },
+    /// The desktop app's unprivileged half without a window: keep the config and the XTCP visitor current and the
+    /// heartbeat fresh. Run as the signed-in user, never as root; start `sudo ccproxy --state-dir <dir> tunnel`
+    /// separately. Stops on Ctrl-C, sign-out or revocation.
+    Headless {
+        /// Seconds between config checks.
+        #[arg(long, default_value_t = 30)]
+        interval: u64,
+        /// frpc for the XTCP visitor. Default: next to this executable, else on PATH.
         #[arg(long)]
         frpc: Option<PathBuf>,
     },
@@ -199,38 +208,33 @@ fn main() -> Result<()> {
             visitor::watch_stdin(eof.clone());
             visitor::run_guard(&paths, &find_sidecar(frpc, "frpc"), eof)?;
         }
-        Cmd::Up { interval, singbox, visitor, frpc } => {
-            let launcher = visitor.then(|| visitor::Launcher {
+        Cmd::Up { interval, singbox } => up(&paths, DEFAULT_MODE, interval, find_singbox(singbox))?,
+        Cmd::Headless { interval, frpc } => {
+            visitor::ensure_unprivileged()?;
+            let launcher = visitor::Launcher {
                 ccproxy: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ccproxy")),
                 frpc: find_sidecar(frpc, "frpc"),
-            });
-            up(&paths, DEFAULT_MODE, interval, find_singbox(singbox), launcher)?
+            };
+            headless(&paths, DEFAULT_MODE, interval, &launcher)?
         }
     }
     Ok(())
 }
 
-/// Headless client: poller on this thread, supervisor on another, sharing the state directory. With `launcher`
-/// (`--visitor`), the XTCP visitor runs too: started once the supervisor reports the tunnel running, restarted when
-/// its settings change, stopped on the way out.
-fn up(paths: &Paths, mode: &str, interval: u64, singbox: PathBuf, launcher: Option<visitor::Launcher>) -> Result<()> {
+/// Headless client: poller on this thread, supervisor on another, sharing the state directory.
+fn up(paths: &Paths, mode: &str, interval: u64, singbox: PathBuf) -> Result<()> {
     let session = require_session(paths)?;
-    let sync = |paths: &Paths, session: &Session| {
-        if launcher.is_some() { sync_with_visitor(paths, session, mode) } else { sync_once(paths, session, mode) }
-    };
-    match sync(paths, &session)? {
+    match sync_once(paths, &session, mode)? {
         SyncOutcome::SignedOut => bail!("session is no longer valid; sign in again"),
         SyncOutcome::Unassigned(msg) => bail!("{msg}"),
-        SyncOutcome::XtcpUnavailable(msg) => bail!("XTCP visitor unavailable: {msg}"),
         _ => {}
     }
-    if launcher.is_none() && visitor::required(paths) {
-        println!("note: the exit host uses XTCP; run frpc yourself or pass --visitor");
+    if visitor::required(paths) {
+        println!("note: the exit host uses XTCP; run frpc as the visitor yourself (ccproxy up never runs one)");
     }
     let _ = std::fs::remove_file(paths.stop());
     supervisor::install_signal_handlers();
     let done = Arc::new(AtomicBool::new(false));
-    let started = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let sup = {
         let (opts, done) = (options(paths, singbox, None), done.clone());
         std::thread::spawn(move || {
@@ -240,48 +244,99 @@ fn up(paths: &Paths, mode: &str, interval: u64, singbox: PathBuf, launcher: Opti
         })
     };
     println!("tunnel up; checking for config changes every {interval}s (Ctrl-C to stop)");
-    let mut proc = VisitorProcess::default();
-    let mut shown = String::new();
     let mut next = Instant::now() + Duration::from_secs(interval);
     while !done.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(250));
-        if let Some(launcher) = &launcher {
-            // The TUN first, then frpc: its punched path must not move when the TUN takes over routing.
-            let tunnel_running = Status::current().is_some_and(|s| s.state == "running" && s.updated >= started);
-            if tunnel_running {
-                if let Err(e) = proc.ensure(paths, launcher) {
-                    eprintln!("could not start the XTCP visitor: {e:#}");
-                }
-            }
-            if let Some((state, message)) = visitor::tunnel_view(paths) {
-                let line = format!("xtcp visitor: {state} {message}");
-                if line != shown {
-                    println!("{line}");
-                    shown = line;
-                }
-            }
-        }
         if Instant::now() < next {
             continue;
         }
         next = Instant::now() + Duration::from_secs(interval);
-        match sync(paths, &session) {
+        match sync_once(paths, &session, mode) {
             Ok(SyncOutcome::Updated) => println!("config updated"),
             Ok(SyncOutcome::Unchanged) => {}
             Ok(SyncOutcome::SignedOut) => println!("signed out by the server; stopping"),
             Ok(SyncOutcome::Unassigned(msg)) => println!("{msg}; stopping"),
             Ok(SyncOutcome::Superseded) => println!("signed in again elsewhere in this state directory; stopping"),
+            Ok(SyncOutcome::XtcpUnavailable(_)) => {} // sync_once never fetches the visitor
+            Err(e) => eprintln!("config check failed (keeping the current config): {e:#}"),
+        }
+    }
+    sup.join().map_err(|_| anyhow!("supervisor panicked"))?.context("tunnel")?;
+    if let Some(st) = Status::current() {
+        println!("tunnel {}: {}", st.state, st.message);
+    }
+    Ok(())
+}
+
+/// The desktop app's unprivileged half, headless: sync config and visitor, keep the heartbeat fresh, and run the XTCP
+/// visitor (as this user) once the separately started privileged supervisor reports the tunnel running.
+fn headless(paths: &Paths, mode: &str, interval: u64, launcher: &visitor::Launcher) -> Result<()> {
+    let session = require_session(paths)?;
+    match sync_with_visitor(paths, &session, mode)? {
+        SyncOutcome::SignedOut => bail!("session is no longer valid; sign in again"),
+        SyncOutcome::Unassigned(msg) => bail!("{msg}"),
+        SyncOutcome::XtcpUnavailable(msg) => bail!("XTCP visitor unavailable: {msg}"),
+        _ => {}
+    }
+    let started = ccproxy_core::commands::now();
+    let _ = std::fs::remove_file(paths.stop());
+    ccproxy_core::commands::touch(&paths.heartbeat());
+    supervisor::install_signal_handlers();
+    println!("ready; start the tunnel with: sudo ccproxy --state-dir {} tunnel", paths.dir.display());
+    let mut proc = VisitorProcess::default();
+    let mut shown = String::new();
+    let mut next_sync = Instant::now() + Duration::from_secs(interval);
+    let mut next_beat = Instant::now();
+    loop {
+        std::thread::sleep(Duration::from_millis(250));
+        if supervisor::interrupted() {
+            println!("stopping");
+            break;
+        }
+        if Instant::now() >= next_beat {
+            ccproxy_core::commands::touch(&paths.heartbeat());
+            next_beat = Instant::now() + Duration::from_secs(5);
+        }
+        // The TUN first, then frpc: its punched path must not move when the TUN takes over routing.
+        if Status::current().is_some_and(|s| s.state == "running" && s.updated >= started) {
+            if let Err(e) = proc.ensure(paths, launcher) {
+                eprintln!("could not start the XTCP visitor: {e:#}");
+            }
+        }
+        if let Some((state, message)) = visitor::tunnel_view(paths) {
+            let line = format!("xtcp visitor: {state} {message}");
+            if line != shown {
+                println!("{line}");
+                shown = line;
+            }
+        }
+        if Instant::now() < next_sync {
+            continue;
+        }
+        next_sync = Instant::now() + Duration::from_secs(interval);
+        match sync_with_visitor(paths, &session, mode) {
+            Ok(SyncOutcome::Updated) => println!("config updated"),
+            Ok(SyncOutcome::Unchanged) => {}
+            Ok(SyncOutcome::SignedOut) => {
+                println!("signed out by the server; stopping");
+                break;
+            }
+            Ok(SyncOutcome::Unassigned(msg)) => {
+                println!("{msg}; stopping");
+                break;
+            }
+            Ok(SyncOutcome::Superseded) => {
+                println!("signed in again elsewhere in this state directory; stopping");
+                break;
+            }
             Ok(SyncOutcome::XtcpUnavailable(msg)) => {
                 println!("XTCP visitor unavailable: {msg}; stopping");
-                ccproxy_core::commands::touch(&paths.stop());
+                break;
             }
             Err(e) => eprintln!("config check failed (keeping the current config): {e:#}"),
         }
     }
     proc.stop();
-    sup.join().map_err(|_| anyhow!("supervisor panicked"))?.context("tunnel")?;
-    if let Some(st) = Status::current() {
-        println!("tunnel {}: {}", st.state, st.message);
-    }
+    ccproxy_core::commands::touch(&paths.stop());
     Ok(())
 }

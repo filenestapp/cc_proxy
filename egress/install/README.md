@@ -108,7 +108,7 @@ measurement and rollout.
 A host can use frp XTCP instead of a public entry. The exit host runs frpc next to sing-box. frpc registers one
 `xtcp` proxy with the frps rendezvous service and forwards it to sing-box on `127.0.0.1:<entry port>`. The user's
 machine runs the matching frpc visitor and points aifree at the visitor's local port. The desktop app does this by
-itself (see **Customer devices** below); CLI users run the visitor by hand or with `ccproxy up --visitor`. frps only brokers the
+itself (see **Customer devices** below); CLI users run the visitor by hand, or unprivileged with `ccproxy headless` (see client/README.md). frps only brokers the
 rendezvous. The two machines punch a direct UDP path (QUIC) and the data flows between them. The exit side has no
 relay option, and a visitor without `fallbackTo` closes the connection when hole punching fails. No traffic falls
 back to frps.

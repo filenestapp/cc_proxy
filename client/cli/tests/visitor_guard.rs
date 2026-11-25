@@ -13,35 +13,43 @@ use std::time::{Duration, Instant};
 const TOKEN: &str = "frps-token-0123456789abcdef";
 const SECRET: &str = "scoped-key-0123456789abcdef";
 
-const FAKE_FRPC: &str = r#"#!/bin/sh
-# Fake frpc 0.72.0: records how it was started, then prints the log lines for the mode in ./fake-mode.
-echo "$@" > argv.txt
-printf '%s' "$FRP_AUTH_TOKEN" > env-token.txt
-echo $$ >> launches.txt
-mode=$(cat fake-mode 2>/dev/null || echo ready)
-echo "2026-11-25 10:00:00.300 [I] [client/service.go:369] try to connect to server..."
-echo "2026-11-25 10:00:00.301 [D] [client/service.go:370] debug dump: token=$FRP_AUTH_TOKEN"
-case "$mode" in
-  ready)
-    echo "2026-11-25 10:00:00.400 [I] [client/service.go:389] [7f3c] login to server success, get run id [7f3c]"
-    echo "2026-11-25 10:00:01.123 [I] [client/visitor/visitor_manager.go:135] [7f3c] start visitor success"
-    sleep 0.3
-    echo "2026-11-25 10:00:03.456 [I] [client/visitor/xtcp.go:312] [7f3c] [v] establishing nat hole connection successful, sid [1], remoteAddr [203.0.113.9:41000]"
-    ;;
-  busy)
-    echo "2026-11-25 10:00:01.000 [W] [client/visitor/visitor_manager.go:132] [7f3c] start error: listen tcp 127.0.0.1:20440: bind: address already in use"
-    ;;
-  token)
-    echo "2026-11-25 10:00:00.500 [W] [client/service.go:380] connect to server error: token in login doesn't match token from configuration"
-    echo "login to the server failed: token in login doesn't match token from configuration. With loginFailExit enabled, no additional retries will be attempted"
-    exit 1
-    ;;
-  punch)
-    echo "2026-11-25 10:00:01.123 [I] [client/visitor/visitor_manager.go:135] [7f3c] start visitor success"
-    echo "2026-11-25 10:00:05.000 [W] [client/visitor/xtcp.go:308] [7f3c] [v] make hole error: wait detect message timeout"
-    ;;
-esac
-exec sleep 1000
+/// Fake frpc 0.72.0, compiled once per test so it is one process named frpc from start to end (as the real one is):
+/// it records how it was started, prints the log lines for the mode in ./fake-mode, then waits.
+const FAKE_FRPC_C: &str = r#"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+static void line(const char *s) { printf("%s\n", s); fflush(stdout); }
+int main(int argc, char **argv) {
+    FILE *f = fopen("argv.txt", "w");
+    for (int i = 1; i < argc; i++) fprintf(f, "%s%s", i > 1 ? " " : "", argv[i]);
+    fprintf(f, "\n"); fclose(f);
+    const char *token = getenv("FRP_AUTH_TOKEN");
+    f = fopen("env-token.txt", "w"); fputs(token ? token : "", f); fclose(f);
+    f = fopen("launches.txt", "a"); fprintf(f, "%d\n", (int)getpid()); fclose(f);
+    char mode[32] = "ready";
+    f = fopen("fake-mode", "r");
+    if (f) { if (fscanf(f, "%31s", mode) != 1) strcpy(mode, "ready"); fclose(f); }
+    line("2026-11-25 10:00:00.300 [I] [client/service.go:369] try to connect to server...");
+    printf("2026-11-25 10:00:00.301 [D] [client/service.go:370] debug dump: token=%s\n", token ? token : ""); fflush(stdout);
+    if (!strcmp(mode, "ready")) {
+        line("2026-11-25 10:00:00.400 [I] [client/service.go:389] [7f3c] login to server success, get run id [7f3c]");
+        line("2026-11-25 10:00:01.123 [I] [client/visitor/visitor_manager.go:135] [7f3c] start visitor success");
+        usleep(300000);
+        line("2026-11-25 10:00:03.456 [I] [client/visitor/xtcp.go:312] [7f3c] [v] establishing nat hole connection successful, sid [1], remoteAddr [203.0.113.9:41000]");
+    } else if (!strcmp(mode, "busy")) {
+        line("2026-11-25 10:00:01.000 [W] [client/visitor/visitor_manager.go:132] [7f3c] start error: listen tcp 127.0.0.1:20440: bind: address already in use");
+    } else if (!strcmp(mode, "token")) {
+        line("2026-11-25 10:00:00.500 [W] [client/service.go:380] connect to server error: token in login doesn't match token from configuration");
+        line("login to the server failed: token in login doesn't match token from configuration. With loginFailExit enabled, no additional retries will be attempted");
+        return 1;
+    } else if (!strcmp(mode, "punch")) {
+        line("2026-11-25 10:00:01.123 [I] [client/visitor/visitor_manager.go:135] [7f3c] start visitor success");
+        line("2026-11-25 10:00:05.000 [W] [client/visitor/xtcp.go:308] [7f3c] [v] make hole error: wait detect message timeout");
+    }
+    for (;;) sleep(1000);
+}
 "#;
 
 struct Env {
@@ -54,8 +62,10 @@ fn env(tag: &str) -> Env {
     let _ = fs::remove_dir_all(&root);
     let paths = Paths::new(Some(root.join("state"))).unwrap();
     let frpc = root.join("frpc");
-    fs::write(&frpc, FAKE_FRPC).unwrap();
-    fs::set_permissions(&frpc, fs::Permissions::from_mode(0o755)).unwrap();
+    let src = root.join("fake-frpc.c");
+    fs::write(&src, FAKE_FRPC_C).unwrap();
+    let built = Command::new("cc").arg("-O0").arg("-o").arg(&frpc).arg(&src).output().expect("a C compiler (cc)");
+    assert!(built.status.success(), "cc: {}", String::from_utf8_lossy(&built.stderr));
     Session::new("http://127.0.0.1:9".into(), "bob".into(), "bob-mac".into(), "device-token".into()).save(&paths).unwrap();
     configure(&paths, TOKEN);
     Env { paths, frpc }
@@ -137,7 +147,12 @@ fn guard_reports_ready_keeps_the_token_off_the_command_line_and_stops_when_stdin
     assert_eq!(fs::metadata(e.paths.visitor_log()).unwrap().permissions().mode() & 0o777, 0o600);
     let status = fs::read_to_string(e.paths.visitor_status()).unwrap();
     assert!(!status.contains(TOKEN) && !status.contains(SECRET));
-    assert_eq!(fs::read_to_string(e.paths.visitor_pid()).unwrap().trim(), pid.to_string());
+    let record: visitor::FrpcRecord = serde_json::from_slice(&fs::read(e.paths.visitor_pid()).unwrap()).unwrap();
+    assert_eq!((record.frpc, record.guard), (pid as u32, g.id()));
+    assert_eq!(Some(record.identity), visitor::process_identity(pid as u32), "the record names this frpc's identity");
+    // The visitor runs with the caller's identity, never elevated.
+    let uid = String::from_utf8(Command::new("ps").args(["-p", &pid.to_string(), "-o", "uid="]).output().unwrap().stdout).unwrap();
+    assert_eq!(uid.trim().parse::<u32>().unwrap(), unsafe { libc::geteuid() });
 
     drop(g.stdin.take()); // Disconnect: the app closes the guard's stdin.
     assert!(exited_within(&mut g, Duration::from_secs(5)).unwrap().success());
@@ -297,25 +312,147 @@ fn the_controller_restarts_only_for_a_new_configuration() {
     cleanup(&e);
 }
 
+/// PR #64 review: opening the desktop app again must not take down the visitor of the instance that is connected.
+/// The cleanup a launch runs (kill_stale) leaves an frpc alone while its guard runs, whichever process calls it.
 #[test]
-fn a_leftover_frpc_is_killed_but_an_unrelated_process_is_not() {
-    let e = env("stale");
-    let mut stray = Command::new("sleep").arg("1000").spawn().unwrap();
-    fs::write(e.paths.visitor_pid(), stray.id().to_string()).unwrap();
+fn a_second_launch_keeps_the_live_visitor() {
+    let e = env("second-launch");
+    let l = launcher(&e);
+    let mut first = VisitorProcess::default();
+    first.ensure(&e.paths, &l).unwrap();
+    wait_for("ready", || state_of(&e.paths).as_deref() == Some("ready"));
+    let pid = launches(&e.paths)[0];
+
+    // A second launch, and the primary's own cleanup later on: neither touches the working visitor.
+    for _ in 0..3 {
+        visitor::kill_stale(&e.paths);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(alive(pid), "the live frpc must survive the cleanup");
+    assert!(first.is_running());
+    assert_eq!(state_of(&e.paths).as_deref(), Some("ready"));
+    assert!(e.paths.visitor_pid().exists(), "the pid file of a live visitor stays");
+    // And the first instance still controls it: a later ensure keeps it, a stop ends it.
+    first.ensure(&e.paths, &l).unwrap();
+    assert_eq!(launches(&e.paths).len(), 1);
+    drop(first);
+    wait_for("frpc to exit", || !alive(pid));
+    cleanup(&e);
+}
+
+/// A guard killed outright leaves an orphaned frpc on macOS (Linux kills it by parent-death signal). The next owner
+/// of the session removes it.
+#[test]
+fn an_orphan_whose_guard_was_killed_is_removed() {
+    let e = env("orphan");
+    let mut g = guard(&e, Stdio::piped());
+    wait_for("ready", || state_of(&e.paths).as_deref() == Some("ready"));
+    let pid = launches(&e.paths)[0];
+    g.kill().unwrap();
+    g.wait().unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    if cfg!(target_os = "macos") {
+        assert!(alive(pid), "on macOS the frpc of a killed guard survives as an orphan");
+    }
     visitor::kill_stale(&e.paths);
-    assert!(stray.try_wait().unwrap().is_none(), "a process that is not frpc is left alone");
+    wait_for("the orphan to exit", || !alive(pid));
     assert!(!e.paths.visitor_pid().exists());
+    cleanup(&e);
+}
+
+fn record(paths: &Paths, frpc: u32, guard: u32, identity: &str) {
+    let r = visitor::FrpcRecord { frpc, guard, identity: identity.into() };
+    fs::write(paths.visitor_pid(), serde_json::to_vec(&r).unwrap()).unwrap();
+}
+
+fn running(child: &mut Child) -> bool {
+    child.try_wait().unwrap().is_none()
+}
+
+#[test]
+fn only_a_verified_orphan_is_killed() {
+    let e = env("stale");
+    let root = e.paths.dir.parent().unwrap().to_path_buf();
+    let frpc = e.frpc.clone();
+    let dead_guard = {
+        let mut c = Command::new("true").spawn().unwrap();
+        let id = c.id();
+        c.wait().unwrap();
+        id
+    };
+    let start = |program: &Path| {
+        let c = Command::new(program).arg("1000").current_dir(&root).stdout(Stdio::null()).spawn().unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        c
+    };
+
+    // A process that is not frpc is never killed, even with its own identity recorded.
+    let mut stray = start(Path::new("/bin/sleep"));
+    record(&e.paths, stray.id(), dead_guard, &visitor::process_identity(stray.id()).unwrap());
+    visitor::kill_stale(&e.paths);
+    assert!(running(&mut stray), "a process that is not frpc is left alone");
     stray.kill().unwrap();
     stray.wait().unwrap();
 
-    // A real leftover: an frpc-named process.
-    let named = e.paths.dir.parent().unwrap().join("bin");
-    fs::create_dir_all(&named).unwrap();
-    let frpc = named.join("frpc");
-    fs::copy(Path::new("/bin/sleep"), &frpc).unwrap();
-    let mut left = Command::new(&frpc).arg("1000").spawn().unwrap();
-    fs::write(e.paths.visitor_pid(), left.id().to_string()).unwrap();
+    // A bare pid (no guard, no identity) cannot prove ownership: its frpc is left alone.
+    let mut unproven = start(&frpc);
+    fs::write(e.paths.visitor_pid(), unproven.id().to_string()).unwrap();
     visitor::kill_stale(&e.paths);
-    assert!(exited_within(&mut left, Duration::from_secs(5)).is_some(), "the leftover frpc is killed");
+    assert!(running(&mut unproven), "an frpc whose ownership is unknown is left alone");
+    unproven.kill().unwrap();
+    unproven.wait().unwrap();
+
+    // PID reuse: the recorded guard is dead and a process named frpc sits at the recorded pid, but it is not the frpc
+    // that was recorded (another start time and command line). It is preserved, and the stale record dropped.
+    let mut reused = start(&frpc);
+    assert!(running(&mut reused));
+    record(&e.paths, reused.id(), dead_guard, &format!("Thu Jan  1 00:00:00 1970     {} -c /old/frpc-visitor.toml", frpc.display()));
+    visitor::kill_stale(&e.paths);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(running(&mut reused), "an unrelated frpc that reused the pid is preserved");
+    assert!(!e.paths.visitor_pid().exists(), "the stale record is dropped");
+    // Same pid and name, identity recorded for a different command line: also not ours.
+    let id = visitor::process_identity(reused.id()).unwrap();
+    record(&e.paths, reused.id(), dead_guard, &id.replace("1000", "999"));
+    visitor::kill_stale(&e.paths);
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(running(&mut reused), "a different command line is a different process");
+    reused.kill().unwrap();
+    reused.wait().unwrap();
+
+    // The recorded frpc itself, its guard gone and not its child: the orphan is killed.
+    let mut left = start(&frpc);
+    assert!(running(&mut left), "the stand-in frpc runs");
+    record(&e.paths, left.id(), dead_guard, &visitor::process_identity(left.id()).unwrap());
+    visitor::kill_stale(&e.paths);
+    assert!(exited_within(&mut left, Duration::from_secs(5)).is_some(), "the orphaned frpc is killed");
+    assert!(!e.paths.visitor_pid().exists());
     cleanup(&e);
+}
+
+/// PR #64 review: the visitor never runs with elevated rights. `ccproxy up` (root) has no visitor option, and the
+/// guard and `ccproxy headless` refuse root. The refusal itself can only be exercised as root: here when the tests
+/// run as root, and always in the Docker e2e (controlplane/test/xtcp/desktop-phase.sh).
+#[test]
+fn the_privileged_cli_path_runs_no_visitor() {
+    let ccproxy = env!("CARGO_BIN_EXE_ccproxy");
+    let out = Command::new(ccproxy).args(["up", "--visitor"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "clap rejects the removed flag");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unexpected argument '--visitor'"));
+    let help = String::from_utf8(Command::new(ccproxy).args(["up", "--help"]).output().unwrap().stdout).unwrap();
+    assert!(!help.contains("visitor") && !help.contains("frpc"), "{help}");
+
+    if unsafe { libc::geteuid() } == 0 {
+        let e = env("root");
+        for args in [vec!["visitor", "--frpc"], vec!["headless", "--frpc"]] {
+            let out = Command::new(ccproxy).arg("--state-dir").arg(&e.paths.dir).args(&args).arg(&e.frpc)
+                .stdin(Stdio::null()).output().unwrap();
+            assert!(!out.status.success());
+            assert!(String::from_utf8_lossy(&out.stderr).contains("must not run as root"), "{args:?}");
+        }
+        assert!(launches(&e.paths).is_empty(), "no frpc was started as root");
+        cleanup(&e);
+    } else {
+        eprintln!("as a regular user: the root refusal is covered by the Docker e2e");
+    }
 }

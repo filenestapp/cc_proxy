@@ -68,7 +68,8 @@ pub fn sync_with_visitor(paths: &Paths, session: &Session, mode: &str) -> Result
         VisitorSync::Superseded => return Ok(SyncOutcome::Superseded),
         VisitorSync::Unavailable(msg) => return Ok(SyncOutcome::XtcpUnavailable(msg)),
         VisitorSync::Updated => true,
-        VisitorSync::NotNeeded | VisitorSync::Unchanged => false,
+        // An older control plane without the endpoint: connect exactly as before this feature.
+        VisitorSync::NotNeeded | VisitorSync::Unchanged | VisitorSync::Unsupported => false,
     };
     if let Err(e) = visitor::check_entry(paths) {
         let _g = session::lock();

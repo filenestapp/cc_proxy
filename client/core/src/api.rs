@@ -54,6 +54,9 @@ pub enum VisitorFetch {
     Unauthorized,
     /// 409: no visitor can be given (no exit, no mapping, or the host is misconfigured). Carries the reason.
     Unavailable(String),
+    /// 404: a control plane from before issue #61, without the endpoint. It cannot hand out a visitor, so the client
+    /// keeps the previous behaviour: a public-entry host works as before, an XTCP host needs a hand-run visitor.
+    Unsupported,
 }
 
 #[derive(Debug)]
@@ -172,6 +175,7 @@ impl Api {
             Err(ureq::Error::Status(304, _)) => Ok(VisitorFetch::NotModified),
             Err(ureq::Error::Status(401, _)) => Ok(VisitorFetch::Unauthorized),
             Err(ureq::Error::Status(409, resp)) => Ok(VisitorFetch::Unavailable(error_message(resp))),
+            Err(ureq::Error::Status(404, _)) => Ok(VisitorFetch::Unsupported),
             Err(ureq::Error::Status(_, resp)) => Err(anyhow!(error_message(resp))),
             Err(e) => Err(anyhow!(e)).context("contacting control plane"),
         }

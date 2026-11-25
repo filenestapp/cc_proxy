@@ -342,8 +342,6 @@ fn background(app: Arc<App>) {
 
 fn main() {
     let paths = Paths::new(None).expect("state directory");
-    // An frpc a killed guard left behind (macOS cannot tie it to the guard's lifetime).
-    visitor::kill_stale(&paths);
     let app = Arc::new(App {
         paths,
         tunnel: Tunnel::default(),
@@ -358,6 +356,10 @@ fn main() {
         .manage(app)
         .setup(|app| {
             let state = app.state::<Arc<App>>();
+            // Only the primary instance gets here: the single-instance plugin ends a second launch while the app is
+            // built, before setup. So this never touches the visitor of an instance that is already connected, and
+            // kill_stale itself only removes an frpc whose guard is gone.
+            visitor::kill_stale(&state.paths);
             let heartbeat = state.inner().clone();
             let exit = state.inner().clone();
             std::thread::spawn(move || background(heartbeat));

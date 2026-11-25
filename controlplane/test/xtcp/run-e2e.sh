@@ -10,8 +10,8 @@
 #            from aifree's own client config (/v1/config?mode=proxy) on 127.0.0.1:2080
 #   echo     answers with the caller's IPv4 (and /big with 20 MB); also target.test (a client rule domain)
 #   cp-http  the same control plane over plain HTTP, for the ccproxy client (its TLS trusts public roots only)
-#   desktop  the real ccproxy client (client/cli, Linux TUN, app mode) with `up --visitor`: it fetches its own
-#            visitor from /v1/xtcp-visitor and runs frpc 0.72.0 laid out next to it as the desktop bundle ships it
+#   desktop  the real ccproxy client (client/cli, Linux TUN, app mode), split as the desktop app is: the user runs
+#            `ccproxy headless` (visitor from /v1/xtcp-visitor, frpc 0.72.0 as that user), root only `ccproxy tunnel`
 #
 # Checks: XTCP registration; the agent's XTCP sync under systemd (installed file confirmed without reload, a second
 # shared port hot-reloaded and confirmed without rerunning the installer, release removes the proxy, ready after a
@@ -80,7 +80,7 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca
  && rm -rf /var/lib/apt/lists/*
 EOF
 # The ccproxy client for Linux (static musl build). frpc and sing-box are mounted next to it, where the desktop bundle
-# puts them, so `ccproxy up --visitor` finds them without flags.
+# puts them, so `ccproxy headless` finds them without flags.
 docker build -q -t ccx-desktop -f - "$REPO/client" >/dev/null <<'EOF'
 FROM rust:1.95-alpine AS build
 RUN apk add --no-cache musl-dev

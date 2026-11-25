@@ -83,6 +83,11 @@ extern "C" fn on_signal(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
+/// Whether Ctrl-C / SIGTERM arrived since [`install_signal_handlers`].
+pub fn interrupted() -> bool {
+    INTERRUPTED.load(Ordering::SeqCst)
+}
+
 /// Stop cleanly on Ctrl-C / SIGTERM (Unix). Windows ends the child with the console session.
 pub fn install_signal_handlers() {
     #[cfg(unix)]

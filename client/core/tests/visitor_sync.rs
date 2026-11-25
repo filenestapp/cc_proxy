@@ -208,3 +208,64 @@ fn the_combined_sync_requires_the_tunnel_to_dial_the_visitor() {
     assert!(!visitor::required(&paths) && !paths.config().exists());
     fs::remove_dir_all(&paths.dir).unwrap();
 }
+
+/// What the desktop app runs on Connect, with the real sync and a stub launch.
+struct ConnectFx;
+
+impl ccproxy_core::commands::Effects for ConnectFx {
+    fn sync(&self, paths: &Paths, session: &Session) -> anyhow::Result<SyncOutcome> {
+        sync_with_visitor(paths, session, "app")
+    }
+    fn launch_supervisor(&self, _: &Paths) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn remote_logout(&self, _: &Session) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// PR #64 review: a desktop release that ships ahead of the server must still connect. A control plane from before
+/// issue #61 answers 404 for /v1/xtcp-visitor; the client then behaves as before the feature.
+#[test]
+fn an_older_control_plane_without_the_visitor_endpoint_still_connects() {
+    use ccproxy_core::commands::{connect, ConnectError, Connected, Tunnel};
+    let paths = state("older");
+    let srv = server();
+    let session = signed_in(&paths, &srv.url);
+    // The old server's router: 404 with its JSON error body.
+    srv.route("/v1/xtcp-visitor", status(404, r#"{"error":"not found"}"#));
+
+    // A public-entry host: Connect succeeds as it did before.
+    srv.route("/v1/config", ok("c1", &singbox_json("203.0.113.5", 20440)));
+    let tunnel = Tunnel::default();
+    assert_eq!(connect(&paths, &tunnel, &ConnectFx), Ok(Connected::Started));
+    assert!(paths.config().exists() && !visitor::required(&paths));
+    assert_eq!(sync_visitor(&paths, &session).unwrap(), VisitorSync::Unsupported);
+
+    // An XTCP host with a hand-run visitor (public entry 127.0.0.1): Connect still succeeds, the app runs no visitor.
+    srv.route("/v1/config", ok("c2", &singbox_json("127.0.0.1", 20440)));
+    assert_eq!(connect(&paths, &tunnel, &ConnectFx), Ok(Connected::Started));
+    assert!(!visitor::required(&paths));
+
+    // Visitor files from a newer server that was rolled back are dropped, not run against the old one.
+    srv.route("/v1/xtcp-visitor", ok("v1", &visitor_json("frps-token-0123456789abcdef", 20440, "ready")));
+    assert_eq!(sync_with_visitor(&paths, &session, "app").unwrap(), SyncOutcome::Updated);
+    assert!(visitor::required(&paths));
+    srv.route("/v1/config", status(304, ""));
+    srv.route("/v1/xtcp-visitor", status(404, r#"{"error":"not found"}"#));
+    assert_eq!(sync_with_visitor(&paths, &session, "app").unwrap(), SyncOutcome::Unchanged);
+    assert!(!visitor::required(&paths));
+
+    // Real service errors and authentication keep their normal handling.
+    srv.route("/v1/xtcp-visitor", status(500, r#"{"error":"internal server error"}"#));
+    match connect(&paths, &tunnel, &ConnectFx) {
+        Err(ConnectError::Configuration(m)) => assert!(m.contains("internal server error"), "{m}"),
+        other => panic!("a 500 must fail Connect: {other:?}"),
+    }
+    srv.route("/v1/xtcp-visitor", status(503, ""));
+    assert!(sync_with_visitor(&paths, &session, "app").is_err());
+    srv.route("/v1/xtcp-visitor", status(401, ""));
+    assert_eq!(connect(&paths, &tunnel, &ConnectFx), Err(ConnectError::SessionExpired));
+    assert!(Session::load(&paths).is_none());
+    fs::remove_dir_all(&paths.dir).unwrap();
+}

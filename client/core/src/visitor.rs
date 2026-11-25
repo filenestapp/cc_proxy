@@ -244,6 +244,9 @@ pub enum VisitorSync {
     SignedOut,
     /// The control plane cannot give this device a visitor (409): carries its message. Visitor files were removed.
     Unavailable(String),
+    /// The control plane predates `/v1/xtcp-visitor` (404). No visitor is run (any visitor files were removed); the
+    /// tunnel works as before: directly on a public-entry host, through a hand-run visitor on an XTCP host.
+    Unsupported,
     /// The session changed while the request was in flight; the reply was dropped.
     Superseded,
 }
@@ -270,6 +273,10 @@ pub fn sync_visitor(paths: &Paths, session: &Session) -> Result<VisitorSync> {
         VisitorFetch::Unavailable(msg) => {
             remove_config_files(paths);
             Ok(VisitorSync::Unavailable(msg))
+        }
+        VisitorFetch::Unsupported => {
+            remove_config_files(paths);
+            Ok(VisitorSync::Unsupported)
         }
         VisitorFetch::Changed { etag, body } => {
             let spec: VisitorSpec = serde_json::from_slice(&body).context("visitor settings are not valid JSON")?;
@@ -523,6 +530,7 @@ fn terminate(child: &mut Child) {
 /// `ccproxy visitor`: run frpc for the visitor files in `paths` until stdin closes, the configuration is removed or
 /// frpc fails. Never retries by itself; the app decides (see [`VisitorProcess`]).
 pub fn run_guard(paths: &Paths, frpc: &Path, stdin_eof: Arc<AtomicBool>) -> Result<()> {
+    ensure_unprivileged()?;
     let fingerprint = fingerprint(paths).ok_or_else(|| anyhow!("no XTCP visitor is configured"))?;
     let token = fs::read_to_string(paths.visitor_token())?.trim().to_string();
     let toml = fs::read_to_string(paths.visitor_toml())?;
@@ -543,7 +551,7 @@ pub fn run_guard(paths: &Paths, frpc: &Path, stdin_eof: Arc<AtomicBool>) -> Resu
             return Err(e);
         }
     };
-    let _ = write_atomic(&paths.visitor_pid(), child.id().to_string().as_bytes(), false);
+    write_pidfile(paths, child.id());
 
     let (tx, rx) = mpsc::channel::<String>();
     for out in [child.stdout.take().map(|o| Box::new(o) as Box<dyn Read + Send>),
@@ -731,34 +739,143 @@ impl Drop for VisitorProcess {
     }
 }
 
-/// Kill an frpc a previous guard left behind (the guard itself was killed outright, which on macOS leaves frpc
-/// running). Only a process that still is frpc is touched.
+/// Refuse root (Unix) and Administrator (Windows): the visitor reads its configuration from the user's state
+/// directory, which a privileged process must never consume without the supervisor's validation boundary. The
+/// desktop app and `ccproxy headless` run as the signed-in user; `ccproxy up` (root) runs no visitor.
+pub fn ensure_unprivileged() -> Result<()> {
+    if running_privileged() {
+        bail!("the XTCP visitor must not run as root or Administrator; run it as the signed-in user");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn running_privileged() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(windows)]
+fn running_privileged() -> bool {
+    unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 }
+}
+
+/// What the guard records about the frpc it runs, so a later cleanup can tell its own orphan from a live visitor and
+/// from an unrelated process that reused the pid.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrpcRecord {
+    pub frpc: u32,
+    pub guard: u32,
+    /// [`process_identity`] of frpc right after it started: start time and command line.
+    pub identity: String,
+}
+
+fn write_pidfile(paths: &Paths, frpc: u32) {
+    // Without an identity no later cleanup could prove ownership, so record nothing rather than a bare pid.
+    let Some(identity) = process_identity(frpc) else { return };
+    let record = FrpcRecord { frpc, guard: std::process::id(), identity };
+    if let Ok(data) = serde_json::to_vec(&record) {
+        let _ = write_atomic(&paths.visitor_pid(), &data, true);
+    }
+}
+
+fn read_pidfile(paths: &Paths) -> Option<FrpcRecord> {
+    serde_json::from_slice::<FrpcRecord>(&fs::read(paths.visitor_pid()).ok()?).ok()
+        .filter(|r| r.frpc > 1 && r.guard > 1 && !r.identity.is_empty())
+}
+
+/// A process's identity: its start time and full command line, as `ps` reports them (Unix). None where it cannot be
+/// read, including on Windows, where the guard's kill-on-close job object already ends frpc with its guard.
+pub fn process_identity(pid: u32) -> Option<String> {
+    #[cfg(unix)]
+    {
+        let out = Command::new("ps").env("LC_ALL", "C").args(["-p", &pid.to_string(), "-o", "lstart=", "-o", "command="])
+            .output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !text.is_empty()).then_some(text)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+fn process_exists(pid: u32) -> bool {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(pid as libc::pid_t, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true // unknown: treat as present, so nothing is removed or signalled
+    }
+}
+
+/// Kill an frpc that a killed guard left behind (on macOS frpc cannot be tied to the guard's lifetime). It fails closed:
+/// a process is signalled only when all of these hold, else it is left alone.
+///
+/// * The pid file names frpc, its guard and frpc's identity (start time and command line).
+/// * The process now at that pid has exactly that identity, so a pid reused by an unrelated process, even one named
+///   frpc, does not match. An identity that cannot be read means no signal.
+/// * Its guard is gone: no `ccproxy` process at the guard's pid, and frpc is no longer its child. A visitor whose guard
+///   still runs, such as the one of an app instance that is already connected, is not an orphan.
+///
+/// Call it only from the process that owns the session (the primary app instance).
 pub fn kill_stale(paths: &Paths) {
-    let Some(pid) = session::read_file_trimmed(&paths.visitor_pid()).and_then(|p| p.parse::<u32>().ok()) else { return };
-    if pid > 1 && is_frpc(pid) {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+    let Some(record) = read_pidfile(paths) else { return };
+    if !process_exists(record.frpc) {
+        let _ = fs::remove_file(paths.visitor_pid()); // frpc is gone: nothing to clean up
+        return;
+    }
+    match process_identity(record.frpc) {
+        Some(now) if now == record.identity => {}
+        Some(_) => {
+            // The pid now belongs to another process (reused): it is not ours, and the record is stale.
+            let _ = fs::remove_file(paths.visitor_pid());
+            return;
         }
-        #[cfg(windows)]
-        let _ = Command::new("taskkill").args(["/F", "/PID", &pid.to_string()]).output();
+        None => return, // cannot establish ownership
+    }
+    if !is_named(record.frpc, "frpc") || is_named(record.guard, "ccproxy") || parent_of(record.frpc) == Some(record.guard) {
+        return; // not frpc, or a live visitor
+    }
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(record.frpc as libc::pid_t, libc::SIGKILL);
     }
     let _ = fs::remove_file(paths.visitor_pid());
 }
 
-fn is_frpc(pid: u32) -> bool {
+/// Whether `pid` runs an executable called `name` (`name.exe` on Windows).
+fn is_named(pid: u32, name: &str) -> bool {
     #[cfg(unix)]
     let out = Command::new("ps").args(["-p", &pid.to_string(), "-o", "comm="]).output();
     #[cfg(windows)]
     let out = Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]).output();
+    let want = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
     out.map(|o| {
         let text = String::from_utf8_lossy(&o.stdout).to_ascii_lowercase();
         text.lines().any(|l| {
-            let name = l.trim().trim_matches('"').split(['"', ',']).next().unwrap_or("");
-            name.rsplit(['/', '\\']).next() == Some(if cfg!(windows) { "frpc.exe" } else { "frpc" })
+            let exe = l.trim().trim_matches('"').split(['"', ',']).next().unwrap_or("");
+            exe.rsplit(['/', '\\']).next() == Some(want.as_str())
         })
     })
     .unwrap_or(false)
+}
+
+/// The parent pid of `pid` (Unix); None where unknown.
+fn parent_of(pid: u32) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        let out = Command::new("ps").args(["-p", &pid.to_string(), "-o", "ppid="]).output().ok()?;
+        String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        None
+    }
 }
 
 #[cfg(windows)]

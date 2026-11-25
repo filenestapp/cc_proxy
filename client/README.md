@@ -82,15 +82,23 @@ unaffected.
     (`keepTunnelOpen`).
   - The guard stops frpc when its stdin closes (Disconnect, sign-out, app exit, or a crashed app), when the
     configuration is removed, or when frpc fails. On Windows frpc also sits in a kill-on-close job object; on Linux
-    it gets a parent-death signal. At start, the app kills an frpc that a killed guard left behind (`frpc.pid`,
-    checked to be frpc).
+    it gets a parent-death signal. Once it holds the single-instance lock (a second launch ends before this), the app
+    removes an frpc that a killed guard left behind. `frpc.pid` records frpc's pid and identity (start time and
+    command line) and its guard's pid. Only a process with exactly that identity whose guard is gone is signalled. A
+    live visitor, a reused pid (even another frpc) and anything that cannot be verified are left alone.
+  - The guard refuses to run as root or Administrator.
 - **Failures.** frps unreachable, a refused token, a rejected CA, an exit host not online, failed hole punching and a
   busy local port each produce their own message and leave the tunnel `failed`. A failed configuration is not
   restarted until it changes (for example a rotated token arrives) or the user connects again. An unreachable frps is
   retried after a minute. frpc's own hole-punching retries are capped at 8 an hour. Nothing falls back to a relay.
-- **CLI.** `ccproxy up` keeps expecting a hand-run visitor, as before. `sudo ccproxy up --visitor [--frpc PATH]` runs
-  the same visitor code instead (frpc then runs as root, like the rest of `ccproxy up`). Do not combine it with a
-  hand-run frpc on the same port.
+- **Older control planes.** A control plane without `/v1/xtcp-visitor` answers 404. The app then connects as before
+  the feature: directly on a public-entry host, through a hand-run visitor on an XTCP host. A 401 and real service
+  errors keep their usual handling.
+- **CLI.** `sudo ccproxy up` never runs a visitor; on an XTCP exit it expects a hand-run frpc, as before. To run the
+  visitor from the command line, split it the way the app does. As the signed-in user, run
+  `ccproxy headless [--frpc PATH]` (sync, heartbeat, visitor; it refuses root). Then, as root, run
+  `ccproxy --state-dir <the user's state dir> tunnel`, which starts only sing-box, from its own validated copy of
+  the config. Do not combine it with a hand-run frpc on the same port.
 
 ## 测试
 
@@ -120,8 +128,8 @@ unaffected.
 **XTCP visitor (issue #61), 2026-11-25:**
 
 - Docker e2e [controlplane/test/xtcp/run-e2e.sh](../controlplane/test/xtcp/run-e2e.sh) (desktop phase in
-  `desktop-phase.sh`): real frps and frpc 0.72.0, real `ccproxy up --visitor` on a Linux TUN in app mode, a non-primary
-  mapping. 58 checks passed, 0 failed. They cover:
+  `desktop-phase.sh`): real frps and frpc 0.72.0, and the real client on a Linux TUN in app mode with a non-primary
+  mapping, split as the app is (`ccproxy headless` as a regular user, `ccproxy tunnel` as root). 58 checks passed, 0 failed. They cover:
   - a busy port and a blocked hole punch each reported, and never shown as connected;
   - frpc started after sing-box;
   - traffic leaves via the exit's egress IPv4, and the exit-probe path agrees;
