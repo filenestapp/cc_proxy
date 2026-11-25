@@ -27,6 +27,11 @@ Alerts
   cpctl.py alert-test
 Usage (Asia/Singapore calendar periods, weeks start on Monday)
   cpctl.py usage [--period day|week|month] [--date YYYY-MM-DD] [--user U] [--device D]
+Exit agent updates (docs/exit-agent-updates.md)
+  cpctl.py agent-releases                     published releases in CP_AGENT_RELEASES
+  cpctl.py agent-rollout                      the rollout and each host's running version and outcome
+  cpctl.py agent-rollout-set VERSION HOST... | --all [--paused]   new rollout (also: retry failed hosts)
+  cpctl.py agent-rollout-pause | agent-rollout-resume | agent-rollout-clear
 """
 import argparse
 import json
@@ -100,6 +105,14 @@ def main(argv):
     a = sub.add_parser("usage")
     a.add_argument("--period", choices=["day", "week", "month"], default="day")
     a.add_argument("--date"); a.add_argument("--user"); a.add_argument("--device")
+    sub.add_parser("agent-releases")
+    sub.add_parser("agent-rollout")
+    a = sub.add_parser("agent-rollout-set")
+    a.add_argument("version"); a.add_argument("hosts", nargs="*")
+    a.add_argument("--all", action="store_true", help="every host"); a.add_argument("--paused", action="store_true")
+    sub.add_parser("agent-rollout-pause")
+    sub.add_parser("agent-rollout-resume")
+    sub.add_parser("agent-rollout-clear")
     args = p.parse_args(argv)
     c = args.cmd
 
@@ -193,6 +206,37 @@ def main(argv):
         for col in r["collectors"]:
             if col["status"] != "collecting":
                 print("exit %s: usage %s %s" % (col["host"], col["status"], col["note"]))
+    elif c == "agent-releases":
+        r = call("GET", "/admin/agent-releases")
+        for rel in r["releases"]:
+            print("%-24s sequence %-6d %-20s %s %s" % (rel["version"], rel["sequence"], rel["published_at"] or "-",
+                                                     (rel["commit"] or "-")[:12], ",".join(rel["platforms"])))
+        for problem in r["problems"]:
+            print("skipped %s: %s" % (problem["directory"], problem["error"]))
+    elif c == "agent-rollout":
+        r = call("GET", "/admin/agent-rollout")
+        ro = r["rollout"]
+        if ro:
+            print("rollout %d: %s (sequence %d) to %s%s, changed by %s" % (
+                ro["rollout_id"], ro["version"], ro["sequence"], "all hosts" if ro["hosts"] is None else ", ".join(ro["hosts"]),
+                " PAUSED" if ro["paused"] else "", ro["updated_by"] or "-"))
+        else:
+            print("no rollout: every host keeps its release")
+        for h in r["hosts"]:
+            print("%-14s %-15s running %-24s %-12s %s" % (
+                h["host"], h["outcome"], h["agent_version"] or "-", h["state"] or "-", h["error"]))
+        print("summary: " + ", ".join("%s %d" % kv for kv in sorted(r["summary"].items())))
+    elif c == "agent-rollout-set":
+        if args.all == bool(args.hosts):
+            sys.exit("name the hosts or pass --all")
+        body = {"version": args.version, "hosts": "all" if args.all else args.hosts, "paused": args.paused}
+        show(call("PUT", "/admin/agent-rollout", body))
+    elif c == "agent-rollout-pause":
+        show(call("POST", "/admin/agent-rollout/pause"))
+    elif c == "agent-rollout-resume":
+        show(call("POST", "/admin/agent-rollout/resume"))
+    elif c == "agent-rollout-clear":
+        show(call("DELETE", "/admin/agent-rollout"))
     return 0
 
 

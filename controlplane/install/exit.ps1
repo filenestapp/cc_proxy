@@ -22,6 +22,13 @@
 # "CCProxyExitFrpc". frpc registers an xtcp proxy for sing-box with frps (TLS on TCP 7003, verified against the CA
 # from the control plane); visitors connect directly, with no relay fallback.
 # The control plane certificate must be trusted by Windows (a public CA, or a private CA in LocalMachine\Root).
+#
+# Automatic updates (docs/exit-agent-updates.md): an agent installed by this version updates itself when the
+# operator includes the host in a rollout. It verifies the signed release, keeps the running binary as
+# ccproxy-exit-agent.exe.previous, renames the running file aside and puts the new one in its place, then starts a
+# detached PowerShell that ends and starts the "CCProxyExitAgent" task. The new agent rolls itself back to .previous
+# unless it reports healthy. sing-box runs under the agent here, so it restarts with the agent (a few seconds without
+# service). An older agent has no updater: run this installer once to move it to this path.
 param(
     [string]$ControlPlane,
     [string]$TokenFile,
@@ -362,6 +369,10 @@ function Install-ExitNode {
             '--state-dir', $State, '--singbox', $SingBoxExe, '--run', '--run-reload', 'restart',
             '--log-file', (Join-Path $Logs 'agent.log'))
         if ($agentName) { $agentArgs += @('--name', $agentName) }
+        # Automatic updates: after replacing its file the agent starts this detached and exits; it ends the task (if
+        # the agent is still running) and starts it again on the new file. Single quotes keep the path literal.
+        $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $agentArgs += @('--update-restart-cmd', "'$powershellExe' -NoProfile -NonInteractive -WindowStyle Hidden -Command Start-Sleep -Seconds 3; Stop-ScheduledTask -TaskName $TaskName; Start-ScheduledTask -TaskName $TaskName")
         if ($xtcp.Status -eq 200) {
             # XTCP sync: the agent hot-reloads frpc through its loopback admin API and restarts the frpc task only when
             # the frps settings change. Single quotes keep the path literal for the agent's command splitting.

@@ -23,7 +23,18 @@ Output: `egress/agent/dist/ccproxy-exit-agent-{darwin,linux}-{arm64,amd64}`, `..
 `SHA256SUMS` and `VERSION` (`agent-` plus the git tree hash of `egress/agent`, so a rebase or merge that leaves the
 agent source alone gives the same files). The build pins the Go toolchain (`go.mod`), disables cgo, and uses
 `-trimpath`, no VCS stamp and an empty build ID. CI (`.github/workflows/exit-agent.yml`) runs the Go tests and the
-reproducibility check, then uploads `dist` as an artifact.
+reproducibility check, then uploads `dist` as an artifact. With the secret `AGENT_RELEASE_SIGNING_KEY` it also writes
+and signs `release.json` (release sequence = the workflow run number): that artifact is an agent release for managed
+automatic updates.
+
+## Automatic updates
+
+Agents installed by the current installer update themselves when the operator includes their host in a rollout:
+they verify the signed release against the keys compiled in from `egress/agent/release_keys.txt`, keep the running
+binary as `ccproxy-exit-agent.previous`, and restart through systemd, launchd or the Windows scheduled task. A new
+release that does not report healthy is rolled back to the previous binary. Agents from before this change need one
+installer rerun. Design, heartbeat contract, operator runbook (publish, pilot, widen, pause, retry, undo) and the
+platform coverage are in [docs/exit-agent-updates.md](../../docs/exit-agent-updates.md).
 
 The Go control plane (`controlplane/installer.go`) embeds the install scripts and the sing-box pins
 (`controlplane/install/`), and reads the agent binaries from the directory in `CP_AGENT_DIST`. Mount the verified
@@ -89,7 +100,10 @@ window and a maximum delay. It runs `sing-box check`, stages the candidate in th
 the config file only for a reload. Each candidate gets its own Clash API secret and marker outbound. Only a sing-box
 that lists the marker confirms the candidate. The heartbeat reports `config_etag`, `apply_state`
 (`confirmed`/`pending`/`failed`/`unknown`), `apply_error`, `candidate_etag`, `singbox_running` and egress probes.
-After a definitive failure, the agent restores the last confirmed config.
+After a definitive failure, the agent restores the last confirmed config. A restarted agent (an update, a crash) adopts
+the configuration sing-box already confirmed (`confirmed-state.json`) instead of reloading sing-box, so open
+connections survive it; with `--run` (Windows) sing-box restarts with the agent. The heartbeat also carries
+`agent_version` and the managed-update state (`update`).
 
 Per-device usage runs alongside and never blocks a config. Each candidate also gets sing-box's API service on
 `--usage-api` (loopback, default `127.0.0.1:9096`, `off` disables it) with a secret kept in

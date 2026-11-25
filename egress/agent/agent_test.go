@@ -32,6 +32,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("CCPROXY_FAKE_FRPC") == "1" && len(os.Args) > 1 && (os.Args[1] == "verify" || os.Args[1] == "frpc-restart") {
 		os.Exit(fakeFrpcCommand(os.Args[1:]))
 	}
+	if os.Getenv("CCPROXY_FAKE_AGENT") == "1" && len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "check-args") {
+		os.Exit(fakeAgentCommand(os.Args[1]))
+	}
 	if os.Getenv("CCPROXY_FAKE_SINGBOX") == "1" && len(os.Args) == 2 && os.Args[1] == "version" {
 		fmt.Println("sing-box version 1.14.4-fake")
 		os.Exit(0)
@@ -145,6 +148,13 @@ type fakeCP struct {
 	noXTCP   bool
 	offline  bool
 	xtcpGets int
+	// Managed updates (update_test.go): offer is the GET /agent/update answer (nil: 204); binaries are served at
+	// /agent/update/{version}/{platform}; reportFailFor answers 500 to heartbeats from that agent_version.
+	offer         *updateOffer
+	binaries      map[string][]byte
+	truncate      bool
+	reportFailFor string
+	downloads     int
 }
 
 const testToken = "test-agent-token-0123456789"
@@ -160,6 +170,27 @@ func newFakeCP(t *testing.T) *fakeCP {
 		defer cp.mu.Unlock()
 		if cp.offline {
 			w.WriteHeader(503)
+			return
+		}
+		if r.URL.Path == "/agent/update" {
+			if cp.offer == nil {
+				w.WriteHeader(204)
+				return
+			}
+			json.NewEncoder(w).Encode(cp.offer)
+			return
+		}
+		if rest, ok := strings.CutPrefix(r.URL.Path, "/agent/update/"); ok {
+			data, found := cp.binaries[rest]
+			if !found {
+				w.WriteHeader(404)
+				return
+			}
+			cp.downloads++
+			if cp.truncate {
+				data = data[:len(data)/2]
+			}
+			w.Write(data)
 			return
 		}
 		switch r.URL.Path {
@@ -195,6 +226,10 @@ func newFakeCP(t *testing.T) *fakeCP {
 			var body map[string]any
 			json.NewDecoder(r.Body).Decode(&body)
 			cp.reports = append(cp.reports, body)
+			if cp.reportFailFor != "" && body["agent_version"] == cp.reportFailFor {
+				w.WriteHeader(500)
+				return
+			}
 			io.WriteString(w, `{"recorded":0}`)
 		default:
 			w.WriteHeader(404)

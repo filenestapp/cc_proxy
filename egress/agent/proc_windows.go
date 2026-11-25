@@ -72,3 +72,14 @@ func cleanupStaleChild(stateDir, singbox string, logf func(string, ...any)) {
 		logf("stopped sing-box pid %d left over from an earlier agent run", pid)
 	}
 }
+
+const (
+	createNewProcessGroup = 0x00000200
+	detachedProcess       = 0x00000008
+)
+
+// detach: the restart helper outlives the agent, which the helper's Stop-ScheduledTask ends. Task Scheduler does
+// not end a task's descendants (see cleanupStaleChild), so no job breakaway is needed.
+func detach(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNewProcessGroup | detachedProcess}
+}

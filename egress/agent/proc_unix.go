@@ -21,3 +21,6 @@ func configureChild(cmd *exec.Cmd) { configureChildOS(cmd) }
 // cleanupStaleChild: on Unix the --run mode is for containers and tests; Linux children die with the agent
 // (Pdeathsig), so there is nothing to clean up.
 func cleanupStaleChild(stateDir, singbox string, logf func(string, ...any)) {}
+
+// detach: the restart helper outlives the agent (its own session, no controlling terminal).
+func detach(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} }

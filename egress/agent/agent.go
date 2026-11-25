@@ -57,6 +57,9 @@ type Options struct {
 	// XTCP sync (xtcp.go): off unless FrpcConfig is set. All of these come from the local installation.
 	FrpcBin, FrpcConfig, FrpcCA, FrpcLog, FrpcAdmin, FrpcRestartCmd string
 	FrpcConfirmTimeout                                              float64
+	// Managed updates (update.go).
+	Update, UpdateRestartCmd            string
+	UpdateInterval, UpdateHealthTimeout float64
 }
 
 // errNotLoaded: the running sing-box demonstrably does not serve the version asked about.
@@ -109,6 +112,9 @@ type Agent struct {
 	stopUsage context.CancelFunc
 
 	xtcp *xtcpSync // nil unless --frpc-config is set
+
+	update   *updater     // nil in tests that do not set one up
+	download *http.Client // control-plane downloads (agent updates): like cp, with a longer timeout
 }
 
 func NewAgent(opt Options, token string, logf func(string, ...any), output io.Writer) (*Agent, error) {
@@ -170,6 +176,7 @@ func NewAgent(opt Options, token string, logf func(string, ...any), output io.Wr
 		output:         output,
 	}
 	a.opt.CP = cpURL
+	a.download = &http.Client{Timeout: 10 * time.Minute, Transport: a.cp.Transport, CheckRedirect: a.cp.CheckRedirect}
 	if opt.FrpcConfig != "" {
 		if a.xtcp, err = newXTCPSync(a); err != nil {
 			return nil, err
@@ -432,6 +439,10 @@ func (a *Agent) report() error {
 		"agent": a.opt.Name, "config_etag": nullable(a.applied), "apply_state": nullable(a.state()),
 		"apply_error": nullable(a.applyError), "candidate_etag": nullable(candidate),
 		"singbox_running": a.singboxRunning(), "probes": probes,
+		"agent_version": version, // the running binary's build version (#66); older control planes ignore it
+	}
+	if a.update != nil {
+		report["update"] = a.update.report()
 	}
 	if a.xtcp != nil {
 		if x := a.xtcp.report(); x != nil {
@@ -802,7 +813,96 @@ func (a *Agent) confirmed() (bool, error) {
 	a.applied, a.appliedSecret, a.appliedMarker = a.installed, a.secret, a.marker
 	a.applyState, a.applyError = "", ""
 	a.logf("sing-box confirmed running config version %s", a.applied)
+	a.saveConfirmed()
 	return true, nil
+}
+
+// confirmedState is confirmed-state.json: what the running sing-box was last proved to serve, so that a restarted
+// agent (an update, a crash) can adopt it instead of reloading sing-box and dropping its connections.
+type confirmedState struct {
+	ETag   string `json:"etag"`
+	Secret string `json:"secret"`
+	Marker string `json:"marker"`
+}
+
+func (a *Agent) confirmedStatePath() string {
+	return filepath.Join(a.opt.StateDir, "confirmed-state.json")
+}
+
+func (a *Agent) saveConfirmed() {
+	data, _ := json.Marshal(confirmedState{ETag: a.applied, Secret: a.appliedSecret, Marker: a.appliedMarker})
+	tmp, err := writeTemp(a.opt.StateDir, data)
+	if err == nil {
+		err = os.Rename(tmp, a.confirmedStatePath())
+	}
+	if err != nil {
+		os.Remove(tmp)
+		a.logf("could not record the confirmed state (a restart will reload sing-box): %v", err)
+	}
+}
+
+// adoptConfirmed runs once at start. When sing-box (a separate service: --reload-cmd) still serves the confirmed
+// copy that --config holds, the agent takes it over as applied and the next sync is a 304 with no reload. With --run
+// the child did not survive the previous agent, so there is nothing to adopt.
+func (a *Agent) adoptConfirmed() {
+	if a.opt.Run {
+		return
+	}
+	data, err := os.ReadFile(a.confirmedStatePath())
+	if err != nil {
+		return
+	}
+	var c confirmedState
+	if json.Unmarshal(data, &c) != nil || c.ETag == "" || c.Secret == "" || !strings.HasPrefix(c.Marker, markerPrefix) {
+		return
+	}
+	live, err1 := os.ReadFile(a.opt.Config)
+	saved, err2 := os.ReadFile(a.confirmedCopy())
+	if err1 != nil || err2 != nil || !bytes.Equal(live, saved) {
+		return
+	}
+	a.appliedSecret, a.appliedMarker = c.Secret, c.Marker
+	if a.loadedEvidence(versionConfirmedSnapshot) != evidenceLoaded {
+		a.appliedSecret, a.appliedMarker = "", ""
+		return
+	}
+	a.applied, a.installed, a.secret, a.marker, a.onDisk = c.ETag, c.ETag, c.Secret, c.Marker, c.Marker
+	a.logf("sing-box is running confirmed config version %s; adopted it without a reload", c.ETag)
+}
+
+// attachUpdater connects managed updates to this agent's control-plane client.
+func (a *Agent) attachUpdater(u *updater) {
+	a.update = u
+	u.cp = func(path string) (int, []byte, error) {
+		status, _, body, err := a.get(path, "")
+		return status, body, err
+	}
+	u.download = a.fetch
+}
+
+// fetch streams a control-plane GET (with the token, no redirects) into w, refusing more than limit bytes.
+func (a *Agent) fetch(path string, w io.Writer, limit int64) error {
+	req, err := http.NewRequest("GET", a.opt.CP+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	resp, err := a.download.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s: HTTP %d", path, resp.StatusCode)
+	}
+	n, err := io.Copy(w, io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return err
+	}
+	if n != limit {
+		return fmt.Errorf("received %d bytes, the signed record says %d", n, limit)
+	}
+	return nil
 }
 
 // fail records a definitive failure for the candidate: the working configuration goes back on disk, and with
@@ -908,8 +1008,9 @@ func (a *Agent) apply() (bool, error) {
 	return a.confirmed()
 }
 
-// Cycle runs one sync, apply and heartbeat round (what --once does).
-func (a *Agent) Cycle() {
+// Cycle runs one sync, apply and heartbeat round (what --once does), then the update check. It returns
+// errRestartForUpdate when the agent must exit for a new (or restored) release.
+func (a *Agent) Cycle() error {
 	if err := a.syncAndApply(); err != nil {
 		a.logf("sync failed: %v", err)
 	}
@@ -918,9 +1019,14 @@ func (a *Agent) Cycle() {
 			a.logf("xtcp sync failed: %v", err)
 		}
 	}
-	if err := a.report(); err != nil {
+	err := a.report()
+	if err != nil {
 		a.logf("report failed: %v", err)
 	}
+	if a.update != nil {
+		return a.update.tick(a, err)
+	}
+	return nil
 }
 
 func (a *Agent) syncAndApply() error {
@@ -954,9 +1060,12 @@ func (a *Agent) Loop() error {
 			return fmt.Errorf("xtcp state: %w", err)
 		}
 	}
+	a.adoptConfirmed()
 	a.startUsage()
 	for {
-		a.Cycle()
+		if err := a.Cycle(); err != nil {
+			return err
+		}
 		if a.opt.Once {
 			return nil
 		}

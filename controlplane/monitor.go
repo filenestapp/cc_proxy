@@ -59,6 +59,9 @@ type heartbeat struct {
 	LocalEgressIPv4 string  `json:"local_egress_ipv4"`
 	// Sent by agents with XTCP sync (xtcp_sync.go); absent from older agents.
 	XTCP *xtcpReport `json:"xtcp"`
+	// The running agent build (#66) and its managed-update outcome (agent_update.go); absent from older agents.
+	AgentVersion string             `json:"agent_version"`
+	Update       *agentUpdateReport `json:"update"`
 }
 
 // IsGlobalUnicast also includes locally scoped and special-purpose IPv4 ranges.
@@ -136,6 +139,9 @@ func (s *store) reportAgent(ctx context.Context, name, token string, address net
 			if err := recordXTCPReport(ctx, tx, name, s.now(), *hb.XTCP); err != nil {
 				return err
 			}
+		}
+		if err := recordAgentUpdate(ctx, tx, name, s.now(), hb.AgentVersion, hb.Update); err != nil {
+			return err
 		}
 		changed := false
 		if isPublicIPv4(address) {

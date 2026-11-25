@@ -35,11 +35,19 @@
 // Other subcommands:
 //
 //	ccproxy-exit-agent version
+//	ccproxy-exit-agent check-args ARGS...          exit 0 when this binary accepts ARGS as its command line (the
+//	                                               updater runs a candidate with the running agent's arguments)
 //	ccproxy-exit-agent ips up|down IFACE FILE      Linux: add the addresses in FILE to IFACE (boot unit), or
 //	                                               remove the ones this agent added (recorded in owned-ips.txt)
+//
+// Managed updates (update.go, docs/exit-agent-updates.md): the agent polls GET /agent/update, verifies the signed
+// release record against the keys compiled in from release_keys.txt, downloads and self-tests the candidate, swaps it
+// in and exits with status 75 so the service manager starts it; a candidate that does not report healthy is rolled
+// back to the previous binary. The heartbeat carries agent_version and the update state.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -59,6 +67,8 @@ func main() {
 			return
 		case "ips":
 			os.Exit(ipsCommand(os.Args[2:]))
+		case "check-args":
+			os.Exit(checkArgs(os.Args[2:]))
 		}
 	}
 	os.Exit(run(os.Args[1:]))
@@ -93,14 +103,23 @@ func readToken(path string) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-func run(argv []string) int {
+// cliOptions is the parsed command line.
+type cliOptions struct {
+	Options
+	tokenFile, logFile string
+}
+
+// parseArgs parses and checks the agent's command line without side effects (run and check-args).
+func parseArgs(argv []string, stderr io.Writer) (cliOptions, error) {
 	host, _ := os.Hostname()
 	fs := flag.NewFlagSet("ccproxy-exit-agent", flag.ContinueOnError)
-	var o Options
-	var tokenFile, logFile, ipsScript string
+	fs.SetOutput(stderr)
+	var c cliOptions
+	o := &c.Options
+	var ipsScript string
 	fs.StringVar(&o.CP, "cp", "", "control plane base URL (https)")
 	fs.StringVar(&o.CAFile, "cafile", "", "CA bundle for a private control-plane certificate")
-	fs.StringVar(&tokenFile, "token-file", "", "read the agent token from this file instead of CP_AGENT_TOKEN")
+	fs.StringVar(&c.tokenFile, "token-file", "", "read the agent token from this file instead of CP_AGENT_TOKEN")
 	fs.StringVar(&o.Iface, "iface", "", "Linux: interface for the egress IPs; omit to skip IP management")
 	fs.StringVar(&ipsScript, "ips-script", "", "accepted for agent.py compatibility; the IPs are managed natively")
 	fs.StringVar(&o.Config, "config", "/etc/sing-box/config.json", "the sing-box config file sing-box runs")
@@ -128,33 +147,56 @@ func run(argv []string) int {
 	fs.StringVar(&o.FrpcAdmin, "frpc-admin", "127.0.0.1:9097", "with --frpc-config: numeric loopback address:port for frpc's admin API")
 	fs.StringVar(&o.FrpcRestartCmd, "frpc-restart-cmd", "", "with --frpc-config: command that restarts the frpc service")
 	fs.Float64Var(&o.FrpcConfirmTimeout, "frpc-confirm-timeout", 20, "seconds to wait for frpc to register a new generation")
-	fs.StringVar(&logFile, "log-file", "", "append the agent's and sing-box's output here (rotated at 10 MB, 5 kept)")
+	fs.StringVar(&o.Update, "update", "auto", "auto: follow the control plane's rollout of signed agent releases; off: never update")
+	fs.Float64Var(&o.UpdateInterval, "update-interval", 120, "seconds between checks for a rollout target (30-3600)")
+	fs.Float64Var(&o.UpdateHealthTimeout, "update-health-timeout", 600, "seconds a new release has to report healthy before it is rolled back (60-3600)")
+	fs.StringVar(&o.UpdateRestartCmd, "update-restart-cmd", "", "command started (detached) to restart the agent service after an update; default: exit 75 and let the service manager restart it")
+	fs.StringVar(&c.logFile, "log-file", "", "append the agent's and sing-box's output here (rotated at 10 MB, 5 kept)")
 	if err := fs.Parse(argv); err != nil {
+		return c, err
+	}
+	switch {
+	case o.CP == "":
+		return c, errors.New("--cp is required")
+	case o.Run == (o.ReloadCmd != ""):
+		return c, errors.New("pass exactly one of --run and --reload-cmd")
+	case o.RunReload != "" && o.RunReload != "signal" && o.RunReload != "restart":
+		return c, errors.New("--run-reload must be signal or restart")
+	case o.RunReload == "signal" && !canHangup:
+		return c, errors.New("--run-reload signal is not available on this platform")
+	case o.UsageInterval < 10 || o.UsageInterval > 600:
+		return c, errors.New("--usage-interval must be between 10 and 600 seconds")
+	case o.Iface != "" && !ipsSupported:
+		return c, errors.New("--iface is Linux-only; on this system the host's existing local address is the egress IP")
+	case o.Update != "auto" && o.Update != "off":
+		return c, errors.New("--update must be auto or off")
+	case o.UpdateInterval < 30 || o.UpdateInterval > 3600:
+		return c, errors.New("--update-interval must be between 30 and 3600 seconds")
+	case o.UpdateHealthTimeout < 60 || o.UpdateHealthTimeout > 3600:
+		return c, errors.New("--update-health-timeout must be between 60 and 3600 seconds")
+	}
+	if o.UpdateRestartCmd != "" {
+		if _, err := splitCommand(o.UpdateRestartCmd); err != nil {
+			return c, fmt.Errorf("--update-restart-cmd: %v", err)
+		}
+	}
+	return c, nil
+}
+
+func run(argv []string) int {
+	c, err := parseArgs(argv, os.Stderr)
+	fail := func(msg string) int { fmt.Fprintln(os.Stderr, "ccproxy-exit-agent:", msg); return 2 }
+	if errors.Is(err, flag.ErrHelp) {
 		return 2
 	}
-	fail := func(msg string) int { fmt.Fprintln(os.Stderr, "ccproxy-exit-agent:", msg); return 2 }
-	if o.CP == "" {
-		return fail("--cp is required")
+	if err != nil {
+		return fail(err.Error())
 	}
-	if o.Run == (o.ReloadCmd != "") {
-		return fail("pass exactly one of --run and --reload-cmd")
-	}
-	if o.RunReload != "" && o.RunReload != "signal" && o.RunReload != "restart" {
-		return fail("--run-reload must be signal or restart")
-	}
-	if o.RunReload == "signal" && !canHangup {
-		return fail("--run-reload signal is not available on this platform")
-	}
-	if o.UsageInterval < 10 || o.UsageInterval > 600 {
-		return fail("--usage-interval must be between 10 and 600 seconds")
-	}
-	if o.Iface != "" && !ipsSupported {
-		return fail("--iface is Linux-only; on this system the host's existing local address is the egress IP")
-	}
+	o := c.Options
 
 	var out io.Writer = os.Stderr
-	if logFile != "" {
-		w, err := openRotating(logFile, 10<<20, 5)
+	if c.logFile != "" {
+		w, err := openRotating(c.logFile, 10<<20, 5)
 		if err != nil {
 			return fail(err.Error())
 		}
@@ -163,7 +205,13 @@ func run(argv []string) int {
 	logf := func(format string, a ...any) {
 		fmt.Fprintf(out, "%s %s\n", time.Now().Format("2006-01-02T15:04:05"), fmt.Sprintf(format, a...))
 	}
-	token, err := readToken(tokenFile)
+	// First, before anything that could fail: a candidate release that keeps failing is rolled back from here.
+	upd := newUpdater(o, argv, logf)
+	if upd.onStart() {
+		upd.restartForUpdate()
+		return exitForUpdate
+	}
+	token, err := readToken(c.tokenFile)
 	if err != nil {
 		return fail("--token-file: " + err.Error())
 	}
@@ -171,11 +219,26 @@ func run(argv []string) int {
 	if err != nil {
 		return fail(err.Error())
 	}
+	agent.attachUpdater(upd)
 	logf("ccproxy-exit-agent %s starting (control plane %s)", version, o.CP)
-	if err := agent.Loop(); err != nil {
+	err = agent.Loop()
+	agent.Close()
+	if errors.Is(err, errRestartForUpdate) {
+		upd.restartForUpdate()
+		return exitForUpdate
+	}
+	if err != nil {
 		logf("fatal: %v", err)
 		return 1
 	}
-	agent.Close()
+	return 0
+}
+
+// checkArgs: the updater's compatibility test for a candidate binary.
+func checkArgs(argv []string) int {
+	if _, err := parseArgs(argv, io.Discard); err != nil {
+		fmt.Fprintln(os.Stderr, "ccproxy-exit-agent check-args:", err)
+		return 2
+	}
 	return 0
 }
