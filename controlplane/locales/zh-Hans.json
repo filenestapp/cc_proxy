@@ -37,6 +37,7 @@
     "Agent offline": "Agent 离线",
     "Agent status": "Agent 状态",
     "Agent upgrade needed": "需要升级 Agent",
+    "Agent version": "Agent 版本",
     "Alert after consecutive failures": "连续失败告警阈值",
     "Alert repeat interval (seconds, 0 disables repeats)": "告警重复间隔（秒，0 表示不重复）",
     "Alert settings": "告警设置",

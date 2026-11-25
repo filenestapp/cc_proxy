@@ -431,7 +431,7 @@ func (a *Agent) report() error {
 	report := map[string]any{
 		"agent": a.opt.Name, "config_etag": nullable(a.applied), "apply_state": nullable(a.state()),
 		"apply_error": nullable(a.applyError), "candidate_etag": nullable(candidate),
-		"singbox_running": a.singboxRunning(), "probes": probes,
+		"agent_version": version, "singbox_running": a.singboxRunning(), "probes": probes,
 	}
 	if a.xtcp != nil {
 		if x := a.xtcp.report(); x != nil {
