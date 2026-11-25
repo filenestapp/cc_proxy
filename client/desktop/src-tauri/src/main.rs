@@ -200,7 +200,7 @@ impl App {
             v.tunnel_message = status.message.clone();
             // On an XTCP exit the tunnel is connected only once the visitor is ready.
             if v.want_connected && status.state == "running" {
-                if let Some((state, message)) = visitor::tunnel_view(&self.paths, self.visitor.lock().unwrap().guard_pid()) {
+                if let Some((state, message)) = visitor::tunnel_view(&self.paths, self.visitor.lock().unwrap().guard_pid(Some(&status))) {
                     v.tunnel = state;
                     v.tunnel_message = message;
                 }
@@ -303,15 +303,16 @@ fn background(app: Arc<App>) {
     let launcher = launcher();
     loop {
         std::thread::sleep(Duration::from_millis(500));
-        if !app.tunnel.wants_connection() {
-            app.visitor.lock().unwrap().stop();
-            continue;
-        }
-        // The TUN first, then frpc: a path punched before the TUN took over routing would break.
-        if app.current_status().is_some_and(|s| s.state == "running") {
-            if let Err(error) = app.visitor.lock().unwrap().ensure(&app.paths, &launcher) {
+        {
+            let mut visitor = app.visitor.lock().unwrap();
+            // Re-read the requested connection under the visitor lock so Disconnect cannot leave a new guard behind.
+            let status = app.tunnel.wants_connection().then(|| app.current_status()).flatten();
+            if let Err(error) = visitor.ensure(&app.paths, &launcher, status.as_ref()) {
                 eprintln!("Could not start the XTCP visitor: {error:#}");
             }
+        }
+        if !app.tunnel.wants_connection() {
+            continue;
         }
         if last_beat.elapsed() >= HEARTBEAT_EVERY {
             touch(&app.paths.heartbeat());

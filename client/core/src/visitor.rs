@@ -14,8 +14,8 @@
 //!   (never the command line), classifies frpc's log into a status file and stops frpc when its stdin closes (the
 //!   app is gone, even after a crash), when the configuration is removed, or when frpc fails. On Windows frpc also
 //!   sits in a kill-on-close job object, on Linux it gets a parent-death signal.
-//! * [`VisitorProcess`] is the app side: it starts the guard once the tunnel runs, restarts it only when the
-//!   visitor configuration changes (or, for an unreachable frps, after a pause), and stops it on disconnect,
+//! * [`VisitorProcess`] is the app side: it starts the guard once the tunnel runs, replaces it when the
+//!   TUN routes or visitor configuration change, and stops it on disconnect,
 //!   sign-out and exit. Nothing restarts in a tight loop.
 //!
 //! Start order: the supervisor brings the TUN up first, then frpc starts. With auto_route, frpc's own packets pass
@@ -23,6 +23,7 @@
 
 use crate::api::{Api, VisitorFetch};
 use crate::session::{self, write_atomic, Paths, Session};
+use crate::supervisor::Status;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -660,42 +661,53 @@ pub struct Launcher {
     pub frpc: PathBuf,
 }
 
+#[derive(PartialEq, Eq)]
+struct VisitorTarget {
+    fingerprint: String,
+    route: (u32, u64),
+}
+
 /// The app's handle on the guard. Dropping it stops the visitor.
 #[derive(Default)]
 pub struct VisitorProcess {
-    guard: Option<(Child, ChildStdin, String)>,
-    /// The configuration the last guard ran and when it exited, so a failed configuration is not retried.
-    exited: Option<(String, Instant, Option<Reason>, u32)>,
+    guard: Option<(Child, ChildStdin, VisitorTarget)>,
+    /// The last failed visitor and its route, so the same failure is not retried in a loop.
+    exited: Option<(VisitorTarget, Instant, Option<Reason>, u32)>,
 }
 
 impl VisitorProcess {
-    /// Bring the visitor in line with the files: none when no visitor is configured, else one guard for the current
-    /// configuration. A guard that exited is restarted only for a new configuration, or after [`UNREACHABLE_RETRY`]
-    /// when frps could not be reached.
-    pub fn ensure(&mut self, paths: &Paths, launcher: &Launcher) -> Result<()> {
-        let Some(fp) = fingerprint(paths) else {
+    /// Run exactly one visitor for the current configuration and live TUN routes. A prior UDP path
+    /// can stop working when macOS installs new TUN routes, even if the visitor configuration is unchanged.
+    pub fn ensure(&mut self, paths: &Paths, launcher: &Launcher, status: Option<&Status>) -> Result<()> {
+        let target = status.and_then(Status::running_route).and_then(|route| {
+            fingerprint(paths).map(|fingerprint| VisitorTarget { fingerprint, route })
+        });
+        let Some(target) = target else {
             self.stop();
             return Ok(());
         };
         if let Some((child, _, running)) = self.guard.as_mut() {
             match child.try_wait() {
-                Ok(None) if *running == fp => return Ok(()),
+                Ok(None) if *running == target => return Ok(()),
                 Ok(None) => self.stop(),
                 _ => {
-                    let pid = child.id();
-                    let reason = read_status(paths).filter(|s| s.fingerprint == *running && s.guard == pid).and_then(|s| s.reason);
-                    self.exited = Some((running.clone(), Instant::now(), reason, child.id()));
-                    self.guard = None;
+                    if let Some((child, _, running)) = self.guard.take() {
+                        let pid = child.id();
+                        let reason = read_status(paths)
+                            .filter(|s| s.fingerprint == running.fingerprint && s.guard == pid)
+                            .and_then(|s| s.reason);
+                        self.exited = Some((running, Instant::now(), reason, pid));
+                    }
                 }
             }
         }
         if let Some((failed, at, reason, _)) = &self.exited {
             let retry = *reason == Some(Reason::ServerUnreachable) && at.elapsed() >= UNREACHABLE_RETRY;
-            if *failed == fp && !retry {
+            if *failed == target && !retry {
                 return Ok(());
             }
         }
-        self.start(paths, launcher, fp)
+        self.start(paths, launcher, target)
     }
 
     /// Forget a failed configuration so the next [`ensure`](Self::ensure) tries again (a new Connect).
@@ -703,12 +715,12 @@ impl VisitorProcess {
         self.exited = None;
     }
 
-    /// The guard this controller started for the current connection: the running one, else the last one that exited
-    /// (so its failure stays visible). None before the first start, after [`reset`](Self::reset) and after a stop.
-    pub fn guard_pid(&self) -> Option<u32> {
+    /// The guard for these TUN routes, including its last failed attempt for error reporting.
+    pub fn guard_pid(&self, status: Option<&Status>) -> Option<u32> {
+        let route = status?.running_route()?;
         match (&self.guard, &self.exited) {
-            (Some((child, _, _)), _) => Some(child.id()),
-            (None, Some((_, _, _, pid))) => Some(*pid),
+            (Some((child, _, target)), _) if target.route == route => Some(child.id()),
+            (None, Some((target, _, _, pid))) if target.route == route => Some(*pid),
             _ => None,
         }
     }
@@ -717,7 +729,7 @@ impl VisitorProcess {
         matches!(self.guard.as_mut().map(|(c, _, _)| c.try_wait()), Some(Ok(None)))
     }
 
-    fn start(&mut self, paths: &Paths, launcher: &Launcher, fp: String) -> Result<()> {
+    fn start(&mut self, paths: &Paths, launcher: &Launcher, target: VisitorTarget) -> Result<()> {
         kill_stale(paths);
         let _ = fs::remove_file(paths.visitor_status());
         let mut cmd = Command::new(&launcher.ccproxy);
@@ -731,7 +743,7 @@ impl VisitorProcess {
         let mut child = cmd.spawn().with_context(|| format!("starting {}", launcher.ccproxy.display()))?;
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin for the visitor guard"))?;
         self.exited = None;
-        self.guard = Some((child, stdin, fp));
+        self.guard = Some((child, stdin, target));
         Ok(())
     }
 

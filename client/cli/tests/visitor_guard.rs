@@ -3,6 +3,7 @@
 #![cfg(unix)]
 
 use ccproxy_core::session::{Paths, Session};
+use ccproxy_core::supervisor::Status;
 use ccproxy_core::visitor::{self, Launcher, Reason, VisitorProcess};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -253,6 +254,17 @@ fn launcher(e: &Env) -> Launcher {
     Launcher { ccproxy: PathBuf::from(env!("CARGO_BIN_EXE_ccproxy")), frpc: e.frpc.clone() }
 }
 
+fn running_tunnel(pid: u32, route_generation: u64) -> Status {
+    Status {
+        state: "running".to_string(),
+        pid: Some(pid),
+        message: String::new(),
+        updated: 100,
+        route_generation,
+        egress_fingerprint: None,
+    }
+}
+
 /// PR #64 e2e: after a previous connection's guard was killed (its last word was "ready"), a fresh connection whose
 /// hole punch fails must never show connected: only its own guard's status counts.
 #[test]
@@ -272,12 +284,12 @@ fn a_fresh_connection_ignores_the_ready_status_of_a_previous_one() {
     // Connection 2, same configuration, UDP blocked: starting, then failed, never running.
     mode(&e.paths, "punch");
     let mut p = VisitorProcess::default();
-    assert_eq!(visitor::tunnel_view(&e.paths, p.guard_pid()).unwrap().0, "connecting", "before its guard starts");
-    p.ensure(&e.paths, &l).unwrap();
+    assert_eq!(visitor::tunnel_view(&e.paths, p.guard_pid(Some(&running_tunnel(1234, 1)))).unwrap().0, "connecting", "before its guard starts");
+    p.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     let mut seen = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        let (state, _) = visitor::tunnel_view(&e.paths, p.guard_pid()).unwrap();
+        let (state, _) = visitor::tunnel_view(&e.paths, p.guard_pid(Some(&running_tunnel(1234, 1)))).unwrap();
         if seen.last() != Some(&state) {
             seen.push(state.clone());
         }
@@ -297,17 +309,17 @@ fn the_controller_restarts_only_for_a_new_configuration() {
     let e = env("controller");
     let l = launcher(&e);
     let mut p = VisitorProcess::default();
-    p.ensure(&e.paths, &l).unwrap();
+    p.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     wait_for("ready", || state_of(&e.paths).as_deref() == Some("ready"));
     for _ in 0..5 {
-        p.ensure(&e.paths, &l).unwrap();
+        p.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     }
     assert_eq!(launches(&e.paths).len(), 1, "an unchanged configuration keeps its frpc");
 
     // A rotated token: the old frpc goes, a new one starts.
     let first = launches(&e.paths)[0];
     configure(&e.paths, "frps-token-rotated-0123456789");
-    p.ensure(&e.paths, &l).unwrap();
+    p.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     wait_for("second launch", || launches(&e.paths).len() == 2);
     assert!(!alive(first));
     assert_eq!(fs::read_to_string(e.paths.dir.join("env-token.txt")).unwrap(), "frps-token-rotated-0123456789");
@@ -315,39 +327,73 @@ fn the_controller_restarts_only_for_a_new_configuration() {
     // A configuration that fails is not retried in a loop...
     mode(&e.paths, "busy");
     configure(&e.paths, "frps-token-third-0123456789ab");
-    p.ensure(&e.paths, &l).unwrap();
+    p.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     wait_for("failed", || state_of(&e.paths).as_deref() == Some("failed"));
     wait_for("guard exit", || !p.is_running());
     for _ in 0..20 {
-        p.ensure(&e.paths, &l).unwrap();
+        p.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
         std::thread::sleep(Duration::from_millis(25));
     }
     assert_eq!(launches(&e.paths).len(), 3, "a failed configuration must not be restarted");
     // ...until a new Connect asks for it again.
     p.reset();
-    p.ensure(&e.paths, &l).unwrap();
+    p.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     wait_for("fourth launch", || launches(&e.paths).len() == 4);
 
     // No visitor configured any more (public-entry host): it stops.
     mode(&e.paths, "ready");
     configure(&e.paths, TOKEN);
-    p.ensure(&e.paths, &l).unwrap();
+    p.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     wait_for("ready again", || state_of(&e.paths).as_deref() == Some("ready"));
     let last = *launches(&e.paths).last().unwrap();
     for f in [e.paths.visitor_toml(), e.paths.visitor_ca(), e.paths.visitor_token()] {
         fs::remove_file(f).unwrap();
     }
-    p.ensure(&e.paths, &l).unwrap();
+    p.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     assert!(!p.is_running());
     wait_for("frpc to exit", || !alive(last));
 
     // Dropping the controller (app exit) stops a running visitor.
     configure(&e.paths, TOKEN);
-    p.ensure(&e.paths, &l).unwrap();
+    p.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     wait_for("ready", || state_of(&e.paths).as_deref() == Some("ready"));
     let last = *launches(&e.paths).last().unwrap();
     drop(p);
     wait_for("frpc to exit after drop", || !alive(last));
+    cleanup(&e);
+}
+
+#[test]
+fn reconnect_and_reload_use_a_new_visitor_for_the_new_tun_routes() {
+    let e = env("tunnel-generation");
+    let launcher = launcher(&e);
+    let mut visitor = VisitorProcess::default();
+    visitor.ensure(&e.paths, &launcher, None).unwrap();
+    assert!(!visitor.is_running(), "the visitor waits for the system routes");
+
+    let mut first = running_tunnel(1234, 1);
+    visitor.ensure(&e.paths, &launcher, Some(&first)).unwrap();
+    wait_for("first visitor ready", || state_of(&e.paths).as_deref() == Some("ready"));
+    let initial_pid = launches(&e.paths)[0];
+
+    first.updated += 1;
+    visitor.ensure(&e.paths, &launcher, Some(&first)).unwrap();
+    assert_eq!(launches(&e.paths), vec![initial_pid], "a status message does not replace the routes");
+
+    let reloaded = running_tunnel(1234, 2);
+    assert!(visitor.guard_pid(Some(&reloaded)).is_none(), "a prior route's guard must not report ready");
+    visitor.ensure(&e.paths, &launcher, Some(&reloaded)).unwrap();
+    wait_for("visitor on reloaded routes", || launches(&e.paths).len() == 2);
+    assert!(!alive(initial_pid));
+    let reload_pid = launches(&e.paths)[1];
+
+    visitor.ensure(&e.paths, &launcher, None).unwrap();
+    assert!(!alive(reload_pid), "disconnect stops the visitor");
+    let restarted = running_tunnel(1235, 1);
+    visitor.ensure(&e.paths, &launcher, Some(&restarted)).unwrap();
+    wait_for("visitor on the reconnected TUN", || launches(&e.paths).len() == 3);
+    assert!(visitor.guard_pid(Some(&restarted)).is_some());
+    visitor.stop();
     cleanup(&e);
 }
 
@@ -358,7 +404,7 @@ fn a_second_launch_keeps_the_live_visitor() {
     let e = env("second-launch");
     let l = launcher(&e);
     let mut first = VisitorProcess::default();
-    first.ensure(&e.paths, &l).unwrap();
+    first.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     wait_for("ready", || state_of(&e.paths).as_deref() == Some("ready"));
     let pid = launches(&e.paths)[0];
 
@@ -372,7 +418,7 @@ fn a_second_launch_keeps_the_live_visitor() {
     assert_eq!(state_of(&e.paths).as_deref(), Some("ready"));
     assert!(e.paths.visitor_pid().exists(), "the pid file of a live visitor stays");
     // And the first instance still controls it: a later ensure keeps it, a stop ends it.
-    first.ensure(&e.paths, &l).unwrap();
+    first.ensure(&e.paths, &l, Some(&running_tunnel(1234, 1))).unwrap();
     assert_eq!(launches(&e.paths).len(), 1);
     drop(first);
     wait_for("frpc to exit", || !alive(pid));

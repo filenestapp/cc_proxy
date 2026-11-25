@@ -298,12 +298,11 @@ fn headless(paths: &Paths, mode: &str, interval: u64, launcher: &visitor::Launch
             next_beat = Instant::now() + Duration::from_secs(5);
         }
         // The TUN first, then frpc: its punched path must not move when the TUN takes over routing.
-        if Status::current().is_some_and(|s| s.state == "running" && s.updated >= started) {
-            if let Err(e) = proc.ensure(paths, launcher) {
-                eprintln!("could not start the XTCP visitor: {e:#}");
-            }
+        let status = Status::current().filter(|s| s.updated >= started);
+        if let Err(e) = proc.ensure(paths, launcher, status.as_ref()) {
+            eprintln!("could not start the XTCP visitor: {e:#}");
         }
-        if let Some((state, message)) = visitor::tunnel_view(paths, proc.guard_pid()) {
+        if let Some((state, message)) = visitor::tunnel_view(paths, proc.guard_pid(status.as_ref())) {
             let line = format!("xtcp visitor: {state} {message}");
             if line != shown {
                 println!("{line}");
