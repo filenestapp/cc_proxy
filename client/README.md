@@ -129,7 +129,10 @@ unaffected.
 
 - Docker e2e [controlplane/test/xtcp/run-e2e.sh](../controlplane/test/xtcp/run-e2e.sh) (desktop phase in
   `desktop-phase.sh`): real frps and frpc 0.72.0, and the real client on a Linux TUN in app mode with a non-primary
-  mapping, split as the app is (`ccproxy headless` as a regular user, `ccproxy tunnel` as root). 58 checks passed, 0 failed. They cover:
+  mapping, split as the app is (`ccproxy headless` as a regular user, `ccproxy tunnel` as root). 65 checks passed,
+  0 failed (on 3cc2091). They cover:
+  - as root, `ccproxy up` has no visitor option, and the visitor guard and `ccproxy headless` refuse to run;
+    frpc and its guard run as the signed-in user;
   - a busy port and a blocked hole punch each reported, and never shown as connected;
   - frpc started after sing-box;
   - traffic leaves via the exit's egress IPv4, and the exit-probe path agrees;
