@@ -27,6 +27,7 @@ import (
 //
 //	verify -c FILE      fails when FILE contains REJECT_ME, echoing that line (with its secret) like a parser would
 //	frpc-restart FLAG   stands in for systemctl restart: asks the in-process fake frpc to restart and waits for it
+//	frpc-hang           blocks until the restart command's deadline kills it
 func fakeFrpcCommand(args []string) int {
 	switch args[0] {
 	case "verify":
@@ -52,6 +53,9 @@ func fakeFrpcCommand(args []string) int {
 			}
 		}
 		return 3
+	case "frpc-hang":
+		time.Sleep(30 * time.Second)
+		return 0
 	}
 	return 2
 }
@@ -285,7 +289,7 @@ func newXTCPEnv(t *testing.T, legacy bool, mutate func(*Options)) *xtcpEnv {
 	a, dir := newTestAgent(t, cp, func(o *Options) {
 		o.FrpcBin, o.FrpcConfig, o.FrpcCA = exe, filepath.Join(etc, "frpc.toml"), filepath.Join(etc, "frp-ca.pem")
 		o.FrpcAdmin, o.FrpcConfirmTimeout = freePort(t), 1.5
-		o.FrpcRestartCmd = exe + " frpc-restart " + filepath.Join(etc, "frpc.toml.restart")
+		o.FrpcRestartCmd = fmt.Sprintf("%q frpc-restart %q", exe, filepath.Join(etc, "frpc.toml.restart"))
 		if mutate != nil {
 			mutate(o)
 		}
@@ -513,6 +517,45 @@ func TestXTCPFrpsSettingsChangeRestartsFrpc(t *testing.T) {
 	}
 }
 
+func TestXTCPRestartRetryWaitsAfterRollback(t *testing.T) {
+	e := newXTCPEnv(t, false, nil)
+	e.a.Cycle()
+	good := e.gen
+	working := e.live()
+
+	// Each fake restart completes immediately but represents a slow service manager.
+	now := time.Unix(100, 0)
+	e.a.xtcp.now = func() time.Time {
+		_, restarts, _, _ := e.frpc.snapshot()
+		return now.Add(time.Duration(restarts) * frpcRestartTimeout)
+	}
+	// The fake restart has loaded the config before returning, so one status check is enough.
+	e.a.opt.FrpcConfirmTimeout = 0
+	e.frpc.mu.Lock()
+	e.frpc.failing["ccproxy-t-direct-20444"] = "proxy already exists"
+	e.frpc.mu.Unlock()
+
+	d := e.publish(e.render("rotated-frps-token-0123456789", primary, second))
+	e.a.Cycle()
+	e.wantReport(xtcpFailed, d.Generation, good)
+	if _, restarts, _, _ := e.frpc.snapshot(); restarts != 2 || e.live() != working {
+		t.Fatalf("want two restarts and the working config restored, got %d restarts", restarts)
+	}
+
+	now = now.Add(xtcpRetry - time.Second)
+	e.a.Cycle()
+	if _, restarts, _, _ := e.frpc.snapshot(); restarts != 2 {
+		t.Fatalf("retried before the interval after rollback elapsed: %d restarts", restarts)
+	}
+
+	e.frpc.mu.Lock()
+	delete(e.frpc.failing, "ccproxy-t-direct-20444")
+	e.frpc.mu.Unlock()
+	now = now.Add(time.Second)
+	e.a.Cycle()
+	e.wantReport(xtcpApplied, d.Generation, d.Generation)
+}
+
 func TestXTCPAgentRestartAndOfflineCatchUp(t *testing.T) {
 	e := newXTCPEnv(t, false, nil)
 	e.a.Cycle()
@@ -659,10 +702,14 @@ func TestXTCPInstallsOnlyTheRenderedShape(t *testing.T) {
 	}
 }
 
-// A hung service manager (systemctl, launchctl, the scheduled task) must not stall the agent's whole cycle.
-func TestXTCPHungRestartCommandDoesNotStallTheAgent(t *testing.T) {
+func TestXTCPHungRestartCommandTimesOut(t *testing.T) {
+	t.Setenv("CCPROXY_FAKE_FRPC", "1")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	start := time.Now()
-	if err := runCommandTimeout("sleep 30", nil, 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "timed out") {
+	if err := runCommandTimeout(fmt.Sprintf("%q frpc-hang", exe), nil, 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("a hung command must time out: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {

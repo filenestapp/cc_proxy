@@ -532,9 +532,10 @@ func (x *xtcpSync) keepPrevious() error {
 // fail records a failed attempt. When files were replaced (mode != ""), the working ones go back and are loaded
 // again the same way, so the proxies frpc served before keep working.
 func (x *xtcpSync) fail(d xtcpDesired, mode, format string, args ...any) {
+	// A slow restore must not consume the interval before the next attempt.
+	defer func() { x.retryAfter = x.now().Add(xtcpRetry) }()
 	live, _ := os.ReadFile(x.a.opt.FrpcConfig)
 	x.state, x.err = xtcpFailed, x.redact(fmt.Sprintf(format, args...), d.FrpcTOML, string(live))
-	x.retryAfter = x.now().Add(xtcpRetry)
 	x.a.logf("xtcp: generation %d not active, will retry: %s", d.Generation, x.err)
 	if mode == "" {
 		return
