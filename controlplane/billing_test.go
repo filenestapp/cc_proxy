@@ -122,6 +122,7 @@ func signedWebhook(t *testing.T, handler http.Handler, payload string, secret st
 
 func TestBillingCustomerRoutesAndAdminCookie(t *testing.T) {
 	s := testStore(t)
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "fixture-signing-secret")
 	c, cookie, csrf := billingCustomer(t, s)
 	fake := &fakeStripe{}
 	h := billingAPI(s, fake)
@@ -145,6 +146,17 @@ func TestBillingCustomerRoutesAndAdminCookie(t *testing.T) {
 	if !strings.Contains(plans.Body.String(), `"amount":65000`) || strings.Contains(plans.Body.String(), "price_standard") {
 		t.Fatalf("updated public plans: %s", plans.Body.String())
 	}
+	t.Setenv("STRIPE_WEBHOOK_SECRET", " \t")
+	checkout = accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"standard"}`, cookie, csrf)
+	if checkout.Code != http.StatusServiceUnavailable || responseCode(t, checkout) != "stripe_unavailable" || fake.customers != 0 || fake.checkout != 0 {
+		t.Fatalf("Checkout without a signing secret: %d %s", checkout.Code, checkout.Body.String())
+	}
+	subscription, err := s.currentSubscription(t.Context(), c.ID)
+	require(t, err)
+	if subscription != nil {
+		t.Fatal("Checkout without a signing secret reserved a subscription")
+	}
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "fixture-signing-secret")
 	checkout = accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"standard"}`, cookie, csrf)
 	if checkout.Code != http.StatusOK || fake.checkout != 1 || fake.reservation.PriceID != "price_standard" {
 		t.Fatalf("checkout: %d %s", checkout.Code, checkout.Body.String())
@@ -173,7 +185,7 @@ func TestBillingCustomerRoutesAndAdminCookie(t *testing.T) {
 	if adminRec.Code != http.StatusOK || !strings.Contains(adminRec.Body.String(), "billing@example.com") {
 		t.Fatalf("admin customers: %d %s", adminRec.Code, adminRec.Body.String())
 	}
-	_, err := s.pool.Exec(t.Context(), `INSERT INTO orders(customer_id,amount_cny,status,created_at) VALUES($1,60000,'paid',$2)`, c.ID, s.now())
+	_, err = s.pool.Exec(t.Context(), `INSERT INTO orders(customer_id,amount_cny,status,created_at) VALUES($1,60000,'paid',$2)`, c.ID, s.now())
 	require(t, err)
 	for _, path := range []string{"/admin/subscriptions", "/admin/orders", "/admin/provisioning", "/admin/plans"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -193,6 +205,7 @@ func TestBillingCustomerRoutesAndAdminCookie(t *testing.T) {
 }
 
 func TestCheckoutPlanChangeExpiresPendingSession(t *testing.T) {
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "fixture-signing-secret")
 	s := testStore(t)
 	c, cookie, csrf := billingCustomer(t, s)
 	_, err := s.pool.Exec(t.Context(), `UPDATE plans SET stripe_price_id=CASE code WHEN 'standard' THEN 'price_standard' WHEN 'premium' THEN 'price_premium' ELSE stripe_price_id END`)
@@ -246,6 +259,7 @@ func TestCheckoutPlanChangeAfterExpiryWebhook(t *testing.T) {
 }
 
 func TestCheckoutPlanChangeRecoversMissingSessionID(t *testing.T) {
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "fixture-signing-secret")
 	s := testStore(t)
 	_, cookie, csrf := billingCustomer(t, s)
 	_, err := s.pool.Exec(t.Context(), `UPDATE plans SET stripe_price_id='price_' || code WHERE code IN ('standard','premium')`)
@@ -271,6 +285,7 @@ func TestCheckoutPlanChangeRecoversMissingSessionID(t *testing.T) {
 }
 
 func TestCheckoutPlanChangeAfterPriceValidationFails(t *testing.T) {
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "fixture-signing-secret")
 	for _, test := range []struct {
 		name   string
 		legacy bool
@@ -312,6 +327,7 @@ func TestCheckoutPlanChangeAfterPriceValidationFails(t *testing.T) {
 }
 
 func TestCheckoutRetiredDuringPriceValidationCannotStart(t *testing.T) {
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "fixture-signing-secret")
 	s := testStore(t)
 	_, cookie, csrf := billingCustomer(t, s)
 	_, err := s.pool.Exec(t.Context(), `UPDATE plans SET stripe_price_id='price_' || code WHERE code IN ('standard','premium')`)
@@ -334,6 +350,7 @@ func TestCheckoutRetiredDuringPriceValidationCannotStart(t *testing.T) {
 }
 
 func TestCheckoutPlanChangePreservesUnconfirmedSession(t *testing.T) {
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "fixture-signing-secret")
 	s := testStore(t)
 	c, cookie, csrf := billingCustomer(t, s)
 	_, err := s.pool.Exec(t.Context(), `UPDATE plans SET stripe_price_id='price_' || code WHERE code IN ('standard','premium')`)
@@ -362,6 +379,7 @@ func TestCheckoutPlanChangePreservesUnconfirmedSession(t *testing.T) {
 }
 
 func TestCheckoutPlanChangeRejectsCompletedSession(t *testing.T) {
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "fixture-signing-secret")
 	s := testStore(t)
 	c, cookie, csrf := billingCustomer(t, s)
 	_, err := s.pool.Exec(t.Context(), `UPDATE plans SET stripe_price_id=CASE code WHEN 'standard' THEN 'price_standard' WHEN 'premium' THEN 'price_premium' ELSE stripe_price_id END`)

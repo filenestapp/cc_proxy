@@ -807,10 +807,14 @@ type stripeHTTPClient struct {
 }
 
 func newStripeClientFromEnv() stripeClient {
-	if key := os.Getenv("STRIPE_SECRET_KEY"); key != "" {
+	if key := strings.TrimSpace(os.Getenv("STRIPE_SECRET_KEY")); key != "" {
 		return &stripeHTTPClient{key: key, client: &http.Client{Timeout: 15 * time.Second}}
 	}
 	return nil
+}
+
+func stripeWebhookSecret() string {
+	return strings.TrimSpace(os.Getenv("STRIPE_WEBHOOK_SECRET"))
 }
 
 func (c *stripeHTTPClient) call(ctx context.Context, method, path string, values url.Values, key string, out any) error {
@@ -1071,8 +1075,8 @@ func (a *api) accountPlans(r *apiRequest) (response, error) {
 }
 
 func (a *api) accountCheckout(r *apiRequest) (response, error) {
-	if a.store.stripe == nil {
-		return response{}, failureCode(503, "stripe_unavailable", "Stripe is not configured")
+	if a.store.stripe == nil || stripeWebhookSecret() == "" {
+		return response{}, failureCode(503, "stripe_unavailable", "Stripe Checkout is not configured")
 	}
 	var body struct {
 		Plan string `json:"plan"`
@@ -1178,7 +1182,7 @@ func (a *api) accountDeviceRevoke(r *apiRequest) (response, error) {
 	return response{status: http.StatusNoContent}, a.store.revokeCustomerDevice(r.Context(), r.Customer.CustomerID, r.PathValue("name"))
 }
 func (a *api) stripeWebhook(r *apiRequest) (response, error) {
-	if err := verifyStripeSignature(r.raw, r.Header.Get("Stripe-Signature"), os.Getenv("STRIPE_WEBHOOK_SECRET"), a.store.clock()); err != nil {
+	if err := verifyStripeSignature(r.raw, r.Header.Get("Stripe-Signature"), stripeWebhookSecret(), a.store.clock()); err != nil {
 		return response{}, failure(400, "invalid Stripe signature")
 	}
 	var event stripeEvent
