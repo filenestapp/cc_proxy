@@ -209,13 +209,18 @@ func isCustomerRoute(path string) bool {
 }
 
 func (a *api) bind(pattern, role, auditAction string, fn endpoint) {
+	readJSON := strings.HasPrefix(pattern, "POST ") || strings.HasPrefix(pattern, "PUT ")
+	a.bindWithBody(pattern, role, auditAction, fn, readJSON)
+}
+
+func (a *api) bindWithBody(pattern, role, auditAction string, fn endpoint, readJSON bool) {
 	a.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		req := &apiRequest{Request: r, Address: a.clientIP(r)}
 		handle := func() (response, error) {
 			if err := a.authorize(req, role); err != nil {
 				return response{}, err
 			}
-			if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			if readJSON {
 				if err := readBody(w, req); err != nil {
 					return response{}, err
 				}

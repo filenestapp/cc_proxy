@@ -10,9 +10,11 @@
 #            from aifree's own client config (/v1/config?mode=proxy) on 127.0.0.1:2080
 #   echo     answers with the caller's IPv4 (and /big with 20 MB)
 #
-# Checks: XTCP registration; the proxied request leaves from the exit host's egress IPv4; a 20 MB transfer does not
-# pass through frps; a blocked hole punch closes the connection with no relay; services come back after a reboot
-# without login; uninstall removes them. Needs Docker (with systemd containers) and internet access (GitHub, STUN).
+# Checks: XTCP registration; the agent's XTCP sync under systemd (installed file confirmed without reload, a second
+# shared port hot-reloaded and confirmed without rerunning the installer, release removes the proxy, ready after a
+# reboot); the proxied request leaves from the exit host's egress IPv4; a 20 MB transfer does not pass through frps; a
+# blocked hole punch closes the connection with no relay; services come back after a reboot without login; uninstall
+# removes them. Needs Docker (with systemd containers) and internet access (GitHub, STUN).
 #   controlplane/test/xtcp/run-e2e.sh            KEEP=1 leaves the containers running
 set -euo pipefail
 
@@ -174,6 +176,32 @@ check "frpc registered the xtcp proxy with frps" "docker logs ccx-frps 2>&1 | gr
 waitfor 60 "sing-box on 20443" "docker exec ccx-exit sh -c 'ss -ltn | grep -q :20443'"
 echo "PASS sing-box listens on 20443"
 
+echo "== agent XTCP sync under systemd (issue #45)"
+sync_state() { api GET /admin/hosts/macmini-sg-208/xtcp | json '["sync"]["state"]'; }
+port_status() { api GET /admin/hosts/macmini-sg-208/xtcp | python3 -c "import json,sys; print(' '.join('%d=%s' % (m['port'], m['status']) for m in json.load(sys.stdin)['mappings']))"; }
+frpc_main_pid() { docker exec ccx-exit systemctl show -p MainPID --value ccproxy-exit-frpc; }
+if waitfor 90 "XTCP sync ready after install" "[ \"\$(sync_state)\" = ready ]"; then echo "PASS the installed agent confirmed the XTCP mapping"
+else echo "FAIL XTCP sync after install: $(sync_state)"; status=1; fi
+check "the installer wrote frpc's loopback admin API and the restart helper" \
+  "docker exec ccx-exit grep -q '^webServer.addr = \"127.0.0.1\"' /etc/ccproxy-exit/frpc.toml && docker exec ccx-exit grep -q 'systemctl restart ccproxy-exit-frpc.service' /opt/ccproxy-exit/libexec/frpc-ctl"
+check "the fresh install needed no reload (the installed file is the agent's candidate)" \
+  "docker exec ccx-exit journalctl -u ccproxy-exit-agent --no-pager | grep -q 'frpc confirmed generation .* (already in place)'"
+check "the admin password file is root-only" "[ \"\$(docker exec ccx-exit stat -c %a:%U /var/lib/ccproxy-exit/agent/frpc-admin.secret)\" = 600:root ]"
+FRPC_PID=$(frpc_main_pid)
+api PUT /admin/users/alice '{"mode":"shared"}' >/dev/null
+api POST /admin/users '{"name":"bob","password":"bob-password-0123"}' >/dev/null
+api PUT /admin/users/bob '{"mode":"shared"}' >/dev/null
+api POST /admin/users/bob/assign "{\"ip\":\"$IP_EXIT\",\"port\":20444}" >/dev/null
+assigned=$SECONDS
+if waitfor 120 "bob's port ready" "[ \"\$(port_status)\" = '20443=ready 20444=ready' ]"; then echo "PASS a second shared port became ready through agent sync in $((SECONDS - assigned))s, no installer rerun"
+else echo "FAIL second port: $(port_status)"; status=1; fi
+check "frps registered the second proxy" "docker logs ccx-frps 2>&1 | grep -q 'new proxy \[ccproxy-208-direct-20444\] type \[xtcp\] success'"
+check "systemd's frpc was hot-reloaded, not restarted (MainPID unchanged)" "[ \"\$(frpc_main_pid)\" = '$FRPC_PID' ]"
+api POST /admin/users/bob/release >/dev/null
+if waitfor 120 "bob released" "[ \"\$(port_status)\" = '20443=ready' ]"; then echo "PASS after release only the primary mapping remains"
+else echo "FAIL release: $(port_status)"; status=1; fi
+check "frps closed the retired proxy" "docker logs ccx-frps 2>&1 | grep -q 'close proxy \[ccproxy-208-direct-20444\] success'"
+
 echo "== visitor: frpc xtcp visitor (no fallback) and the aifree client config"
 cat > "$OUT/visitor.toml" <<EOF
 serverAddr = "$IP_FRPS"
@@ -240,6 +268,8 @@ for unit in ccproxy-exit-agent ccproxy-exit-singbox ccproxy-exit-frpc; do
   waitfor 90 "$unit after reboot" "docker exec ccx-exit systemctl is-active --quiet $unit 2>/dev/null"
 done
 echo "PASS services active after reboot"
+if waitfor 90 "XTCP sync after reboot" "[ \"\$(sync_state)\" = ready ]"; then echo "PASS XTCP sync is ready after the reboot"
+else echo "FAIL XTCP sync after reboot: $(sync_state)"; status=1; fi
 docker exec ccx-visitor sh -c 'pkill frpc; sleep 1; frpc -c /etc/visitor.toml > /tmp/visitor.log 2>&1 &'
 waitfor 120 "tunnel after reboot" "[ \"\$(proxied http://$IP_ECHO:8080/ 2>/dev/null)\" = '$IP_EXIT' ]" && echo "PASS proxied IPv4 after reboot is $IP_EXIT" || { echo "FAIL tunnel after reboot"; status=1; }
 

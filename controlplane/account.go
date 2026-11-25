@@ -493,7 +493,8 @@ func (a *api) accountMe(r *apiRequest) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	return ok(object{"customer": customer, "csrf": r.Customer.CSRF, "subscription": subscription, "proxy": proxy, "mailbox": nil}, nil)
+	mailbox, err := a.store.customerMailbox(r.Context(), customer.ID)
+	return ok(object{"customer": customer, "csrf": r.Customer.CSRF, "subscription": subscription, "proxy": proxy, "mailbox": mailbox}, err)
 }
 
 func (a *api) accountPassword(r *apiRequest) (response, error) {

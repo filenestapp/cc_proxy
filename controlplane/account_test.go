@@ -401,7 +401,7 @@ func TestCloudMailSenderCachesLoginAndAccount(t *testing.T) {
 			if r.Header.Get("Authorization") != "mail-token" {
 				t.Fatalf("account lookup missing token")
 			}
-			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[{"accountId":7,"email":"noreply@aifree.sg"}]}}`))
+			_, _ = w.Write([]byte(`{"code":200,"data":[{"accountId":5,"email":"alias@example.com"},{"accountId":7,"email":"noreply@aifree.sg"}]}`))
 		case "/api/email/send":
 			sends++
 			if r.Header.Get("Authorization") != "mail-token" {
@@ -423,7 +423,9 @@ func TestCloudMailSenderCachesLoginAndAccount(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	sender := &cloudMailSender{baseURL: server.URL, email: "noreply@aifree.sg", password: "secret", client: server.Client()}
+	sender := &cloudMailSender{cloudMailConnection: cloudMailConnection{
+		baseURL: server.URL, email: "noreply@aifree.sg", password: "secret", client: server.Client(),
+	}}
 	require(t, sender.send(t.Context(), "customer@example.com", "First", "first body"))
 	require(t, sender.send(t.Context(), "customer@example.com", "Second", "second body"))
 	if logins != 1 || lookups != 1 || sends != 2 {

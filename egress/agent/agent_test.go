@@ -29,6 +29,9 @@ func TestMain(m *testing.M) {
 	if os.Getenv("CCPROXY_FAKE_SINGBOX") == "1" && len(os.Args) > 2 && (os.Args[1] == "check" || os.Args[1] == "run") {
 		os.Exit(fakeSingBox(os.Args[1], os.Args[3]))
 	}
+	if os.Getenv("CCPROXY_FAKE_FRPC") == "1" && len(os.Args) > 1 && (os.Args[1] == "verify" || os.Args[1] == "frpc-restart") {
+		os.Exit(fakeFrpcCommand(os.Args[1:]))
+	}
 	if os.Getenv("CCPROXY_FAKE_SINGBOX") == "1" && len(os.Args) == 2 && os.Args[1] == "version" {
 		fmt.Println("sing-box version 1.14.4-fake")
 		os.Exit(0)
@@ -136,6 +139,12 @@ type fakeCP struct {
 	ips     string
 	reports []map[string]any
 	srv     *httptest.Server
+	// XTCP sync (xtcp_test.go): nil answers 204 (public entry); noXTCP answers 404 (a control plane before #45);
+	// offline answers 503 to everything.
+	xtcp     *xtcpDesired
+	noXTCP   bool
+	offline  bool
+	xtcpGets int
 }
 
 const testToken = "test-agent-token-0123456789"
@@ -149,7 +158,27 @@ func newFakeCP(t *testing.T) *fakeCP {
 		}
 		cp.mu.Lock()
 		defer cp.mu.Unlock()
+		if cp.offline {
+			w.WriteHeader(503)
+			return
+		}
 		switch r.URL.Path {
+		case "/agent/xtcp":
+			cp.xtcpGets++
+			switch {
+			case cp.noXTCP:
+				w.WriteHeader(404)
+			case cp.xtcp == nil:
+				w.WriteHeader(204)
+			default:
+				etag := fmt.Sprintf(`"xtcp-%d-%s"`, cp.xtcp.Generation, cp.xtcp.SHA256)
+				w.Header().Set("ETag", etag)
+				if r.Header.Get("If-None-Match") == etag {
+					w.WriteHeader(304)
+					return
+				}
+				json.NewEncoder(w).Encode(cp.xtcp)
+			}
 		case "/agent/ips":
 			io.WriteString(w, cp.ips)
 		case "/agent/probe-targets":

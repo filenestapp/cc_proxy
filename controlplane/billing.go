@@ -131,11 +131,13 @@ type provisioningView struct {
 	Email          string  `json:"email"`
 }
 type customerAdminView struct {
-	ID            int64   `json:"id"`
-	Email         string  `json:"email"`
-	EmailVerified bool    `db:"email_verified" json:"email_verified"`
-	Status        string  `json:"status"`
-	UserName      *string `db:"user_name" json:"user_name"`
+	ID              int64           `json:"id"`
+	Email           string          `json:"email"`
+	EmailVerified   bool            `db:"email_verified" json:"email_verified"`
+	Status          string          `json:"status"`
+	UserName        *string         `db:"user_name" json:"user_name"`
+	Mailbox         json.RawMessage `json:"mailbox"`
+	MailboxEntitled bool            `db:"mailbox_entitled" json:"mailbox_entitled"`
 }
 
 func (s *store) activePlans(ctx context.Context) ([]planView, error) {
@@ -467,6 +469,9 @@ func (s *store) storeStripeEvent(ctx context.Context, event stripeEvent) error {
 		if checkoutID == 0 {
 			checkoutID, _ = strconv.ParseInt(subscription.Metadata["aifree_subscription_id"], 10, 64)
 		}
+		if err := lockMailboxCustomer(ctx, tx, customerID); err != nil {
+			return err
+		}
 		if err := lockControlPlaneWrite(ctx, tx); err != nil {
 			return err
 		}
@@ -587,6 +592,13 @@ func (s *store) applySubscription(ctx context.Context, tx pgx.Tx, customerID, ch
 	}
 	if err != nil {
 		return 0, err
+	}
+	if status == "active" || status == "past_due" {
+		// A paid renewal starts a new retention window if this subscription later ends.
+		if _, err := tx.Exec(ctx, `UPDATE mailboxes SET reclaim_at=NULL WHERE customer_id=$1
+			AND status IN ('active','disabled') AND reclaim_at IS NOT NULL`, customerID); err != nil {
+			return 0, err
+		}
 	}
 	switch status {
 	case "active":
@@ -1188,7 +1200,12 @@ func (a *api) billingAdminRoutes() {
 }
 func (a *api) adminCustomers(r *apiRequest) (response, error) {
 	q := "%" + strings.TrimSpace(r.URL.Query().Get("q")) + "%"
-	return ok(rowsOf[customerAdminView](r.Context(), a.store.pool, `SELECT c.id,c.email,c.email_verified_at IS NOT NULL AS email_verified,c.status,cp.user_name FROM customers c LEFT JOIN customer_proxy cp ON cp.customer_id=c.id WHERE c.email ILIKE $1 ORDER BY c.id DESC`, q))
+	return ok(rowsOf[customerAdminView](r.Context(), a.store.pool, `SELECT c.id,c.email,c.email_verified_at IS NOT NULL AS email_verified,c.status,cp.user_name,
+		`+mailboxEligibleSQL+` AS mailbox_entitled,
+		CASE WHEN m.id IS NOT NULL THEN jsonb_build_object('address',m.address,'status',m.status,'setup_pending',m.setup_pending) END AS mailbox
+		FROM customers c LEFT JOIN customer_proxy cp ON cp.customer_id=c.id
+		LEFT JOIN mailboxes m ON m.customer_id=c.id AND m.status <> 'deleted'
+		WHERE c.email ILIKE $2 ORDER BY c.id DESC`, a.store.now(), q))
 }
 func (a *api) adminCustomerUpdate(r *apiRequest) (response, error) {
 	var body struct {
@@ -1204,7 +1221,10 @@ func (a *api) adminCustomerUpdate(r *apiRequest) (response, error) {
 	if body.Status != "active" && body.Status != "suspended" {
 		return response{}, failure(400, "invalid status")
 	}
-	err = a.store.write(r.Context(), func(tx pgx.Tx) error {
+	err = a.store.writeMailbox(r.Context(), id, func(tx pgx.Tx) error {
+		if err := lockControlPlaneWrite(r.Context(), tx); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(r.Context(), "UPDATE customers SET status=$2 WHERE id=$1", id, body.Status)
 		if err := rowsChanged(tag, err, "customer"); err != nil {
 			return err

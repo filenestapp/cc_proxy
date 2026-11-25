@@ -1,0 +1,54 @@
+# aifree deployment of maillab/cloud-mail v3.6.0 (MIT) at https://mail.aifree.sg.
+# Copy this file over mail-worker/wrangler.toml in a v3.6.0 checkout, then deploy.
+# Steps and secrets: docs/aifree-email-setup.md. Secrets (jwt_secret, password) are set with
+# `wrangler secret put` and never live in this file.
+name = "aifree-mail"
+main = "src/index.js"
+compatibility_date = "2025-06-04"
+keep_vars = true
+
+routes = [{ pattern = "mail.aifree.sg", custom_domain = true }]
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "db"
+database_name = "aifree-mail"
+database_id = "1303d0b8-080c-47fb-a54c-69ae217e6467"
+
+[[kv_namespaces]]
+binding = "kv"
+id = "f107f5d4b1c84bb3a713c55e64c294d4"
+
+# Outbound mail goes through Resend (token set per domain in cloud-mail system settings).
+# Do not add a send_email binding named "email": cloud-mail would prefer it over Resend.
+[[send_email]]
+name = "forward"
+
+[ai]
+binding = "ai"
+
+[assets]
+binding = "assets"
+directory = "./dist"
+not_found_handling = "single-page-application"
+run_worker_first = [ "/api/*", "/oss/*", "/static/*", "/attachments/*", "/proxy", "/realtime" ]
+
+[triggers]
+crons = ["0 * * * *"]
+
+[[durable_objects.bindings]]
+name = "ws"
+class_name = "MailHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MailHub"]
+
+[vars]
+domain = ["aifree.sg"]
+admin = "admin@aifree.sg"
+
+[build]
+command = "npx --yes pnpm@9 -C ../mail-vue install --frozen-lockfile && npx --yes pnpm@9 -C ../mail-vue run build"

@@ -21,31 +21,41 @@ type mailSender interface {
 	send(context.Context, string, string, string) error
 }
 
-type cloudMailSender struct {
+type cloudMailConnection struct {
 	baseURL  string
 	email    string
 	password string
 	client   *http.Client
+}
 
+type cloudMailSender struct {
+	cloudMailConnection
 	mu        sync.Mutex
 	token     string
 	accountID int64
 }
 
 func newCloudMailSenderFromEnv() mailSender {
-	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CLOUDMAIL_URL")), "/")
-	email := strings.TrimSpace(os.Getenv("CLOUDMAIL_NOREPLY_EMAIL"))
-	password := os.Getenv("CLOUDMAIL_NOREPLY_PASSWORD")
-	if baseURL == "" || email == "" || password == "" {
+	connection := cloudMailConnectionFromEnv("CLOUDMAIL_NOREPLY_EMAIL", "CLOUDMAIL_NOREPLY_PASSWORD")
+	if connection == nil {
 		return nil
 	}
-	if _, err := url.ParseRequestURI(baseURL); err != nil {
-		return nil
-	}
-	return &cloudMailSender{baseURL: baseURL, email: email, password: password, client: &http.Client{Timeout: cloudMailHTTPTimeout}}
+	return &cloudMailSender{cloudMailConnection: *connection}
 }
 
-func (m *cloudMailSender) request(ctx context.Context, method, path string, body any, token string, out any) (int, error) {
+func cloudMailConnectionFromEnv(emailKey, passwordKey string) *cloudMailConnection {
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("CLOUDMAIL_URL")), "/")
+	email := strings.TrimSpace(os.Getenv(emailKey))
+	password := os.Getenv(passwordKey)
+	endpoint, err := url.ParseRequestURI(baseURL)
+	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "https" && endpoint.Scheme != "http") ||
+		endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || email == "" || password == "" {
+		return nil
+	}
+	return &cloudMailConnection{baseURL: baseURL, email: email, password: password, client: &http.Client{Timeout: cloudMailHTTPTimeout}}
+}
+
+func (m *cloudMailConnection) request(ctx context.Context, method, path string, body any, token string, out any) (int, error) {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -58,6 +68,7 @@ func (m *cloudMailSender) request(ctx context.Context, method, path string, body
 	if err != nil {
 		return 0, err
 	}
+	req.Header.Set("Accept-Language", "en")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -89,40 +100,31 @@ func (m *cloudMailSender) request(ctx context.Context, method, path string, body
 }
 
 type cloudMailResponse struct {
-	Code int             `json:"code"`
-	Data json.RawMessage `json:"data"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
 }
 
-func (m *cloudMailSender) login(ctx context.Context) error {
+func (m *cloudMailConnection) login(ctx context.Context) (string, error) {
 	var response cloudMailResponse
 	_, err := m.request(ctx, http.MethodPost, "/api/login", object{"email": m.email, "password": m.password}, "", &response)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if response.Code != 200 {
-		return errors.New("cloud-mail login was rejected")
+		return "", errors.New("cloud-mail login was rejected")
 	}
 	var data struct {
 		Token string `json:"token"`
 	}
 	if err := json.Unmarshal(response.Data, &data); err != nil || data.Token == "" {
-		return errors.New("cloud-mail login returned no token")
+		return "", errors.New("cloud-mail login returned no token")
 	}
-	m.token = data.Token
-	m.accountID = 0
-	return nil
+	return data.Token, nil
 }
 
 func (m *cloudMailSender) loadAccount(ctx context.Context) error {
-	var response struct {
-		Code int `json:"code"`
-		Data struct {
-			List []struct {
-				AccountID int64  `json:"accountId"`
-				Email     string `json:"email"`
-			} `json:"list"`
-		} `json:"data"`
-	}
+	var response cloudMailResponse
 	status, err := m.request(ctx, http.MethodGet, "/api/account/list?size=100", nil, m.token, &response)
 	if err != nil {
 		return err
@@ -133,8 +135,24 @@ func (m *cloudMailSender) loadAccount(ctx context.Context) error {
 	if response.Code != 200 {
 		return errors.New("cloud-mail account lookup was rejected")
 	}
-	for _, account := range response.Data.List {
-		if strings.EqualFold(account.Email, m.email) {
+	type senderAccount struct {
+		AccountID int64  `json:"accountId"`
+		Email     string `json:"email"`
+	}
+	var accounts []senderAccount
+	if bytes.HasPrefix(response.Data, []byte("{")) {
+		var page struct {
+			List []senderAccount `json:"list"`
+		}
+		if err := json.Unmarshal(response.Data, &page); err != nil {
+			return err
+		}
+		accounts = page.List
+	} else if err := json.Unmarshal(response.Data, &accounts); err != nil {
+		return err
+	}
+	for _, account := range accounts {
+		if account.AccountID > 0 && strings.EqualFold(account.Email, m.email) {
 			m.accountID = account.AccountID
 			return nil
 		}
@@ -147,9 +165,11 @@ func (m *cloudMailSender) send(ctx context.Context, to, subject, content string)
 	defer m.mu.Unlock()
 	for attempt := 0; attempt < 2; attempt++ {
 		if m.token == "" {
-			if err := m.login(ctx); err != nil {
+			token, err := m.login(ctx)
+			if err != nil {
 				return err
 			}
+			m.token, m.accountID = token, 0
 		}
 		if m.accountID == 0 {
 			if err := m.loadAccount(ctx); err != nil {

@@ -54,6 +54,9 @@ type Options struct {
 	ProbeInterval, ProbeTimeout, ConfirmTimeout        float64
 	UsageInterval                                      float64
 	Once, Run                                          bool
+	// XTCP sync (xtcp.go): off unless FrpcConfig is set. All of these come from the local installation.
+	FrpcBin, FrpcConfig, FrpcCA, FrpcLog, FrpcAdmin, FrpcRestartCmd string
+	FrpcConfirmTimeout                                              float64
 }
 
 // errNotLoaded: the running sing-box demonstrably does not serve the version asked about.
@@ -104,6 +107,8 @@ type Agent struct {
 
 	usage     *usageCollector // nil with --once or when usage collection could not be set up
 	stopUsage context.CancelFunc
+
+	xtcp *xtcpSync // nil unless --frpc-config is set
 }
 
 func NewAgent(opt Options, token string, logf func(string, ...any), output io.Writer) (*Agent, error) {
@@ -165,6 +170,11 @@ func NewAgent(opt Options, token string, logf func(string, ...any), output io.Wr
 		output:         output,
 	}
 	a.opt.CP = cpURL
+	if opt.FrpcConfig != "" {
+		if a.xtcp, err = newXTCPSync(a); err != nil {
+			return nil, err
+		}
+	}
 	return a, nil
 }
 
@@ -422,6 +432,11 @@ func (a *Agent) report() error {
 		"agent": a.opt.Name, "config_etag": nullable(a.applied), "apply_state": nullable(a.state()),
 		"apply_error": nullable(a.applyError), "candidate_etag": nullable(candidate),
 		"singbox_running": a.singboxRunning(), "probes": probes,
+	}
+	if a.xtcp != nil {
+		if x := a.xtcp.report(); x != nil {
+			report["xtcp"] = x
+		}
 	}
 	if a.ips != nil && strings.TrimSpace(*a.ips) == "" {
 		if address := detectMacEgressIPv4(); address != "" {
@@ -898,6 +913,11 @@ func (a *Agent) Cycle() {
 	if err := a.syncAndApply(); err != nil {
 		a.logf("sync failed: %v", err)
 	}
+	if a.xtcp != nil { // independent of sing-box: a failure here never holds back the sing-box sync, or the reverse
+		if err := a.xtcp.Sync(); err != nil {
+			a.logf("xtcp sync failed: %v", err)
+		}
+	}
 	if err := a.report(); err != nil {
 		a.logf("report failed: %v", err)
 	}
@@ -928,6 +948,11 @@ func (a *Agent) Loop() error {
 	}
 	if a.opt.Run {
 		cleanupStaleChild(a.opt.StateDir, a.opt.SingBox, a.logf)
+	}
+	if a.xtcp != nil {
+		if err := a.xtcp.load(); err != nil {
+			return fmt.Errorf("xtcp state: %w", err)
+		}
 	}
 	a.startUsage()
 	for {
