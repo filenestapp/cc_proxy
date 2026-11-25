@@ -658,3 +658,14 @@ func TestXTCPInstallsOnlyTheRenderedShape(t *testing.T) {
 		}
 	}
 }
+
+// A hung service manager (systemctl, launchctl, the scheduled task) must not stall the agent's whole cycle.
+func TestXTCPHungRestartCommandDoesNotStallTheAgent(t *testing.T) {
+	start := time.Now()
+	if err := runCommandTimeout("sleep 30", nil, 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("a hung command must time out: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("the timeout took %s", elapsed)
+	}
+}
