@@ -520,6 +520,7 @@ dependencies = [
  "anyhow",
  "ccproxy-core",
  "clap",
+ "libc",
  "serde_json",
 ]
 

@@ -3,6 +3,11 @@
 // This process never runs privileged. On connect it asks the OS (one password / UAC prompt) to start the bundled
 // `ccproxy tunnel` supervisor, then only writes files the supervisor reads: the sing-box config (kept current by
 // polling the control plane), a heartbeat every few seconds, and a stop file on disconnect or exit.
+//
+// When the exit host uses XTCP, the app also runs the bundled frpc as the visitor, unprivileged, through the
+// `ccproxy visitor` guard (ccproxy_core::visitor): started once the supervisor reports the TUN running, and the tunnel
+// counts as connected only when the visitor listens and the first direct path is open. It stops on disconnect,
+// sign-out, exit and when the app dies (the guard sees its stdin close).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod exit_probe;
@@ -14,7 +19,8 @@ use ccproxy_core::api::{Api, LoginError};
 use ccproxy_core::commands::{self, touch, ConnectError, Connected, Effects, LoggedOut, Tunnel};
 use ccproxy_core::session::{Paths, Session};
 use ccproxy_core::supervisor::Status;
-use ccproxy_core::sync::{sync_once, SyncOutcome};
+use ccproxy_core::sync::{sync_with_visitor, SyncOutcome};
+use ccproxy_core::visitor::{self, Launcher, VisitorProcess};
 use ccproxy_core::{default_device_name, elevate, platform, DEFAULT_MODE};
 use exit_probe::{Observation, PublicExit};
 use serde::Serialize;
@@ -37,6 +43,8 @@ struct App {
     assignment: Mutex<Option<(String, bool)>>,
     exit_observation: Mutex<Option<Observation>>,
     tray_language: Mutex<tray::Language>,
+    /// The XTCP visitor guard, when the exit host needs one.
+    visitor: Mutex<VisitorProcess>,
 }
 
 /// The real effects behind the connect and logout commands (see [`commands`]).
@@ -44,7 +52,7 @@ struct DesktopEffects;
 
 impl Effects for DesktopEffects {
     fn sync(&self, paths: &Paths, session: &Session) -> Result<SyncOutcome> {
-        sync_once(paths, session, DEFAULT_MODE)
+        sync_with_visitor(paths, session, DEFAULT_MODE)
     }
 
     fn launch_supervisor(&self, paths: &Paths) -> Result<()> {
@@ -76,6 +84,7 @@ enum AppMessage {
     EgressRevoked(String),
     ConfigurationUnavailable(String),
     AuthorizationUnavailable(String),
+    XtcpUnavailable(String),
     SignedOut,
 }
 
@@ -98,6 +107,7 @@ impl From<ConnectError> for AppMessage {
             ConnectError::Unassigned(detail) => Self::NoEgressAssigned(detail),
             ConnectError::Configuration(detail) => Self::ConfigurationUnavailable(detail),
             ConnectError::Authorization(detail) => Self::AuthorizationUnavailable(detail),
+            ConnectError::Xtcp(detail) => Self::XtcpUnavailable(detail),
         }
     }
 }
@@ -117,6 +127,10 @@ struct View {
     message: Option<AppMessage>,
 }
 
+fn launcher() -> Launcher {
+    Launcher { ccproxy: sidecar("ccproxy"), frpc: sidecar("frpc") }
+}
+
 fn sidecar(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_default();
     let dir = exe.parent().map(PathBuf::from).unwrap_or_default();
@@ -130,6 +144,7 @@ impl App {
 
     fn request_stop(&self) {
         self.tunnel.request_stop(&self.paths);
+        self.visitor.lock().unwrap().stop();
         *self.exit_observation.lock().unwrap() = None;
     }
 
@@ -180,11 +195,18 @@ impl App {
             .is_some_and(|(id, assigned)| id == &session.id && *assigned);
         v.want_connected = self.tunnel.wants_connection();
         if let Some(status) = self.current_status() {
+            v.tunnel = status.state.clone();
+            v.tunnel_message = status.message.clone();
+            // On an XTCP exit the tunnel is connected only once the visitor is ready.
             if v.want_connected && status.state == "running" {
+                if let Some((state, message)) = visitor::tunnel_view(&self.paths) {
+                    v.tunnel = state;
+                    v.tunnel_message = message;
+                }
+            }
+            if v.want_connected && v.tunnel == "running" {
                 v.public_exit = exit_probe::display(self, &session, &status);
             }
-            v.tunnel = status.state;
-            v.tunnel_message = status.message;
         }
         if v.want_connected && v.tunnel != "running" && v.tunnel != "failed" {
             v.tunnel = "connecting".into();
@@ -234,7 +256,9 @@ async fn login(app: tauri::State<'_, Arc<App>>, server: String, username: String
 async fn logout(app: tauri::State<'_, Arc<App>>) -> Result<View, AppMessage> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        match commands::logout(&app.paths, &app.tunnel, &DesktopEffects) {
+        let outcome = commands::logout(&app.paths, &app.tunnel, &DesktopEffects);
+        app.visitor.lock().unwrap().stop();
+        match outcome {
             LoggedOut::SignedOut | LoggedOut::NotSignedIn => app.set_message(Some(AppMessage::SignedOut)),
             // A newer sign-in replaced the session while the server call was in flight: it stays signed in, and
             // its message stays as it is.
@@ -251,7 +275,8 @@ async fn connect(app: tauri::State<'_, Arc<App>>) -> Result<View, AppMessage> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         match commands::connect(&app.paths, &app.tunnel, &DesktopEffects)? {
-            Connected::Started => {}
+            // A new Connect retries a visitor configuration that failed before.
+            Connected::Started => app.visitor.lock().unwrap().reset(),
             // Signed out or replaced while the config synced: nothing was started for the old session. Return before
             // touching the app message or refreshing online, which would act for the replacement session.
             Connected::Superseded => return Err(AppMessage::SessionChangedWhileConnecting),
@@ -270,14 +295,22 @@ fn disconnect(app: tauri::State<Arc<App>>) -> View {
     app.view(false)
 }
 
-/// While connected: keep the heartbeat fresh and the config current.
+/// While connected: keep the heartbeat fresh, the config current and, on an XTCP exit, the visitor running.
 fn background(app: Arc<App>) {
     let mut last_beat = Instant::now() - HEARTBEAT_EVERY;
     let mut last_sync = Instant::now();
+    let launcher = launcher();
     loop {
         std::thread::sleep(Duration::from_millis(500));
         if !app.tunnel.wants_connection() {
+            app.visitor.lock().unwrap().stop();
             continue;
+        }
+        // The TUN first, then frpc: a path punched before the TUN took over routing would break.
+        if app.current_status().is_some_and(|s| s.state == "running") {
+            if let Err(error) = app.visitor.lock().unwrap().ensure(&app.paths, &launcher) {
+                eprintln!("Could not start the XTCP visitor: {error:#}");
+            }
         }
         if last_beat.elapsed() >= HEARTBEAT_EVERY {
             touch(&app.paths.heartbeat());
@@ -286,7 +319,7 @@ fn background(app: Arc<App>) {
         if last_sync.elapsed() >= SYNC_EVERY {
             last_sync = Instant::now();
             if let Some(s) = Session::load(&app.paths) {
-                match sync_once(&app.paths, &s, DEFAULT_MODE) {
+                match sync_with_visitor(&app.paths, &s, DEFAULT_MODE) {
                     Ok(SyncOutcome::SignedOut) => {
                         app.request_stop();
                         app.set_message(Some(AppMessage::SessionExpiredDisconnected));
@@ -294,6 +327,10 @@ fn background(app: Arc<App>) {
                     Ok(SyncOutcome::Unassigned(m)) => {
                         app.request_stop();
                         app.set_message(Some(AppMessage::EgressRevoked(m)));
+                    }
+                    Ok(SyncOutcome::XtcpUnavailable(m)) => {
+                        app.request_stop();
+                        app.set_message(Some(AppMessage::XtcpUnavailable(m)));
                     }
                     Ok(_) => {}
                     Err(_) => {} // offline for a moment: keep running on the current config
@@ -305,6 +342,8 @@ fn background(app: Arc<App>) {
 
 fn main() {
     let paths = Paths::new(None).expect("state directory");
+    // An frpc a killed guard left behind (macOS cannot tie it to the guard's lifetime).
+    visitor::kill_stale(&paths);
     let app = Arc::new(App {
         paths,
         tunnel: Tunnel::default(),
@@ -312,6 +351,7 @@ fn main() {
         assignment: Mutex::new(None),
         exit_observation: Mutex::new(None),
         tray_language: Mutex::new(tray::Language::preferred()),
+        visitor: Mutex::new(VisitorProcess::default()),
     });
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| tray::show_window(app)))
@@ -340,6 +380,7 @@ fn main() {
                 if app.tunnel.wants_connection() {
                     app.request_stop();
                 }
+                app.visitor.lock().unwrap().stop();
             }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { has_visible_windows: false, .. } => tray::show_window(handle),

@@ -6,6 +6,10 @@
 //!   config.etag       ETag of sing-box.json
 //!   stop              presence tells the supervisor to stop
 //!   heartbeat         touched by the GUI; the supervisor stops when it goes stale
+//!   frpc-visitor.toml, frp-ca.pem, frp-token, visitor.json, visitor.etag
+//!                     the XTCP visitor (only when the exit host uses XTCP; see `visitor`), all 0600
+//!   visitor-status.json, frpc.log, frpc.pid
+//!                     written by the unprivileged visitor guard; no credentials
 //!
 //! The privileged supervisor only reads sing-box.json (through `runtime::accept`) and stats stop / heartbeat. Its
 //! own files (validated config, working dir, log, status) live in `runtime::protected_dir()`, not here.
@@ -67,6 +71,14 @@ impl Paths {
     pub fn etag(&self) -> PathBuf { self.dir.join("config.etag") }
     pub fn stop(&self) -> PathBuf { self.dir.join("stop") }
     pub fn heartbeat(&self) -> PathBuf { self.dir.join("heartbeat") }
+    pub fn visitor_toml(&self) -> PathBuf { self.dir.join("frpc-visitor.toml") }
+    pub fn visitor_ca(&self) -> PathBuf { self.dir.join("frp-ca.pem") }
+    pub fn visitor_token(&self) -> PathBuf { self.dir.join("frp-token") }
+    pub fn visitor_info(&self) -> PathBuf { self.dir.join("visitor.json") }
+    pub fn visitor_etag(&self) -> PathBuf { self.dir.join("visitor.etag") }
+    pub fn visitor_status(&self) -> PathBuf { self.dir.join("visitor-status.json") }
+    pub fn visitor_log(&self) -> PathBuf { self.dir.join("frpc.log") }
+    pub fn visitor_pid(&self) -> PathBuf { self.dir.join("frpc.pid") }
 }
 
 /// Write via a temp file + rename, so readers never see half a file. `private` sets 0600 on Unix.
@@ -99,16 +111,16 @@ impl Session {
         Session { server, user, device, token, id: new_session_id() }
     }
 
-    /// Replace the stored session (sign-in). The config of any previous session goes with it.
+    /// Replace the stored session (sign-in). The config and visitor files of any previous session go with it.
     pub fn save(&self, paths: &Paths) -> Result<()> {
         let _g = lock();
-        for p in [paths.config(), paths.etag()] {
+        for p in [paths.config(), paths.etag()].into_iter().chain(crate::visitor::files(paths)) {
             let _ = fs::remove_file(p);
         }
         write_atomic(&paths.session(), &serde_json::to_vec_pretty(self)?, true)
     }
 
-    /// Forget the session and the config derived from it.
+    /// Forget the session and the config and visitor files derived from it.
     pub fn clear(paths: &Paths) {
         let _g = lock();
         Session::clear_locked(paths);
@@ -116,7 +128,7 @@ impl Session {
 
     /// [`Session::clear`] for callers already holding [`lock`].
     pub fn clear_locked(paths: &Paths) {
-        for p in [paths.session(), paths.config(), paths.etag()] {
+        for p in [paths.session(), paths.config(), paths.etag()].into_iter().chain(crate::visitor::files(paths)) {
             let _ = fs::remove_file(p);
         }
     }
@@ -128,5 +140,10 @@ impl Session {
 }
 
 pub fn read_etag(paths: &Paths) -> Option<String> {
-    fs::read_to_string(paths.etag()).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    read_file_trimmed(&paths.etag())
+}
+
+/// A small text file's content without surrounding whitespace; None if missing or empty.
+pub fn read_file_trimmed(path: &Path) -> Option<String> {
+    fs::read_to_string(path).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }

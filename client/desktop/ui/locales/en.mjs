@@ -58,6 +58,7 @@ export default {
   egress_revoked: "The egress assignment was revoked and the tunnel disconnected.",
   configuration_unavailable: "Could not load the configuration. Try again.",
   authorization_unavailable: "Administrator authorization was unavailable. Try connecting again.",
+  xtcp_unavailable: "The XTCP visitor for your exit host is unavailable. See the technical details or contact your administrator.",
   signed_out: "Signed out.",
   environment_check: "Environment check",
   environment_back: "Back",
