@@ -23,8 +23,10 @@ const targets = {
   "darwin-aarch64": { build: "aarch64-apple-darwin", package: /\.app\.tar\.gz$/ },
   "windows-x86_64": { build: "x86_64-pc-windows-msvc", package: /\.exe$/ },
   "windows-aarch64": { build: "aarch64-pc-windows-msvc", package: /\.exe$/ },
-  "linux-x86_64": { build: "x86_64-unknown-linux-gnu", package: /\.AppImage$/ },
-  "linux-aarch64": { build: "aarch64-unknown-linux-gnu", package: /\.AppImage$/ },
+  "linux-x86_64-appimage": { build: "x86_64-unknown-linux-gnu", package: /\.AppImage$/ },
+  "linux-aarch64-appimage": { build: "aarch64-unknown-linux-gnu", package: /\.AppImage$/ },
+  "linux-x86_64-deb": { build: "x86_64-unknown-linux-gnu", package: /\.deb$/ },
+  "linux-aarch64-deb": { build: "aarch64-unknown-linux-gnu", package: /\.deb$/ },
 };
 const packages = await files(root);
 const platforms = {};

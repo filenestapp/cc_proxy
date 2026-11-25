@@ -76,13 +76,27 @@ jobs:
           AIFREE_UPDATER_PUBLIC_KEY: ${{ secrets.AIFREE_UPDATER_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_VERSION: ${{ inputs.version }}
         run: npx --yes @tauri-apps/cli@2.12.6 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config tauri.release.conf.json -- --locked
+      - name: Sign Debian updater packages when Tauri does not create their signatures
+        if: runner.os == 'Linux'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          shopt -s nullglob
+          for package in target/${{ matrix.target }}/release/bundle/deb/*.deb; do
+            test -f "$package.sig" || npx --yes @tauri-apps/cli@2.12.6 signer sign --app-version "$RELEASE_VERSION" "$package"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: aifree-update-${{ matrix.target }}
           path: |
             client/target/${{ matrix.target }}/release/bundle/**/*.tar.gz
+            client/target/${{ matrix.target }}/release/bundle/**/*.dmg
             client/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            client/target/${{ matrix.target }}/release/bundle/**/*.deb
             client/target/${{ matrix.target }}/release/bundle/**/*.exe
             client/target/${{ matrix.target }}/release/bundle/**/*.sig
           if-no-files-found: error

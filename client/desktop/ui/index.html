@@ -535,6 +535,12 @@ import { createPreferenceMenu } from "./preferences.mjs";
     }
   }
 
+  function deferUpdate() {
+    updateDismissed = true;
+    invoke("defer_update").catch(() => {});
+    render();
+  }
+
   function showPassword(show) {
     $("password").type = show ? "text" : "password";
     $("show-password").setAttribute("aria-pressed", String(show));
@@ -588,10 +594,11 @@ import { createPreferenceMenu } from "./preferences.mjs";
   $("toggle").addEventListener("click", () => run(view.want_connected || view.tunnel === "running" ? "disconnect" : "connect"));
   $("logout").addEventListener("click", () => run("logout"));
   $("update-install").addEventListener("click", () => availableUpdate ? installUpdate() : checkForUpdate());
-  $("update-later").addEventListener("click", () => { updateDismissed = true; render(); });
+  $("update-later").addEventListener("click", deferUpdate);
 
   refresh(true);
   checkForUpdate();
+  setTimeout(checkForUpdate, 15000);
   setInterval(() => refresh(false), 1500);
   setInterval(() => refresh(true), 60000);
 })();

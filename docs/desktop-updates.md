@@ -27,11 +27,14 @@ installation of an updater-capable release before later releases can update them
 Run **desktop-release** on `main` with a new SemVer version. The workflow builds each supported
 platform, bundles the CLI helper and sing-box with the application, signs the updater package, and
 creates `stable.json`. The manifest job verifies that every platform has exactly one package and
-signature.
+signature. The release configuration sets `requireSignedVersion`, so the updater rejects a package
+whose signed version differs from the manifest version. The workflow binds any manually produced
+Debian signature to the same release version.
 
 Download `aifree-stable-update-<version>`, upload the versioned package files first, and replace
-`stable.json` only after each package URL returns successfully. The manifest references AppImage on
-Linux, NSIS on Windows, and a macOS application-bundle archive. Windows uses Tauri's passive
+`stable.json` only after each package URL returns successfully. The manifest references AppImage
+and Debian packages on Linux, NSIS on Windows, and a macOS application-bundle archive. The release
+artifact also includes the `.dmg` and `.deb` first-install packages. Windows uses Tauri's passive
 installer mode and may show installer progress while it applies the update.
 
 ## Client behavior
@@ -51,7 +54,11 @@ Linux.
 
 The development check covers the macOS Apple Silicon Rust test suite, the updater-enabled compile
 path with a generated release configuration, and fixture validation for the release configuration
-and five-platform manifest. It does not include an installed-package update because no durable
-release key or update feed is configured yet. Windows x64, Windows ARM64, Linux x64, and Linux
-ARM64 installer and restart behavior remain release-acceptance checks. In particular, a Windows
-ARM64 cross-build or artifact is not evidence that the installer completed on Windows ARM64.
+and seven-platform manifest entries. It also completed a real macOS Apple Silicon activation using
+an ephemeral signing key and a local-only feed. A 0.2.0 application downloaded the signed 0.2.1
+application archive, replaced itself, restarted, and reported 0.2.1. The test key, app, and feed
+were removed afterward.
+
+Windows x64, Windows ARM64, Linux x64, and Linux ARM64 installer and restart behavior remain
+release-acceptance checks. In particular, a Windows ARM64 cross-build or artifact is not evidence
+that the installer completed on Windows ARM64.

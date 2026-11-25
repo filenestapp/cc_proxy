@@ -328,7 +328,7 @@ fn main() {
             let exit = state.inner().clone();
             std::thread::spawn(move || background(heartbeat));
             std::thread::spawn(move || exit_probe::monitor(exit));
-            updates::check_on_startup(app.handle().clone());
+            updates::start_automatic_updates(app.handle().clone());
             if let Err(error) = tray::install(app.handle(), state.inner().clone()) {
                 eprintln!("Could not create the system tray: {error}");
             }
@@ -338,6 +338,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             system_languages, set_tray_language, get_state, login, logout, connect, disconnect,
             netcheck::run_environment_check, updates::check_for_update, updates::install_update,
+            updates::defer_update,
         ])
         .build(tauri::generate_context!())
         .expect("building the app")
