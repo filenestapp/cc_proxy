@@ -713,6 +713,7 @@
         <section class="tcard"><h3>Agent status</h3>
           <dl class="kv"><dt>Status</dt><dd>${statusBadge(agentHealth(agent))}</dd>
             <dt>Last heartbeat</dt><dd>${agent ? ago(agent.age) : "—"}</dd>
+            <dt>Agent version</dt><dd class="mono small">${esc(agent?.agent_version || "Unavailable")}</dd>
             <dt>Installed config</dt><dd class="mono small">${esc(agent?.config_etag || "—")}</dd></dl>
           ${agent?.apply_error && !agent.in_sync ? '<p class="line">' + esc(agent.apply_error) + "</p>" : ""}
         </section>
@@ -1013,9 +1014,9 @@
     updateAlertCount(topo.alerts || []);
     const agents = Object.fromEntries(topo.agents.map((a) => [a.name, a]));
     $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + hosts.length + ' hosts</span><span class="spacer"></span><button class="primary" id="add-host">Add host</button></div>' +
-      '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Public entry</th><th>Port range</th><th>Egress IPs</th><th>Users</th><th>Agent</th><th>TLS server name</th></tr></thead><tbody>' +
-      (hosts.map((h) => "<tr><td><a href=\"#/hosts/" + enc(h.name) + '"><b>' + esc(h.name) + "</b></a></td><td class=\"mono\">" + esc(publicEntryLabel(h)) + '</td><td class="mono">' + h.port_range[0] + "–" + h.port_range[1] + "</td><td>" + h.ips + "</td><td>" + h.users + "</td><td>" + statusBadge(agentHealth(agents[h.name])) + '</td><td class="mono small">' + esc(h.server_name) + "</td></tr>").join("") ||
-        '<tr><td colspan="7" class="empty">No egress hosts yet.</td></tr>') + "</tbody></table></div>";
+      '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Public entry</th><th>Port range</th><th>Egress IPs</th><th>Users</th><th>Agent</th><th>Agent version</th><th>TLS server name</th></tr></thead><tbody>' +
+      (hosts.map((h) => "<tr><td><a href=\"#/hosts/" + enc(h.name) + '"><b>' + esc(h.name) + "</b></a></td><td class=\"mono\">" + esc(publicEntryLabel(h)) + '</td><td class="mono">' + h.port_range[0] + "–" + h.port_range[1] + "</td><td>" + h.ips + "</td><td>" + h.users + "</td><td>" + statusBadge(agentHealth(agents[h.name])) + '</td><td class="mono small">' + esc(agents[h.name]?.agent_version || "Unavailable") + '</td><td class="mono small">' + esc(h.server_name) + "</td></tr>").join("") ||
+        '<tr><td colspan="8" class="empty">No egress hosts yet.</td></tr>') + "</tbody></table></div>";
     $("#add-host").onclick = async () => {
       const r = await form("Add egress host", [{ name: "name", label: "Host name", required: true, placeholder: "hk-1" }, ...hostFields()],
         (v) => api("POST", "/admin/hosts", Object.assign({ name: v.name }, hostBody(v))), "Add");
@@ -1121,6 +1122,7 @@
         <section class="card"><h2>Agent status</h2><dl class="kv">
           <dt>Status</dt><dd>${statusBadge(agentHealth(agent))}</dd>
           <dt>Last heartbeat</dt><dd>${agent ? ago(agent.age) : "—"}</dd>
+          <dt>Agent version</dt><dd class="mono small">${esc(agent?.agent_version || "Unavailable")}</dd>
           <dt>sing-box</dt><dd>${agent?.singbox_running == null ? "Unknown" : agent.singbox_running ? "Running" : "Stopped"}</dd>
           <dt>Installed config</dt><dd class="mono small">${esc(agent?.config_etag || "—")}</dd>
           <dt>Current config</dt><dd class="mono small">${esc(topo.server_config_etags[name] || "—")}</dd>

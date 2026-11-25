@@ -255,7 +255,7 @@ func TestFirstConfigIsConfirmedAndReported(t *testing.T) {
 	a, dir := newTestAgent(t, cp, nil)
 	a.Cycle()
 	r := cp.last()
-	if r["apply_state"] != "confirmed" || r["config_etag"] == nil || r["candidate_etag"] != nil || r["singbox_running"] != true {
+	if r["agent_version"] != version || r["apply_state"] != "confirmed" || r["config_etag"] == nil || r["candidate_etag"] != nil || r["singbox_running"] != true {
 		t.Fatalf("unexpected heartbeat %v", r)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "config.json"))

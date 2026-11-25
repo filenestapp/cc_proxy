@@ -121,6 +121,7 @@ CREATE INDEX IF NOT EXISTS audit_at ON audit(at);
 CREATE TABLE IF NOT EXISTS agents (
     name text COLLATE "C" PRIMARY KEY,
     last_seen double precision NOT NULL,
+    agent_version text,
     config_etag text,
     singbox_running boolean,
     apply_error text,
