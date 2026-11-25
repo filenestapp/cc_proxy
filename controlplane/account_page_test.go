@@ -137,7 +137,7 @@ func TestAccountPageLinkTokens(t *testing.T) {
 	if rec.Code != 201 {
 		t.Fatalf("register = %d %s", rec.Code, rec.Body)
 	}
-	verifyLink := mail.waitForMessages(t, 1)[0].content
+	verifyLink := linkFromMail(t, mail.waitForMessages(t, 1)[0])
 	if !strings.HasPrefix(verifyLink, "https://app.aifree.sg/account/verify?token=") {
 		t.Fatalf("verify link = %q", verifyLink)
 	}
@@ -171,7 +171,7 @@ func TestAccountPageLinkTokens(t *testing.T) {
 	if rec.Code != 202 {
 		t.Fatalf("forgot = %d %s", rec.Code, rec.Body)
 	}
-	resetLink := mail.waitForMessages(t, 2)[1].content
+	resetLink := linkFromMail(t, mail.waitForMessages(t, 2)[1])
 	if !strings.HasPrefix(resetLink, "https://app.aifree.sg/account/reset?token=") {
 		t.Fatalf("reset link = %q", resetLink)
 	}

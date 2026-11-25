@@ -18,7 +18,13 @@ import (
 const cloudMailHTTPTimeout = 15 * time.Second
 
 type mailSender interface {
-	send(context.Context, string, string, string) error
+	send(context.Context, string, mailMessage) error
+}
+
+type mailMessage struct {
+	subject string
+	html    string
+	text    string
 }
 
 type cloudMailConnection struct {
@@ -160,7 +166,7 @@ func (m *cloudMailSender) loadAccount(ctx context.Context) error {
 	return errors.New("cloud-mail noreply account was not found")
 }
 
-func (m *cloudMailSender) send(ctx context.Context, to, subject, content string) error {
+func (m *cloudMailSender) send(ctx context.Context, to string, message mailMessage) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for attempt := 0; attempt < 2; attempt++ {
@@ -179,7 +185,8 @@ func (m *cloudMailSender) send(ctx context.Context, to, subject, content string)
 		}
 		var response cloudMailResponse
 		status, err := m.request(ctx, http.MethodPost, "/api/email/send", object{
-			"accountId": m.accountID, "receiveEmail": []string{to}, "subject": subject, "content": content,
+			"accountId": m.accountID, "name": "aifree", "receiveEmail": []string{to},
+			"subject": message.subject, "content": message.html, "text": message.text,
 		}, m.token, &response)
 		if err == nil && response.Code == 200 {
 			return nil

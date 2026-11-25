@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,9 +15,8 @@ import (
 )
 
 type sentMail struct {
-	to      string
-	subject string
-	content string
+	to string
+	mailMessage
 }
 
 type fakeMailSender struct {
@@ -25,10 +25,10 @@ type fakeMailSender struct {
 	err      error
 }
 
-func (m *fakeMailSender) send(_ context.Context, to, subject, content string) error {
+func (m *fakeMailSender) send(_ context.Context, to string, message mailMessage) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.messages = append(m.messages, sentMail{to: to, subject: subject, content: content})
+	m.messages = append(m.messages, sentMail{to: to, mailMessage: message})
 	return m.err
 }
 
@@ -47,6 +47,20 @@ func (m *fakeMailSender) waitForMessages(t *testing.T, count int) []sentMail {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+func linkFromMail(t *testing.T, message sentMail) string {
+	t.Helper()
+	for _, line := range strings.Split(message.text, "\n") {
+		if strings.HasPrefix(line, accountURL+"/") {
+			if strings.Count(message.html, `href="`+html.EscapeString(line)+`"`) != 2 {
+				t.Fatal("the email button and fallback must use the same URL as the plain text message")
+			}
+			return line
+		}
+	}
+	t.Fatal("account email is missing its plain text link")
+	return ""
 }
 
 func tokenFromMail(t *testing.T, value string) string {
@@ -241,6 +255,9 @@ func TestAccountHTTPRoutes(t *testing.T) {
 	if len(messages) != 1 || messages[0].to != "person@example.com" {
 		t.Fatalf("unexpected verification delivery: %+v", messages)
 	}
+	if messages[0].subject != "Verify your aifree email" || !strings.Contains(messages[0].html, "This link expires in 24 hours.") {
+		t.Fatal("verification email is missing its subject or expiry copy")
+	}
 	initialMe := accountRequest(t, handler, http.MethodGet, "/v1/account/me", "", cookieA, "")
 	if initialMe.Code != http.StatusOK {
 		t.Fatalf("initial me: HTTP %d: %s", initialMe.Code, initialMe.Body.String())
@@ -254,12 +271,12 @@ func TestAccountHTTPRoutes(t *testing.T) {
 	}
 
 	verify := accountRequest(t, handler, http.MethodPost, "/v1/account/verify",
-		`{"token":"`+tokenFromMail(t, messages[1].content)+`"}`, nil, "")
+		`{"token":"`+tokenFromMail(t, linkFromMail(t, messages[1]))+`"}`, nil, "")
 	if verify.Code != http.StatusOK {
 		t.Fatalf("verify: HTTP %d: %s", verify.Code, verify.Body.String())
 	}
 	reused := accountRequest(t, handler, http.MethodPost, "/v1/account/verify",
-		`{"token":"`+tokenFromMail(t, messages[1].content)+`"}`, nil, "")
+		`{"token":"`+tokenFromMail(t, linkFromMail(t, messages[1]))+`"}`, nil, "")
 	if reused.Code != http.StatusBadRequest || responseCode(t, reused) != "invalid_token" {
 		t.Fatalf("reused verification token: HTTP %d: %s", reused.Code, reused.Body.String())
 	}
@@ -304,8 +321,11 @@ func TestAccountHTTPRoutes(t *testing.T) {
 	if forgot.Code != http.StatusAccepted || len(messages) != 3 {
 		t.Fatalf("forgot password: HTTP %d, messages=%d", forgot.Code, len(messages))
 	}
+	if messages[2].subject != "Reset your aifree password" || !strings.Contains(messages[2].html, "This link expires in 1 hour.") {
+		t.Fatal("password reset email is missing its subject or expiry copy")
+	}
 	reset := accountRequest(t, handler, http.MethodPost, "/v1/account/password/reset",
-		`{"token":"`+tokenFromMail(t, messages[2].content)+`","new_password":"reset correct horse battery"}`, nil, "")
+		`{"token":"`+tokenFromMail(t, linkFromMail(t, messages[2]))+`","new_password":"reset correct horse battery"}`, nil, "")
 	if reset.Code != http.StatusNoContent {
 		t.Fatalf("reset password: HTTP %d: %s", reset.Code, reset.Body.String())
 	}
@@ -351,7 +371,7 @@ func TestAccountHTTPRateLimitsAndExpiry(t *testing.T) {
 	}
 	now = now.Add(verificationTokenTTL + time.Second)
 	expired := accountRequest(t, handler2, http.MethodPost, "/v1/account/verify",
-		`{"token":"`+tokenFromMail(t, mail2.waitForMessages(t, 1)[0].content)+`"}`, nil, "")
+		`{"token":"`+tokenFromMail(t, linkFromMail(t, mail2.waitForMessages(t, 1)[0]))+`"}`, nil, "")
 	if expired.Code != http.StatusBadRequest || responseCode(t, expired) != "invalid_token" {
 		t.Fatalf("expired verification token: HTTP %d: %s", expired.Code, expired.Body.String())
 	}
@@ -387,6 +407,8 @@ func TestDesktopEmailLoginRequiresWP4Subscription(t *testing.T) {
 }
 
 func TestCloudMailSenderCachesLoginAndAccount(t *testing.T) {
+	message, err := verificationEmail.render("test-token")
+	require(t, err)
 	var logins, lookups, sends int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -409,12 +431,15 @@ func TestCloudMailSenderCachesLoginAndAccount(t *testing.T) {
 			}
 			var body struct {
 				AccountID    int64    `json:"accountId"`
+				Name         string   `json:"name"`
 				ReceiveEmail []string `json:"receiveEmail"`
 				Subject      string   `json:"subject"`
 				Content      string   `json:"content"`
+				Text         string   `json:"text"`
 			}
 			require(t, json.NewDecoder(r.Body).Decode(&body))
-			if body.AccountID != 7 || len(body.ReceiveEmail) != 1 || body.ReceiveEmail[0] != "customer@example.com" || body.Subject == "" || body.Content == "" {
+			if body.AccountID != 7 || body.Name != "aifree" || len(body.ReceiveEmail) != 1 || body.ReceiveEmail[0] != "customer@example.com" ||
+				body.Subject != message.subject || body.Content != message.html || body.Text != message.text {
 				t.Fatalf("unexpected send body: %+v", body)
 			}
 			_, _ = w.Write([]byte(`{"code":200,"data":[]}`))
@@ -426,8 +451,8 @@ func TestCloudMailSenderCachesLoginAndAccount(t *testing.T) {
 	sender := &cloudMailSender{cloudMailConnection: cloudMailConnection{
 		baseURL: server.URL, email: "noreply@aifree.sg", password: "secret", client: server.Client(),
 	}}
-	require(t, sender.send(t.Context(), "customer@example.com", "First", "first body"))
-	require(t, sender.send(t.Context(), "customer@example.com", "Second", "second body"))
+	require(t, sender.send(t.Context(), "customer@example.com", message))
+	require(t, sender.send(t.Context(), "customer@example.com", message))
 	if logins != 1 || lookups != 1 || sends != 2 {
 		t.Fatalf("unexpected cloud-mail cache behavior: login=%d lookup=%d send=%d", logins, lookups, sends)
 	}

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"net/mail"
 	"strings"
 	"sync"
@@ -379,31 +378,6 @@ func (a *api) accountRateLimit(action, email, address string) error {
 	return nil
 }
 
-func (a *api) sendVerification(email, token string) {
-	a.sendMail(email, "Verify your aifree email", "https://app.aifree.sg/account/verify?token="+token, "verification")
-}
-
-func (a *api) sendPasswordReset(email, token string) {
-	if token == "" {
-		return
-	}
-	a.sendMail(email, "Reset your aifree password", "https://app.aifree.sg/account/reset?token="+token, "password reset")
-}
-
-func (a *api) sendMail(email, subject, content, purpose string) {
-	if a.mail == nil {
-		log.Printf("%s email for %s was not sent: cloud-mail is not configured", purpose, email)
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), mailSendTimeout)
-		defer cancel()
-		if err := a.mail.send(ctx, email, subject, content); err != nil {
-			log.Printf("send %s email: %v", purpose, err)
-		}
-	}()
-}
-
 func (a *api) accountRegister(r *apiRequest) (response, error) {
 	var body struct {
 		Email    string `json:"email"`
@@ -424,7 +398,7 @@ func (a *api) accountRegister(r *apiRequest) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	a.sendVerification(result.Email, verification)
+	a.sendAccountEmail(result.Email, verification, verificationEmail)
 	return response{status: 201, body: object{"customer": result},
 		cookie: a.customerCookie(r, session, int(customerSessionTTL.Seconds()))}, nil
 }
@@ -452,7 +426,7 @@ func (a *api) accountVerifyResend(r *apiRequest) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	a.sendVerification(customer.Email, token)
+	a.sendAccountEmail(customer.Email, token, verificationEmail)
 	return ok(object{"customer": customer}, nil)
 }
 
@@ -527,7 +501,7 @@ func (a *api) accountPasswordForgot(r *apiRequest) (response, error) {
 	if err != nil {
 		return response{}, err
 	}
-	a.sendPasswordReset(email, token)
+	a.sendAccountEmail(email, token, passwordResetEmail)
 	return response{status: 202, body: object{}}, nil
 }
 

@@ -5,6 +5,7 @@
 !schema.sql
 !console.html
 !account.html
+!account_email.html
 !install/
 !install/**
 !locales/
