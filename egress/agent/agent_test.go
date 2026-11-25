@@ -29,8 +29,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv("CCPROXY_FAKE_SINGBOX") == "1" && len(os.Args) > 2 && (os.Args[1] == "check" || os.Args[1] == "run") {
 		os.Exit(fakeSingBox(os.Args[1], os.Args[3]))
 	}
-	if os.Getenv("CCPROXY_FAKE_FRPC") == "1" && len(os.Args) > 1 && (os.Args[1] == "verify" || os.Args[1] == "frpc-restart") {
-		os.Exit(fakeFrpcCommand(os.Args[1:]))
+	if os.Getenv("CCPROXY_FAKE_FRPC") == "1" && len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "verify", "frpc-restart", "frpc-hang":
+			os.Exit(fakeFrpcCommand(os.Args[1:]))
+		}
 	}
 	if os.Getenv("CCPROXY_FAKE_SINGBOX") == "1" && len(os.Args) == 2 && os.Args[1] == "version" {
 		fmt.Println("sing-box version 1.14.4-fake")

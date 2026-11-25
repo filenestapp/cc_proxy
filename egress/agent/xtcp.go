@@ -47,13 +47,14 @@ import (
 )
 
 const (
-	xtcpApplied     = "applied"
-	xtcpPending     = "pending"
-	xtcpFailed      = "failed"
-	xtcpRetry       = 60 * time.Second
-	frpcAdminUser   = "ccproxy-agent"
-	frpcAdminSecret = "frpc-admin.secret"
-	frpcProxyLine   = "[[proxies]]"
+	xtcpApplied        = "applied"
+	xtcpPending        = "pending"
+	xtcpFailed         = "failed"
+	xtcpRetry          = 60 * time.Second
+	frpcRestartTimeout = 60 * time.Second // --frpc-restart-cmd (systemctl, launchctl, the scheduled task)
+	frpcAdminUser      = "ccproxy-agent"
+	frpcAdminSecret    = "frpc-admin.secret"
+	frpcProxyLine      = "[[proxies]]"
 )
 
 var (
@@ -531,9 +532,10 @@ func (x *xtcpSync) keepPrevious() error {
 // fail records a failed attempt. When files were replaced (mode != ""), the working ones go back and are loaded
 // again the same way, so the proxies frpc served before keep working.
 func (x *xtcpSync) fail(d xtcpDesired, mode, format string, args ...any) {
+	// A slow restore must not consume the interval before the next attempt.
+	defer func() { x.retryAfter = x.now().Add(xtcpRetry) }()
 	live, _ := os.ReadFile(x.a.opt.FrpcConfig)
 	x.state, x.err = xtcpFailed, x.redact(fmt.Sprintf(format, args...), d.FrpcTOML, string(live))
-	x.retryAfter = x.now().Add(xtcpRetry)
 	x.a.logf("xtcp: generation %d not active, will retry: %s", d.Generation, x.err)
 	if mode == "" {
 		return
@@ -564,7 +566,7 @@ func (x *xtcpSync) fail(d xtcpDesired, mode, format string, args ...any) {
 // loadConfig makes frpc read --frpc-config: hot reload through the admin API, or a service restart.
 func (x *xtcpSync) loadConfig(mode string) error {
 	if mode == "restart" {
-		if err := runCommand(x.a.opt.FrpcRestartCmd, x.a.output); err != nil {
+		if err := runCommandTimeout(x.a.opt.FrpcRestartCmd, x.a.output, frpcRestartTimeout); err != nil {
 			return fmt.Errorf("frpc restart (%s): %v", x.a.opt.FrpcRestartCmd, err)
 		}
 		return nil
