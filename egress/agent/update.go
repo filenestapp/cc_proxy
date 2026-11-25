@@ -1,29 +1,34 @@
 package main
 
-// Managed automatic updates (docs/exit-agent-updates.md).
+// Managed automatic updates (docs/exit-agent-updates.md). launcher.go decides which binary a service start runs;
+// this file is the part that runs inside the agent.
 //
-// Every --update-interval seconds the agent asks GET /agent/update for its rollout target. 204 means none: the
-// host is not targeted, the rollout is paused, or there is no rollout. A target is a signed release record
-// (egress/agent/release) with a rollout id. The agent moves to it only when all of these hold:
+// Every --update-interval seconds, after the heartbeat, the agent asks GET /agent/update for its rollout target.
+// 204 means none: the host is not targeted, the rollout is paused, or there is no rollout. A target is a signed
+// release record (egress/agent/release) with a rollout id. The agent moves to it only when all of these hold:
 //
 //   - the signature verifies against a key compiled into this binary (release_keys.txt);
-//   - the record's sequence is higher than the release this agent runs (versions are source hashes, unordered);
-//   - the record has a build for this platform, whose download matches its size and SHA-256;
+//   - the agent knows the signed sequence of the release it runs: from its last update, or established from the
+//     control plane's signed record of its own version (GET /agent/release/{version}), whose digest for this
+//     platform must equal this executable's SHA-256. Without that, no target is accepted, so an empty local state
+//     never lets an older signed release in;
+//   - the target's sequence is higher than the running release's (versions are source hashes, unordered);
+//   - the record has a build for this platform; the download matches its size and SHA-256;
 //   - the candidate runs here: "<candidate> version" prints the record's version and "<candidate> check-args"
 //     accepts this agent's command line;
-//   - the rollout still targets the host after the download (a pause stops activation).
+//   - the rollout still targets the host once the candidate is ready (a pause stops activation).
 //
-// Activation keeps a copy of the running binary as <exe>.previous, puts the candidate at <exe> with a rename, writes
-// the update state and exits with status 75 so the service manager starts the new binary (systemd Restart=always,
-// launchd KeepAlive, or --update-restart-cmd for the Windows scheduled task). The new binary confirms itself only
-// after two consecutive healthy cycles: a heartbeat the control plane accepted, and sing-box (and, on XTCP hosts,
-// frpc) at least as healthy as before the update. When it does not get there within --update-health-timeout, or
-// when it has been started more than updateMaxStarts times without confirming, it puts <exe>.previous back and
-// exits again; the previous binary reports the outcome "rolled_back". A rolled-back or rejected target is not tried
-// again until the operator changes the rollout (a new rollout id).
+// Download and self-test run in the background: heartbeats, sing-box config sync and XTCP sync go on, and a slow or
+// broken download only delays the update. The candidate is written to <bin>/releases/<version>/ (never over a
+// running file). Activation only records the target in update-state.json and exits with status 75; the launcher
+// starts the candidate and counts its starts. The candidate confirms itself after two consecutive healthy cycles:
+// a heartbeat the control plane accepted, and sing-box (and, on XTCP hosts, frpc) at least as healthy as before the
+// update. When it is not there within --update-health-timeout it records the rollback and exits; the launcher
+// starts the previous release, which reports "rolled_back". A rolled-back or rejected target is not tried again
+// until the operator changes the rollout (a new rollout id).
 //
-// Enrollment (token), configuration, sing-box and frpc files and services are never touched: only <exe> changes.
-// The heartbeat carries "agent_version" and an "update" object (updateReport).
+// Enrollment (token), configuration, sing-box and frpc files and services are never touched. The heartbeat carries
+// "agent_version" and an "update" object (updater.report).
 
 import (
 	"crypto/ed25519"
@@ -40,6 +45,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/filenestapp/cc_proxy/egress/agent/release"
@@ -53,16 +59,15 @@ var embeddedReleaseKeys string
 var extraReleaseKeys = ""
 
 const (
-	exitForUpdate   = 75 // EX_TEMPFAIL: the service manager starts the agent again
-	updateMaxStarts = 3  // starts of a candidate without confirming before it is rolled back
+	exitForUpdate   = 75 // EX_TEMPFAIL: the launcher (or the service manager) starts the agent again
+	updateMaxStarts = 3  // starts of a candidate without confirming before the launcher rolls it back
 	updateHealthy   = 2  // consecutive healthy cycles that confirm a candidate
 	updateStateFile = "update-state.json"
 
 	// Phases persisted across restarts.
-	phaseIdle        = ""
-	phaseActivating  = "activating"
-	phaseConfirming  = "confirming"
-	phaseRollingBack = "rolling_back"
+	phaseIdle       = ""
+	phaseActivating = "activating"
+	phaseConfirming = "confirming"
 
 	// Reported states ("update.state" in the heartbeat).
 	updDisabled    = "disabled"
@@ -79,10 +84,16 @@ const (
 // errRestartForUpdate ends Loop so that run exits with exitForUpdate.
 var errRestartForUpdate = errors.New("restarting for an agent update")
 
+func currentPlatform() string { return runtime.GOOS + "-" + runtime.GOARCH }
+
 type updateTarget struct {
 	Version  string `json:"version"`
 	Sequence int64  `json:"sequence"`
 	Rollout  int64  `json:"rollout"`
+}
+
+func targetKey(t updateTarget) string {
+	return fmt.Sprintf("%d:%d:%s", t.Rollout, t.Sequence, t.Version)
 }
 
 // updateBaseline: what was healthy before activation; the candidate must reach at least the same.
@@ -100,52 +111,100 @@ type updateResult struct {
 	Blocked string       `json:"blocked,omitempty"` // target key that is not retried automatically
 }
 
-// updateFile is update-state.json in --state-dir.
+// updateFile is update-state.json in --state-dir, shared by the launcher and the agent (never at the same time:
+// the launcher writes it before the agent starts).
 type updateFile struct {
+	Launcher         string         `json:"launcher_version"`
 	Phase            string         `json:"phase"`
-	Running          string         `json:"running_version"` // the version last confirmed (or found) running
+	Running          string         `json:"running_version"` // the release that runs when no candidate is confirming
 	RunningSequence  int64          `json:"running_sequence"`
 	Target           updateTarget   `json:"target"`
 	Previous         string         `json:"previous_version"`
 	PreviousSequence int64          `json:"previous_sequence"`
 	ActivatedAt      float64        `json:"activated_at"`
 	Starts           int            `json:"starts"`
-	Interrupted      int            `json:"interrupted"`
 	Baseline         updateBaseline `json:"baseline"`
 	Result           *updateResult  `json:"result,omitempty"`
 }
 
-// updateOffer is the 200 answer of GET /agent/update.
+// rollback abandons the candidate: the previous release runs again and the target is not retried for its rollout.
+func (st *updateFile) rollback(now time.Time, reason string) {
+	st.Result = &updateResult{State: updRolledBack, Target: st.Target, Error: reason, At: float64(now.Unix()), Blocked: targetKey(st.Target)}
+	st.Phase, st.Running, st.RunningSequence, st.Starts = phaseIdle, st.Previous, st.PreviousSequence, 0
+}
+
+func loadUpdateFile(stateDir string, logf func(string, ...any)) updateFile {
+	var st updateFile
+	data, err := os.ReadFile(filepath.Join(stateDir, updateStateFile))
+	if err != nil {
+		return st
+	}
+	if json.Unmarshal(data, &st) != nil {
+		logf("update: ignoring unreadable %s", updateStateFile)
+		return updateFile{}
+	}
+	return st
+}
+
+func saveUpdateFile(stateDir string, st updateFile) error {
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := writeTemp(stateDir, data)
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(stateDir, updateStateFile)); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// updateOffer is the 200 answer of GET /agent/update (and of GET /agent/release/{version}, without rollout_id).
 type updateOffer struct {
 	Rollout   int64  `json:"rollout_id"`
 	Record    string `json:"release"`   // release.json, byte for byte
 	Signature string `json:"signature"` // release.json.sig
 }
 
-type updater struct {
-	stateDir, exe, platform, version string
-	argv                             []string // this agent's command line, for the candidate's check-args
-	keys                             []ed25519.PublicKey
-	disabled                         string
-	interval, healthTimeout          time.Duration
-	restartCmd                       string
-	st                               updateFile
-	lastCheck                        time.Time
-	healthyCycles                    int
-	transient, transientErr          string // current check's state when no result is newer
-	target                           *updateTarget
-	logf                             func(string, ...any)
-	now                              func() time.Time
-	cp                               func(path string) (int, []byte, error) // GET with the agent token
-	download                         func(path string, w io.Writer, limit int64) error
+// prepJob is a candidate being downloaded and self-tested in the background.
+type prepJob struct {
+	key    string
+	err    error
+	reject bool // the candidate itself is unusable (not retried for this rollout)
 }
 
-// newUpdater sets up updates for this process. A disabled updater still answers report() and onStart().
+type updater struct {
+	stateDir, home, self, platform, version string
+	argv                                    []string // this agent's command line, for the candidate's check-args
+	keys                                    []ed25519.PublicKey
+	disabled                                string
+	interval, healthTimeout                 time.Duration
+	st                                      updateFile
+	lastCheck                               time.Time
+	healthyCycles                           int
+	transient, transientErr                 string // current check's state when no result is newer
+	target                                  *updateTarget
+	logf                                    func(string, ...any)
+	now                                     func() time.Time
+	cp                                      func(path string) (int, []byte, error) // GET with the agent token
+	download                                func(path string, w io.Writer, limit int64) error
+
+	mu      sync.Mutex
+	running *prepJob // in the background
+	done    *prepJob // finished, not yet acted on
+}
+
+// newUpdater sets up updates for this process. A disabled updater still reports.
 func newUpdater(o Options, argv []string, logf func(string, ...any)) *updater {
-	u := &updater{stateDir: o.StateDir, platform: runtime.GOOS + "-" + runtime.GOARCH, version: version, argv: argv,
+	u := &updater{stateDir: o.StateDir, platform: currentPlatform(), version: version, argv: argv,
 		interval:      time.Duration(o.UpdateInterval * float64(time.Second)),
-		healthTimeout: time.Duration(o.UpdateHealthTimeout * float64(time.Second)),
-		restartCmd:    o.UpdateRestartCmd, logf: logf, now: time.Now}
+		healthTimeout: time.Duration(o.UpdateHealthTimeout * float64(time.Second)), logf: logf, now: time.Now}
 	keys, err := release.ParsePublicKeys(embeddedReleaseKeys + "\n" + strings.ReplaceAll(extraReleaseKeys, ",", "\n"))
 	switch {
 	case o.Update == "off":
@@ -160,60 +219,23 @@ func newUpdater(o Options, argv []string, logf func(string, ...any)) *updater {
 		u.disabled = "development build " + version
 	}
 	u.keys = keys
-	exe, err := os.Executable()
+	self, err := os.Executable()
 	if err == nil {
-		exe, err = filepath.EvalSymlinks(exe)
+		self, err = filepath.EvalSymlinks(self)
 	}
-	if err != nil && u.disabled == "" {
-		u.disabled = "cannot locate this binary: " + err.Error()
+	home, herr := agentHome()
+	if (err != nil || herr != nil) && u.disabled == "" {
+		u.disabled = "cannot locate this binary"
 	}
-	u.exe = exe
-	u.load()
+	u.self, u.home = self, home
+	u.st = loadUpdateFile(u.stateDir, logf)
 	return u
 }
 
-func (u *updater) path() string { return filepath.Join(u.stateDir, updateStateFile) }
-
-func (u *updater) load() {
-	data, err := os.ReadFile(u.path())
-	if err != nil {
-		return
-	}
-	var st updateFile
-	if json.Unmarshal(data, &st) != nil {
-		u.logf("update: ignoring unreadable %s", u.path())
-		return
-	}
-	u.st = st
-}
-
-func (u *updater) save() error {
-	data, err := json.MarshalIndent(u.st, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(u.stateDir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := writeTemp(u.stateDir, data)
-	if err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, u.path()); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
-}
-
 func (u *updater) mustSave() {
-	if err := u.save(); err != nil {
-		u.logf("update: cannot write %s: %v", u.path(), err)
+	if err := saveUpdateFile(u.stateDir, u.st); err != nil {
+		u.logf("update: cannot write %s: %v", updateStateFile, err)
 	}
-}
-
-func targetKey(t updateTarget) string {
-	return fmt.Sprintf("%d:%d:%s", t.Rollout, t.Sequence, t.Version)
 }
 
 func (u *updater) finish(state string, target updateTarget, block bool, format string, args ...any) {
@@ -225,74 +247,8 @@ func (u *updater) finish(state string, target updateTarget, block bool, format s
 	u.transient, u.transientErr = "", ""
 }
 
-// -- start ---------------------------------------------------------------------------------------------------------
-
-// onStart runs first in every agent process, before anything that could fail. True means: exit for a restart now
-// (a candidate that failed too often was rolled back).
-func (u *updater) onStart() bool {
-	for _, leftover := range []string{u.exe + ".download", u.exe + ".replaced", u.exe + ".restore"} {
-		os.Remove(leftover) // best effort; Windows keeps a running image's old name until it exits
-	}
-	st := &u.st
-	switch st.Phase {
-	case phaseActivating, phaseConfirming:
-		switch u.version {
-		case st.Target.Version:
-			st.Phase = phaseConfirming
-			st.Starts++
-			u.mustSave()
-			elapsed := u.now().Sub(time.Unix(int64(st.ActivatedAt), 0))
-			if st.Starts > updateMaxStarts {
-				return u.rollback(fmt.Sprintf("started %d times without reporting healthy", st.Starts-1))
-			}
-			if elapsed > u.healthTimeout {
-				return u.rollback(fmt.Sprintf("not healthy within %s", u.healthTimeout))
-			}
-			u.logf("update: running candidate %s (start %d), confirming its health", u.version, st.Starts)
-		case st.Previous:
-			// The swap did not take effect (stopped mid-activation). Not the candidate's fault: retry, a few times.
-			st.Interrupted++
-			block := st.Interrupted >= updateMaxStarts
-			u.finish(updFailed, st.Target, block, "activation of %s was interrupted", st.Target.Version)
-			st.Phase = phaseIdle
-			u.mustSave()
-			u.logf("update: %s", st.Result.Error)
-		default:
-			u.installedExternally()
-		}
-	case phaseRollingBack:
-		switch u.version {
-		case st.Previous:
-			st.Phase, st.Running, st.RunningSequence = phaseIdle, st.Previous, st.PreviousSequence
-			u.mustSave()
-			u.logf("update: back on %s after rolling back %s: %s", u.version, st.Target.Version, u.resultError())
-		case st.Target.Version:
-			return u.rollback(u.resultError()) // the restore did not take effect: try again
-		default:
-			u.installedExternally()
-		}
-	default:
-		if st.Running != u.version {
-			u.installedExternally()
-		}
-	}
-	return false
-}
-
-func (u *updater) resultError() string {
-	if u.st.Result == nil {
-		return ""
-	}
-	return u.st.Result.Error
-}
-
-// installedExternally: this binary was put in place by the installer (or by hand), not by an update in progress.
-func (u *updater) installedExternally() {
-	if u.st.Running != "" || u.st.Phase != phaseIdle {
-		u.logf("update: %s was installed outside an update; starting from it", u.version)
-	}
-	u.st = updateFile{Running: u.version, Result: u.st.Result}
-	u.mustSave()
+func (u *updater) confirming() bool {
+	return u.st.Phase == phaseConfirming && u.st.Target.Version == u.version
 }
 
 // -- reporting -----------------------------------------------------------------------------------------------------
@@ -315,7 +271,7 @@ func (u *updater) report() map[string]any {
 	switch {
 	case u.disabled != "":
 		set(updDisabled, updateTarget{}, u.disabled, 0)
-	case u.st.Phase == phaseConfirming:
+	case u.confirming():
 		set(updConfirming, u.st.Target, "", u.st.ActivatedAt)
 		out["previous_version"] = u.st.Previous
 	case u.transient != "" && u.target != nil:
@@ -337,15 +293,19 @@ func (u *updater) report() map[string]any {
 
 // -- per cycle -----------------------------------------------------------------------------------------------------
 
-// tick runs after each heartbeat. errRestartForUpdate means: exit now so the service manager runs <exe>.
+// tick runs after each heartbeat and never blocks on the network for long: downloads run in the background.
+// errRestartForUpdate means: exit now so the launcher starts the new (or the previous) release.
 func (u *updater) tick(a *Agent, reportErr error) error {
 	if u.disabled != "" {
 		return nil
 	}
-	if u.st.Phase == phaseConfirming {
+	if u.confirming() {
 		return u.confirm(a, reportErr)
 	}
-	if !u.lastCheck.IsZero() && u.now().Sub(u.lastCheck) < u.interval {
+	u.mu.Lock()
+	ready := u.done != nil
+	u.mu.Unlock()
+	if !ready && !u.lastCheck.IsZero() && u.now().Sub(u.lastCheck) < u.interval {
 		return nil
 	}
 	u.lastCheck = u.now()
@@ -389,58 +349,100 @@ func (u *updater) confirm(a *Agent, reportErr error) error {
 	} else {
 		u.healthyCycles = 0
 	}
+	st := &u.st
 	if u.healthyCycles >= updateHealthy {
-		st := &u.st
-		st.Phase, st.Running, st.RunningSequence, st.Starts, st.Interrupted = phaseIdle, st.Target.Version, st.Target.Sequence, 0, 0
+		st.Phase, st.Running, st.RunningSequence, st.Starts = phaseIdle, st.Target.Version, st.Target.Sequence, 0
 		u.finish(updUpdated, st.Target, false, "")
 		u.mustSave()
-		u.logf("update: %s (sequence %d) confirmed healthy; previous release %s stays at %s.previous",
-			st.Target.Version, st.Target.Sequence, st.Previous, filepath.Base(u.exe))
+		u.logf("update: %s (sequence %d) confirmed healthy; previous release %s", st.Target.Version, st.Target.Sequence, st.Previous)
+		u.prune()
 		return nil
 	}
-	if u.now().Sub(time.Unix(int64(u.st.ActivatedAt), 0)) > u.healthTimeout {
+	if u.now().Sub(time.Unix(int64(st.ActivatedAt), 0)) > u.healthTimeout {
 		if problem == "" {
 			problem = "not confirmed in time"
 		}
-		if u.rollback(fmt.Sprintf("not healthy within %s: %s", u.healthTimeout, problem)) {
-			return errRestartForUpdate
-		}
+		target := st.Target.Version
+		st.rollback(u.now(), fmt.Sprintf("not healthy within %s: %s", u.healthTimeout, problem))
+		u.mustSave()
+		u.logf("update: rolling back %s to %s: %s", target, st.Running, st.Result.Error)
+		return errRestartForUpdate
 	}
 	return nil
 }
 
-// rollback puts <exe>.previous back at <exe>. True when the agent must exit so the previous release starts.
-func (u *updater) rollback(reason string) bool {
-	st := &u.st
-	u.logf("update: rolling back %s to %s: %s", st.Target.Version, st.Previous, reason)
-	u.finish(updRolledBack, st.Target, true, "%s", reason)
-	st.Phase = phaseRollingBack
-	u.mustSave()
-	if err := u.restorePrevious(); err != nil {
-		// Keep running the candidate rather than leave no binary: report it and let the operator decide.
-		st.Phase = phaseIdle
-		st.Running, st.RunningSequence = st.Target.Version, st.Target.Sequence
-		u.finish(updFailed, st.Target, true, "rollback failed (%v) after: %s", err, reason)
-		u.mustSave()
-		u.logf("update: %s", st.Result.Error)
-		return false
+// prune removes staged releases other than the running and the previous one.
+func (u *updater) prune() {
+	entries, err := os.ReadDir(filepath.Join(u.home, "releases"))
+	if err != nil {
+		return
 	}
-	return true
+	for _, e := range entries {
+		if e.Name() != u.st.Running && e.Name() != u.st.Previous {
+			os.RemoveAll(filepath.Join(u.home, "releases", e.Name()))
+		}
+	}
 }
 
-func (u *updater) restorePrevious() error {
-	prev := u.exe + ".previous"
-	if !isRegular(prev) {
-		return fmt.Errorf("%s is missing", prev)
+// -- the running release's sequence ----------------------------------------------------------------------------------
+
+// verifyOffer checks a signed record from the control plane.
+func (u *updater) verifyOffer(o updateOffer) (release.Record, error) {
+	if err := release.Verify(u.keys, []byte(o.Record), o.Signature); err != nil {
+		return release.Record{}, err
 	}
-	tmp := u.exe + ".restore"
-	if err := copyFile(prev, tmp, 0o755); err != nil {
+	return release.Parse([]byte(o.Record))
+}
+
+// adopt records r's sequence as the running release's when r is this binary: same version and, for this platform,
+// this executable's SHA-256.
+func (u *updater) adopt(r release.Record) error {
+	if r.Version != u.version {
+		return fmt.Errorf("the record is for %s, this agent is %s", r.Version, u.version)
+	}
+	bin, ok := r.Binaries[u.platform]
+	if !ok {
+		return fmt.Errorf("the record of %s has no build for %s", r.Version, u.platform)
+	}
+	sum, _, err := release.HashFile(u.self)
+	if err != nil {
 		return err
 	}
-	return replaceExecutable(tmp, u.exe)
+	if sum != bin.SHA256 {
+		return fmt.Errorf("this executable is not the signed %s build for %s", r.Version, u.platform)
+	}
+	if u.st.Running != u.version || u.st.RunningSequence < r.Sequence {
+		u.st.Running, u.st.RunningSequence = u.version, r.Sequence
+		u.mustSave()
+		u.logf("update: running release %s is sequence %d", u.version, r.Sequence)
+	}
+	return nil
 }
 
-// -- check, download, activate -------------------------------------------------------------------------------------
+// establish makes sure the running release's sequence is known, from the control plane's signed record of it.
+func (u *updater) establish() error {
+	if u.st.Running == u.version && u.st.RunningSequence > 0 {
+		return nil
+	}
+	status, body, err := u.cp("/agent/release/" + u.version)
+	switch {
+	case status == http.StatusNotFound || status == http.StatusNoContent:
+		return fmt.Errorf("the control plane has no signed record of %s (install from a signed release)", u.version)
+	case err != nil:
+		return err
+	}
+	var o updateOffer
+	if err := json.Unmarshal(body, &o); err != nil {
+		return fmt.Errorf("release record of %s: %w", u.version, err)
+	}
+	r, err := u.verifyOffer(o)
+	if err != nil {
+		return fmt.Errorf("release record of %s: %w", u.version, err)
+	}
+	return u.adopt(r)
+}
+
+// -- check, prepare, activate --------------------------------------------------------------------------------------
 
 // offer fetches the rollout target; nil without one.
 func (u *updater) offer() (*updateOffer, *release.Record, *updateTarget, error) {
@@ -455,93 +457,125 @@ func (u *updater) offer() (*updateOffer, *release.Record, *updateTarget, error) 
 	if err := json.Unmarshal(body, &o); err != nil {
 		return nil, nil, nil, fmt.Errorf("update offer: %w", err)
 	}
-	t := &updateTarget{Rollout: o.Rollout}
-	if err := release.Verify(u.keys, []byte(o.Record), o.Signature); err != nil {
-		t.Version = "unverified"
-		return &o, nil, t, err
-	}
-	r, err := release.Parse([]byte(o.Record))
+	t := &updateTarget{Rollout: o.Rollout, Version: "unverified"}
+	r, err := u.verifyOffer(o)
 	if err != nil {
-		t.Version = "unverified"
 		return &o, nil, t, err
 	}
 	t.Version, t.Sequence = r.Version, r.Sequence
 	return &o, &r, t, nil
 }
 
+func (u *updater) reject(t updateTarget, format string, args ...any) {
+	u.finish(updRejected, t, true, format, args...)
+	u.mustSave()
+	u.logf("update: %s", u.st.Result.Error)
+}
+
 func (u *updater) check(a *Agent) error {
+	u.mu.Lock()
+	running, done := u.running, u.done
+	u.done = nil
+	u.mu.Unlock()
+
 	o, r, t, err := u.offer()
 	u.target = t
-	if o == nil && err != nil {
-		u.logf("update: cannot read the rollout target: %v", err)
-		return nil
-	}
 	if o == nil {
-		u.transient = ""
+		if err != nil {
+			u.logf("update: cannot read the rollout target: %v", err)
+		} else {
+			u.transient = ""
+		}
 		return nil
 	}
+	key := targetKey(*t)
 	if err != nil { // signature or record: never retried for this rollout
-		if u.st.Result == nil || u.st.Result.Blocked != targetKey(*t) {
-			u.finish(updRejected, *t, true, "release record refused: %v", err)
-			u.mustSave()
-			u.logf("update: %s", u.st.Result.Error)
+		if u.st.Result == nil || u.st.Result.Blocked != key {
+			u.reject(*t, "release record refused: %v", err)
 		}
 		return nil
 	}
 	if r.Version == u.version {
-		if u.st.RunningSequence < r.Sequence {
-			u.st.Running, u.st.RunningSequence = u.version, r.Sequence
-			u.mustSave()
+		if err := u.adopt(*r); err != nil {
+			u.logf("update: %v", err)
 		}
 		u.transient = ""
 		return nil
 	}
-	if res := u.st.Result; res != nil && res.Blocked == targetKey(*t) {
+	if res := u.st.Result; res != nil && res.Blocked == key {
 		return nil // rolled back or rejected before: wait for the operator to change the rollout
 	}
-	if u.st.RunningSequence > 0 && r.Sequence <= u.st.RunningSequence {
-		u.finish(updRejected, *t, true, "release sequence %d is not newer than the running release (%d)", r.Sequence, u.st.RunningSequence)
-		u.mustSave()
-		u.logf("update: %s", u.st.Result.Error)
+	if err := u.establish(); err != nil {
+		if u.transientErr == "" || !strings.Contains(u.transientErr, "not established") {
+			u.logf("update: not moving to %s: the running release is not established: %v", r.Version, err)
+		}
+		u.transient, u.transientErr = updFailed, "running release not established: "+err.Error()
+		return nil
+	}
+	if r.Sequence <= u.st.RunningSequence {
+		u.reject(*t, "release sequence %d is not newer than the running release (%d)", r.Sequence, u.st.RunningSequence)
 		return nil
 	}
 	bin, ok := r.Binaries[u.platform]
 	if !ok {
-		u.finish(updRejected, *t, true, "incompatible: release %s has no build for %s", r.Version, u.platform)
-		u.mustSave()
-		u.logf("update: %s", u.st.Result.Error)
+		u.reject(*t, "incompatible: release %s has no build for %s", r.Version, u.platform)
 		return nil
+	}
+	if done != nil && done.key == key {
+		switch {
+		case done.err == nil:
+			sum, size, err := release.HashFile(releaseBinary(u.home, r.Version, u.platform))
+			if err != nil || sum != bin.SHA256 || size != bin.Size {
+				u.transient, u.transientErr = updFailed, "the staged binary no longer matches the signed release"
+				return nil
+			}
+			return u.activate(a, *t)
+		case done.reject:
+			u.reject(*t, "incompatible: %v", done.err)
+		default:
+			u.transient, u.transientErr = updFailed, done.err.Error()
+			u.logf("update: preparing %s failed, the current release keeps running: %v", r.Version, done.err)
+		}
+		return nil
+	}
+	if running == nil {
+		job := &prepJob{key: key}
+		u.mu.Lock()
+		u.running = job
+		u.mu.Unlock()
+		u.logf("update: preparing %s (sequence %d, rollout %d) for %s in the background", r.Version, r.Sequence, t.Rollout, u.platform)
+		go func(ver string) {
+			job.err, job.reject = u.prepare(ver, bin)
+			u.mu.Lock()
+			u.running, u.done = nil, job
+			u.mu.Unlock()
+		}(r.Version)
 	}
 	u.transient, u.transientErr = updDownloading, ""
-	staged := u.exe + ".candidate"
-	if sum, size, err := release.HashFile(staged); err != nil || sum != bin.SHA256 || size != bin.Size {
-		u.logf("update: downloading %s (sequence %d, rollout %d) for %s", r.Version, r.Sequence, t.Rollout, u.platform)
-		if err := u.fetchBinary(r.Version, bin, staged); err != nil {
-			u.transient, u.transientErr = updFailed, "download: "+err.Error()
-			u.logf("update: download of %s failed, the current release keeps running: %v", r.Version, err)
-			return nil
-		}
-	}
-	if err := u.selfTest(staged, r.Version); err != nil {
-		os.Remove(staged)
-		u.finish(updRejected, *t, true, "incompatible: %v", err)
-		u.mustSave()
-		u.logf("update: candidate %s refused: %v", r.Version, err)
-		return nil
-	}
-	// A rollout paused or changed while the binary downloaded is not activated.
-	o2, _, t2, err := u.offer()
-	if err != nil || o2 == nil || targetKey(*t2) != targetKey(*t) {
-		u.transient = ""
-		u.logf("update: rollout changed during the download; %s stays staged, not activated", r.Version)
-		return nil
-	}
-	return u.activate(a, *t, staged)
+	return nil
 }
 
-// fetchBinary downloads into <exe>.download and renames it to dst once size and SHA-256 match.
-func (u *updater) fetchBinary(ver string, bin release.Binary, dst string) error {
-	tmp := u.exe + ".download"
+// prepare downloads (unless already staged) and self-tests a candidate under <home>/releases/<version>/.
+func (u *updater) prepare(ver string, bin release.Binary) (err error, reject bool) {
+	path := releaseBinary(u.home, ver, u.platform)
+	if sum, size, herr := release.HashFile(path); herr == nil && sum == bin.SHA256 && size == bin.Size {
+		u.logf("update: %s is already staged", ver)
+	} else if err := u.fetchBinary(ver, bin, path); err != nil {
+		return fmt.Errorf("download: %w", err), false
+	}
+	if err := u.selfTest(path, ver); err != nil {
+		os.RemoveAll(filepath.Dir(path))
+		return err, true
+	}
+	return nil, false
+}
+
+// fetchBinary downloads into <path>.download and renames it to path once size and SHA-256 match.
+func (u *updater) fetchBinary(ver string, bin release.Binary, path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".download"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o700)
 	if err != nil {
 		return err
@@ -565,7 +599,7 @@ func (u *updater) fetchBinary(ver string, bin release.Binary, dst string) error 
 		err = os.Chmod(tmp, 0o755)
 	}
 	if err == nil {
-		err = os.Rename(tmp, dst)
+		err = os.Rename(tmp, path)
 	}
 	if err != nil {
 		os.Remove(tmp)
@@ -608,99 +642,17 @@ func runWithTimeout(limit time.Duration, name string, args ...string) (string, e
 	}
 }
 
-func (u *updater) activate(a *Agent, t updateTarget, staged string) error {
+// activate records the candidate as the target; the launcher starts it once this process exits.
+func (u *updater) activate(a *Agent, t updateTarget) error {
 	st := &u.st
 	st.Baseline = baselineOf(a)
 	st.Phase, st.Target, st.Previous, st.PreviousSequence = phaseActivating, t, u.version, st.RunningSequence
 	st.ActivatedAt, st.Starts = float64(u.now().Unix()), 0
-	if err := u.save(); err != nil {
+	if err := saveUpdateFile(u.stateDir, *st); err != nil {
 		st.Phase = phaseIdle
 		u.transient, u.transientErr = updFailed, "cannot record the activation: "+err.Error()
 		return nil
 	}
-	fail := func(err error) error {
-		st.Phase = phaseIdle
-		u.transient, u.transientErr = updFailed, "activation: "+err.Error()
-		u.mustSave()
-		u.logf("update: activation of %s failed, the current release keeps running: %v", t.Version, err)
-		return nil
-	}
-	if err := copyFile(u.exe, u.exe+".previous.tmp", 0o755); err != nil {
-		return fail(err)
-	}
-	if err := os.Rename(u.exe+".previous.tmp", u.exe+".previous"); err != nil {
-		os.Remove(u.exe + ".previous.tmp")
-		return fail(err)
-	}
-	if err := replaceExecutable(staged, u.exe); err != nil {
-		return fail(err)
-	}
-	u.logf("update: activated %s (sequence %d, rollout %d) in place of %s; restarting through the service manager",
-		t.Version, t.Sequence, t.Rollout, u.version)
+	u.logf("update: activating %s (sequence %d, rollout %d) in place of %s; restarting", t.Version, t.Sequence, t.Rollout, u.version)
 	return errRestartForUpdate
-}
-
-// copyFile copies src to dst (replaced), synced, with mode.
-func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(out, in)
-	if err == nil {
-		err = out.Sync()
-	}
-	if cerr := out.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Chmod(dst, mode)
-	}
-	if err != nil {
-		os.Remove(dst)
-	}
-	return err
-}
-
-// replaceExecutable moves src to dst. A running image cannot be replaced on Windows, but it can be renamed:
-// the old file moves aside to <dst>.replaced (removed at the next start) first.
-func replaceExecutable(src, dst string) error {
-	if isWindows() {
-		os.Remove(dst + ".replaced")
-		if err := os.Rename(dst, dst+".replaced"); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err := os.Rename(src, dst); err != nil {
-			_ = os.Rename(dst+".replaced", dst) // put the old one back
-			return err
-		}
-		return nil
-	}
-	return os.Rename(src, dst)
-}
-
-// restartForUpdate runs --update-restart-cmd detached (Windows: the scheduled task is ended and started again on the
-// new file). Without it the exit status alone makes the service manager restart the agent.
-func (u *updater) restartForUpdate() {
-	if u.restartCmd == "" {
-		return
-	}
-	argv, err := splitCommand(u.restartCmd)
-	if err != nil {
-		u.logf("update: --update-restart-cmd: %v", err)
-		return
-	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	detach(cmd)
-	if err := cmd.Start(); err != nil {
-		u.logf("update: %s: %v", u.restartCmd, err)
-		return
-	}
-	_ = cmd.Process.Release()
-	u.logf("update: started %s", u.restartCmd)
 }

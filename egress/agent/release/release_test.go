@@ -120,6 +120,7 @@ func TestParseRefuses(t *testing.T) {
 		"schema":   func(r *Record) { r.Schema = 2 },
 		"product":  func(r *Record) { r.Product = "other" },
 		"version":  func(r *Record) { r.Version = "bad version" },
+		"dot path": func(r *Record) { r.Version = ".." },
 		"dirty":    func(r *Record) { r.Version = "agent-abc-dirty" },
 		"sequence": func(r *Record) { r.Sequence = 0 },
 		"commit":   func(r *Record) { r.Commit = "XYZ" },

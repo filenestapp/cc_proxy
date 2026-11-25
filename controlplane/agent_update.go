@@ -3,6 +3,7 @@ package main
 // Managed rollout of exit-agent releases (docs/exit-agent-updates.md).
 //
 //	GET    /agent/update                          (host agent token) this host's rollout target, or 204
+//	GET    /agent/release/{version}               (host agent token) a published signed release record
 //	GET    /agent/update/{version}/{platform}     (host agent token) a published release's binary
 //	GET    /admin/agent-releases                  published releases in CP_AGENT_RELEASES
 //	GET    /admin/agent-rollout                   the rollout and every host's running version and update outcome
@@ -95,7 +96,8 @@ type agentUpdateReport struct {
 // Malformed values are dropped rather than failing the heartbeat, which also carries sing-box health.
 func recordAgentUpdate(ctx context.Context, tx pgx.Tx, hostName string, now float64, rep *agentUpdateReport) error {
 	if rep == nil {
-		return nil
+		_, err := tx.Exec(ctx, "DELETE FROM agent_update_status WHERE host = $1", hostName)
+		return err
 	}
 	r := *rep
 	if !slices.Contains(agentUpdateStates, r.State) {
@@ -239,6 +241,7 @@ func getRollout(ctx context.Context, db database) (*agentRollout, error) {
 
 func (a *api) agentUpdateRoutes() {
 	a.bind("GET /agent/update", "agent", "", a.agentUpdateOffer)
+	a.bind("GET /agent/release/{version}", "agent", "", a.agentReleaseRecord)
 	a.bind("GET /agent/update/{version}/{platform}", "agent", "", a.agentUpdateBinary)
 	a.bind("GET /admin/agent-releases", "admin", "", a.agentReleaseList)
 	a.bind("GET /admin/agent-rollout", "admin", "", a.agentRolloutGet)
@@ -262,6 +265,15 @@ func (a *api) agentUpdateOffer(r *apiRequest) (response, error) {
 		return response{}, err
 	}
 	return ok(object{"rollout_id": rollout.RolloutID, "release": string(rel.record), "signature": rel.signature}, nil)
+}
+
+// agentReleaseRecord lets a freshly installed Agent establish the sequence of its running binary.
+func (a *api) agentReleaseRecord(r *apiRequest) (response, error) {
+	rel, err := loadPublishedRelease(agentReleasesDir(), r.PathValue("version"))
+	if err != nil {
+		return response{}, err
+	}
+	return ok(object{"release": string(rel.record), "signature": rel.signature}, nil)
 }
 
 // agentUpdateBinary serves a published release's binary while it still matches release.json (the agent checks the
@@ -334,14 +346,14 @@ func hostOutcome(h agentHostStatus, rollout *agentRollout) string {
 		return outcomeNotTargeted
 	case h.LastSeen == nil:
 		return outcomeUnknown
+	case h.RolloutID == rollout.RolloutID && (h.State == "rolled_back" || h.State == "rejected" || h.State == "failed"):
+		return outcomeFailed
 	case h.AgentVersion == rollout.Version && h.State != "confirming":
 		return outcomeOnTarget
 	case !h.ReportsUpdate:
 		return outcomeUpgradeNeeded
 	case h.State == "disabled":
 		return outcomeDisabled
-	case h.RolloutID == rollout.RolloutID && (h.State == "rolled_back" || h.State == "rejected" || h.State == "failed"):
-		return outcomeFailed
 	case h.RolloutID == rollout.RolloutID && (h.State == "downloading" || h.State == "confirming"):
 		return outcomeInProgress
 	}

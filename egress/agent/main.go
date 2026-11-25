@@ -41,9 +41,11 @@
 //	                                               remove the ones this agent added (recorded in owned-ips.txt)
 //
 // Managed updates (update.go, docs/exit-agent-updates.md): the agent polls GET /agent/update, verifies the signed
-// release record against the keys compiled in from release_keys.txt, downloads and self-tests the candidate, swaps it
-// in and exits with status 75 so the service manager starts it; a candidate that does not report healthy is rolled
-// back to the previous binary. The heartbeat carries agent_version and the update state.
+// release record against the keys compiled in from release_keys.txt, downloads and self-tests the candidate in the
+// background into <bin>/releases/<version>/, and exits with status 75. The binary the service runs is a stable
+// launcher (launcher.go) that is never replaced by an update: it starts the candidate, counts its starts, and rolls
+// it back to the previous release when it does not report healthy. The heartbeat carries agent_version and the
+// update state.
 package main
 
 import (
@@ -70,6 +72,10 @@ func main() {
 		case "check-args":
 			os.Exit(checkArgs(os.Args[2:]))
 		}
+	}
+	// The stable launcher (launcher.go) picks the release to run; it returns here to run this binary itself.
+	if code, here := launch(os.Args[1:]); !here {
+		os.Exit(code)
 	}
 	os.Exit(run(os.Args[1:]))
 }
@@ -150,7 +156,6 @@ func parseArgs(argv []string, stderr io.Writer) (cliOptions, error) {
 	fs.StringVar(&o.Update, "update", "auto", "auto: follow the control plane's rollout of signed agent releases; off: never update")
 	fs.Float64Var(&o.UpdateInterval, "update-interval", 120, "seconds between checks for a rollout target (30-3600)")
 	fs.Float64Var(&o.UpdateHealthTimeout, "update-health-timeout", 600, "seconds a new release has to report healthy before it is rolled back (60-3600)")
-	fs.StringVar(&o.UpdateRestartCmd, "update-restart-cmd", "", "command started (detached) to restart the agent service after an update; default: exit 75 and let the service manager restart it")
 	fs.StringVar(&c.logFile, "log-file", "", "append the agent's and sing-box's output here (rotated at 10 MB, 5 kept)")
 	if err := fs.Parse(argv); err != nil {
 		return c, err
@@ -174,11 +179,6 @@ func parseArgs(argv []string, stderr io.Writer) (cliOptions, error) {
 		return c, errors.New("--update-interval must be between 30 and 3600 seconds")
 	case o.UpdateHealthTimeout < 60 || o.UpdateHealthTimeout > 3600:
 		return c, errors.New("--update-health-timeout must be between 60 and 3600 seconds")
-	}
-	if o.UpdateRestartCmd != "" {
-		if _, err := splitCommand(o.UpdateRestartCmd); err != nil {
-			return c, fmt.Errorf("--update-restart-cmd: %v", err)
-		}
 	}
 	return c, nil
 }
@@ -205,12 +205,7 @@ func run(argv []string) int {
 	logf := func(format string, a ...any) {
 		fmt.Fprintf(out, "%s %s\n", time.Now().Format("2006-01-02T15:04:05"), fmt.Sprintf(format, a...))
 	}
-	// First, before anything that could fail: a candidate release that keeps failing is rolled back from here.
 	upd := newUpdater(o, argv, logf)
-	if upd.onStart() {
-		upd.restartForUpdate()
-		return exitForUpdate
-	}
 	token, err := readToken(c.tokenFile)
 	if err != nil {
 		return fail("--token-file: " + err.Error())
@@ -224,8 +219,7 @@ func run(argv []string) int {
 	err = agent.Loop()
 	agent.Close()
 	if errors.Is(err, errRestartForUpdate) {
-		upd.restartForUpdate()
-		return exitForUpdate
+		return exitForUpdate // the launcher (or the service manager, then the launcher) starts the chosen release
 	}
 	if err != nil {
 		logf("fatal: %v", err)

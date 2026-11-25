@@ -221,6 +221,42 @@ func TestAgentRolloutTargetsPausesAndReports(t *testing.T) {
 	}
 }
 
+func TestFailedOrLegacyHeartbeatDoesNotLookUpdated(t *testing.T) {
+	h := newRolloutHarness(t)
+	publishFakeRelease(t, h.dir, "agent-new", 12, true)
+	result := h.json(h.do("PUT", "/admin/agent-rollout", testAdminToken,
+		`{"version":"agent-new","hosts":["pilot"]}`), 200)
+	rolloutID := int(result["rollout"].(map[string]any)["rollout_id"].(float64))
+	h.report("pilot", "agent-new", fmt.Sprintf(`{"state":"failed","target_version":"agent-new","rollout_id":%d}`, rolloutID))
+	if got := h.hosts()["pilot"]["outcome"]; got != outcomeFailed {
+		t.Fatalf("unhealthy target was treated as updated: %v", got)
+	}
+	h.report("pilot", "", "")
+	if row := h.hosts()["pilot"]; row["outcome"] != outcomeUpgradeNeeded || row["state"] != "" {
+		t.Fatalf("legacy heartbeat retained old updater state: %v", row)
+	}
+}
+
+func TestAgentCanReadItsSignedReleaseBeforeAnyRollout(t *testing.T) {
+	h := newRolloutHarness(t)
+	publishFakeRelease(t, h.dir, "agent-installed", 11, true)
+	publishFakeRelease(t, h.dir, "agent-unsigned", 12, false)
+
+	endpoint := "/agent/release/agent-installed"
+	if rec := h.do("GET", endpoint, "", ""); rec.Code != 401 {
+		t.Fatalf("release record without a host token: HTTP %d", rec.Code)
+	}
+	record, err := os.ReadFile(filepath.Join(h.dir, "agent-installed", "release.json"))
+	require(t, err)
+	offer := h.json(h.do("GET", endpoint, h.tokens["pilot"], ""), 200)
+	if offer["release"] != string(record) || offer["signature"] != "ed25519:c2lnbmF0dXJl" {
+		t.Fatalf("released record or signature differed from the published files: %v", offer)
+	}
+	if rec := h.do("GET", "/agent/release/agent-unsigned", h.tokens["pilot"], ""); rec.Code != 409 {
+		t.Fatalf("unsigned release record: HTTP %d", rec.Code)
+	}
+}
+
 func TestAgentRolloutNeedsReleaseDirectory(t *testing.T) {
 	h := newRolloutHarness(t)
 	t.Setenv("CP_AGENT_RELEASES", "")

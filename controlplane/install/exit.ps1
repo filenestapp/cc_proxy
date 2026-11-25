@@ -369,10 +369,6 @@ function Install-ExitNode {
             '--state-dir', $State, '--singbox', $SingBoxExe, '--run', '--run-reload', 'restart',
             '--log-file', (Join-Path $Logs 'agent.log'))
         if ($agentName) { $agentArgs += @('--name', $agentName) }
-        # Automatic updates: after replacing its file the agent starts this detached and exits; it ends the task (if
-        # the agent is still running) and starts it again on the new file. Single quotes keep the path literal.
-        $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-        $agentArgs += @('--update-restart-cmd', "'$powershellExe' -NoProfile -NonInteractive -WindowStyle Hidden -Command Start-Sleep -Seconds 3; Stop-ScheduledTask -TaskName $TaskName; Start-ScheduledTask -TaskName $TaskName")
         if ($xtcp.Status -eq 200) {
             # XTCP sync: the agent hot-reloads frpc through its loopback admin API and restarts the frpc task only when
             # the frps settings change. Single quotes keep the path literal for the agent's command splitting.

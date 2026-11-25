@@ -73,13 +73,80 @@ func cleanupStaleChild(stateDir, singbox string, logf func(string, ...any)) {
 	}
 }
 
-const (
-	createNewProcessGroup = 0x00000200
-	detachedProcess       = 0x00000008
+var (
+	createJobObject          = kernel32.NewProc("CreateJobObjectW")
+	setInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
+	assignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
 )
 
-// detach: the restart helper outlives the agent, which the helper's Stop-ScheduledTask ends. Task Scheduler does
-// not end a task's descendants (see cleanupStaleChild), so no job breakaway is needed.
-func detach(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNewProcessGroup | detachedProcess}
+const (
+	jobObjectExtendedLimitInformation = 9
+	jobObjectLimitKillOnJobClose      = 0x2000
+	jobObjectLimitBreakawayOK         = 0x800
+)
+
+type ioCounters struct {
+	ReadOperationCount, WriteOperationCount, OtherOperationCount uint64
+	ReadTransferCount, WriteTransferCount, OtherTransferCount    uint64
+}
+
+type jobBasicLimitInformation struct {
+	PerProcessUserTimeLimit int64
+	PerJobUserTimeLimit     int64
+	LimitFlags              uint32
+	MinimumWorkingSetSize   uintptr
+	MaximumWorkingSetSize   uintptr
+	ActiveProcessLimit      uint32
+	Affinity                uintptr
+	PriorityClass           uint32
+	SchedulingClass         uint32
+}
+
+type jobExtendedLimitInformation struct {
+	BasicLimitInformation jobBasicLimitInformation
+	IoInfo                ioCounters
+	ProcessMemoryLimit    uintptr
+	JobMemoryLimit        uintptr
+	PeakProcessMemoryUsed uintptr
+	PeakJobMemoryUsed     uintptr
+}
+
+// enterKillJob puts the launcher in a job object that ends every process in it when its last handle closes: when
+// the scheduled task is ended (or the launcher dies), the agent and its sing-box end too, as they did when the agent
+// was the task's process. The handle is deliberately never closed.
+func enterKillJob() error {
+	job, _, err := createJobObject.Call(0, 0)
+	if job == 0 {
+		return err
+	}
+	info := jobExtendedLimitInformation{}
+	info.BasicLimitInformation.LimitFlags = jobObjectLimitKillOnJobClose | jobObjectLimitBreakawayOK
+	if r, _, err := setInformationJobObject.Call(job, jobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info)); r == 0 {
+		return err
+	}
+	self, _ := syscall.GetCurrentProcess()
+	if r, _, err := assignProcessToJobObject.Call(job, uintptr(self)); r == 0 {
+		return err
+	}
+	return nil
+}
+
+// runChildWait runs the chosen release with the launcher's arguments and waits for it (Windows has no exec).
+func runChildWait(path string, argv, env []string) (int, error) {
+	cmd := exec.Command(path, argv...)
+	cmd.Env, cmd.Stdout, cmd.Stderr = env, os.Stdout, os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	err := cmd.Wait()
+	if err == nil {
+		return 0, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode(), nil
+	}
+	return 0, err
 }

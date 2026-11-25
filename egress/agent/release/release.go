@@ -78,6 +78,11 @@ func FileName(platform string) string {
 	return Product + "-" + platform
 }
 
+// ValidVersion reports whether version is a safe release directory name.
+func ValidVersion(version string) bool {
+	return versionPattern.MatchString(version) && strings.Trim(version, ".") != ""
+}
+
 func knownPlatform(platform string) bool { return slices.Contains(Platforms, platform) }
 
 // Validate checks every field. A record that passes names only known platforms with the build's file names.
@@ -87,7 +92,7 @@ func (r Record) Validate() error {
 		return fmt.Errorf("unsupported release schema %d", r.Schema)
 	case r.Product != Product:
 		return fmt.Errorf("release is for %q, not %s", r.Product, Product)
-	case !versionPattern.MatchString(r.Version):
+	case !ValidVersion(r.Version):
 		return fmt.Errorf("bad release version %q", r.Version)
 	case strings.HasSuffix(r.Version, "-dirty"):
 		return errors.New("a build with uncommitted changes cannot be released")

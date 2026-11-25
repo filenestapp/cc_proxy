@@ -158,6 +158,10 @@ type fakeCP struct {
 	truncate      bool
 	reportFailFor string
 	downloads     int
+	// releases answers GET /agent/release/{version} (the running release's signed record); configGets counts
+	// GET /agent/server-config.
+	releases   map[string]*updateOffer
+	configGets int
 }
 
 const testToken = "test-agent-token-0123456789"
@@ -181,6 +185,14 @@ func newFakeCP(t *testing.T) *fakeCP {
 				return
 			}
 			json.NewEncoder(w).Encode(cp.offer)
+			return
+		}
+		if v, ok := strings.CutPrefix(r.URL.Path, "/agent/release/"); ok {
+			if o := cp.releases[v]; o != nil {
+				json.NewEncoder(w).Encode(o)
+			} else {
+				w.WriteHeader(404)
+			}
 			return
 		}
 		if rest, ok := strings.CutPrefix(r.URL.Path, "/agent/update/"); ok {
@@ -218,6 +230,7 @@ func newFakeCP(t *testing.T) *fakeCP {
 		case "/agent/probe-targets":
 			io.WriteString(w, `{"egress_targets": []}`)
 		case "/agent/server-config":
+			cp.configGets++
 			etag := `"` + fmt.Sprint(hash(cp.config)) + `"`
 			w.Header().Set("ETag", etag)
 			if r.Header.Get("If-None-Match") == etag {

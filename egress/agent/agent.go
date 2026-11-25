@@ -58,7 +58,7 @@ type Options struct {
 	FrpcBin, FrpcConfig, FrpcCA, FrpcLog, FrpcAdmin, FrpcRestartCmd string
 	FrpcConfirmTimeout                                              float64
 	// Managed updates (update.go).
-	Update, UpdateRestartCmd            string
+	Update                              string
 	UpdateInterval, UpdateHealthTimeout float64
 }
 

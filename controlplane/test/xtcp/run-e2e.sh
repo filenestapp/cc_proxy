@@ -277,7 +277,9 @@ echo "== automatic agent update (issue #67): two user ports, Direct and XTCP, no
 host_field() { # host_field KEY: this host's field in GET /admin/agent-rollout
   api GET /admin/agent-rollout | python3 -c "import json,sys; print([h for h in json.load(sys.stdin)['hosts'] if h['host']=='macmini-sg-208'][0]['$1'])"
 }
-running_version() { docker exec ccx-exit /opt/ccproxy-exit/bin/ccproxy-exit-agent version | awk '{print $2}'; }
+running_version() { host_field agent_version; }
+launcher_version() { docker exec ccx-exit /opt/ccproxy-exit/bin/ccproxy-exit-agent version | awk '{print $2}'; }
+staged_version() { docker exec ccx-exit "/opt/ccproxy-exit/bin/releases/$1/ccproxy-exit-agent-linux-$ARCH" version | awk '{print $2}'; }
 unit_pid() { docker exec ccx-exit systemctl show -p MainPID --value "$1"; }
 agent_restarts() { docker exec ccx-exit systemctl show -p NRestarts --value ccproxy-exit-agent; }
 # agent_logged PATTERN: the agent's journal has a matching line. Saved to a file first: with pipefail, journalctl piped
@@ -335,8 +337,8 @@ if waitfor 240 "the automatic update" "[ \"\$(host_field outcome)\" = on_target 
   echo "PASS the host moved to $V2 by itself ($((SECONDS - started))s after the release became available to it)"
 else echo "FAIL automatic update: outcome $(host_field outcome), state $(host_field state), error $(host_field error)"; status=1; fi
 check "the heartbeat reports agent_version $V2, previous $V1" "[ \"\$(host_field agent_version)\" = $V2 ] && [ \"\$(host_field previous_version)\" = $V1 ]"
-check "$V2 is the installed binary; $V1 is kept as .previous" \
-  "[ \"\$(running_version)\" = $V2 ] && [ \"\$(docker exec ccx-exit /opt/ccproxy-exit/bin/ccproxy-exit-agent.previous version | awk '{print \$2}')\" = $V1 ]"
+check "$V2 runs from its release directory and the $V1 launcher is unchanged" \
+  "[ \"\$(running_version)\" = $V2 ] && [ \"\$(launcher_version)\" = $V1 ] && [ \"\$(staged_version $V2)\" = $V2 ]"
 check "systemd restarted the agent once (exit 75, Restart=always)" "[ \"\$(agent_restarts)\" = $((RESTARTS + 1)) ]"
 check "the new agent confirmed itself healthy and adopted sing-box's config without a reload" \
   "agent_logged 'update: agent-e2e-v2 (sequence 2) confirmed healthy' && agent_logged 'adopted it without a reload'"

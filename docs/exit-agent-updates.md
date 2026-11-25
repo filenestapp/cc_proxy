@@ -1,274 +1,181 @@
-# Managed automatic updates for exit Agents (issue #67)
+# Managed exit Agent updates
 
-An exit host installed with the current installer moves to an approved Agent release by itself. The operator
-publishes a signed release, picks a pilot host or a cohort, watches each host's running version and outcome,
-widens or pauses the rollout, and retries hosts that failed. A candidate that does not report healthy is
-rolled back to the previous binary automatically.
+This document describes the current managed-update design for the Go exit Agent. An operator
+publishes a signed release, adds an approved version to a rollout, and starts with a pilot host.
+The Agent downloads and validates its candidate in the background. The stable launcher selects the
+candidate only after the Agent records an activation, and it restores the prior confirmed release
+when the candidate cannot confirm healthy.
 
-Only the Agent binary changes. The enrollment token, `install.conf`, the sing-box and frpc binaries and their
-configuration, the services, and the IP and port assignments stay as they are.
+The update path changes only the Agent executable. It preserves the host token, install settings,
+sing-box and frpc executables, their configuration, egress IP assignments, and user port mappings.
 
-## Pieces
+## Release and rollout model
 
-| Piece | Where | Role |
-| --- | --- | --- |
-| Release record | `egress/agent/release` | `release.json`: version, **sequence**, commit, and every platform's file, size and SHA-256. `release.json.sig`: Ed25519 signature over the exact bytes. |
-| Release tool | `egress/agent/cmd/agent-release` | `keygen`, `record`, `sign`, `verify`. |
-| Trusted keys | `egress/agent/release_keys.txt` | Public keys compiled into the Agent. With no key, updates are disabled (`update.state = disabled`). |
-| Release workflow | `.github/workflows/exit-agent.yml` | The operator's publish step. It builds reproducibly, writes the record with `sequence = run number`, and signs with the secret `AGENT_RELEASE_SIGNING_KEY`. It then checks the signature against `release_keys.txt`. |
-| Release store | control plane, `CP_AGENT_RELEASES/<version>/` | Unpacked workflow artifacts, one directory per release. The control plane serves them but cannot forge them. |
-| Rollout | control plane, `agent_update.go` | One rollout: version, target hosts (a list or all), paused flag, and a rollout id. Per-host status comes from heartbeats. |
-| Updater | Agent, `egress/agent/update.go` | Check, verify, download, self-test, activate, confirm, roll back. |
+An exit-agent release is the `dist/` directory produced by `egress/agent/build.sh`, plus:
 
-### Why the signature and the sequence
+- `release.json`, containing the Agent version, monotonic workflow sequence, source commit, and
+  every supported binary's filename, size, and SHA-256.
+- `release.json.sig`, an Ed25519 signature over the exact `release.json` bytes.
 
-The control plane is reachable from the internet and holds every host's token. A host must not run a binary
-merely because the control plane offered it. The Agent therefore accepts only a record signed by a key compiled
-into the binary it already runs.
+Agent versions are content hashes and do not establish an order. The release sequence does. The
+exit-agent workflow uses its run number as the sequence, and an Agent accepts a target only when
+its signed sequence is greater than the sequence of its current release.
 
-Agent versions are source hashes (`agent-<tree>`), so they cannot be ordered. The release sequence orders them.
-It is the exit-agent workflow's run number, so a later publication is always newer. An Agent never moves to a
-sequence lower than or equal to the release it runs. A replayed old record is refused, and so is a downgrade.
-To go back to older code, publish it again so it gets a new sequence; reverting the commit and running the
-workflow does this.
+The public keys in `egress/agent/release_keys.txt` are compiled into the Agent. The control plane
+can store and serve a signed release, yet it cannot make a host run an unsigned binary or a binary
+whose digest differs from the release record.
 
-## Agent behaviour
+The release workflow is deliberately manual on `main`. It builds the six supported Agent targets,
+writes the release record, and signs it only when `AGENT_RELEASE_SIGNING_KEY` is configured. An
+unsigned artifact remains suitable for installer distribution and is not a managed release.
 
-Every `--update-interval` seconds (default 120), the Agent calls `GET /agent/update`. It answers 204 when there
-is no rollout, the rollout is paused, or the host is not targeted. Otherwise it returns
-`{"rollout_id", "release", "signature"}`. The Agent then:
+## Control-plane contract
 
-1. Verifies the signature with its compiled-in keys and parses the record strictly: unknown fields, unknown
-   platforms, bad file names, digests or sizes, and `-dirty` versions are all refused. A refused record is
-   reported as `rejected` and not retried for that rollout id.
-2. Requires the record's sequence to be higher than the running release's sequence. If the record is the
-   version already running, it only records the sequence and reports `current`.
-3. Requires a build for its own platform. If there is none, the release is incompatible (`rejected`).
-4. Downloads `GET /agent/update/<version>/<platform>` into `<exe>.download`. It refuses more bytes than the
-   record lists, checks size and SHA-256, and renames the file to `<exe>.candidate`. A tampered, truncated or
-   interrupted download is deleted and reported as `failed`; the next check retries. A staged candidate whose
-   digest still matches is reused without downloading again.
-5. Self-tests the candidate: `<candidate> version` must print the signed version, and `<candidate> check-args
-   <this agent's arguments>` must accept the host's command line. A candidate that does not run on the host,
-   reports another version, or rejects a flag is incompatible (`rejected`).
-6. Asks `GET /agent/update` again. If the rollout was paused or changed during the download, the candidate
-   stays staged and is not activated.
-7. Activates it:
-   - Records the activation, with a health baseline of whether sing-box was confirmed and running and whether
-     XTCP was applied, in `<state-dir>/update-state.json`.
-   - Copies the running binary to `<exe>.previous`.
-   - Moves the candidate to `<exe>` with a rename. On Windows the running file is first renamed to
-     `<exe>.replaced`.
-   - Exits with status 75. The service manager starts the new binary: systemd through `Restart=always`, launchd
-     through `KeepAlive`. On Windows, a detached `--update-restart-cmd` ends and starts the `CCProxyExitAgent`
-     task.
+Set `CP_AGENT_RELEASES` to the directory that contains one published subdirectory per release:
 
-The new binary starts in the `confirming` phase. It confirms itself after **two consecutive healthy cycles**:
-the control plane accepted the heartbeat, and sing-box (and frpc on XTCP hosts) is at least as healthy as in the
-baseline. It is rolled back when either of these happens:
-
-- It is not healthy within `--update-health-timeout` (default 600 s).
-- It is started more than 3 times without confirming, because it crashes or exits at start. This is counted
-  at the start of `run`, before anything that can fail.
-
-Rollback copies `<exe>.previous` back to `<exe>`, records `rolled_back` with the reason, and exits with status
-75. The previous binary starts and reports the outcome. A rolled-back target is not retried for the same rollout
-id. The operator retries by setting the rollout again, which creates a new id.
-
-### No traffic interruption on Linux and macOS
-
-Before this change, every Agent start reloaded sing-box with a fresh confirmation secret, which drops open
-connections. Now the Agent records the confirmed configuration's ETag, secret and marker in
-`confirmed-state.json`. A restarted Agent adopts the running sing-box without a reload, but only if all of these
-hold:
-
-- `--config` is byte for byte the confirmed copy.
-- sing-box proves on its loopback API that it serves that marker.
-- sing-box runs as its own service (`--reload-cmd`).
-
-XTCP state was already persisted, so frpc is neither restarted nor reloaded. An update or rollback therefore
-touches neither sing-box nor frpc.
-
-### Interruptions
-
-| What happens | Result |
-| --- | --- |
-| Download fails or is cut off | Partial file removed. The current release keeps running and the next check resumes from a clean start. |
-| Power loss after the activation is recorded but before the swap | The old binary starts, sees it is still the previous version, and records `failed` ("activation interrupted"). It retries, up to 3 times per rollout. |
-| Power loss after the swap | The candidate starts and confirms or rolls back as usual. |
-| Installer rerun or manual replacement during an update | The binary is not the target or the previous version, so the state starts over from it (`installedExternally`). |
-
-## Contract with the control plane (and #66 / #68)
-
-The heartbeat (`POST /agent/report`) gains two optional fields. Older control planes ignore them, and older
-Agents simply omit them.
-
-```json
-"agent_version": "agent-6f21ad6f0bcf",
-"update": {
-  "state": "disabled|idle|current|downloading|confirming|updated|rolled_back|rejected|failed",
-  "target_version": "agent-...", "target_sequence": 42, "rollout_id": 7,
-  "running_sequence": 41, "previous_version": "agent-...", "error": "...", "at": 1795576048
-}
+```text
+CP_AGENT_RELEASES/
+  agent-<version>/
+    VERSION
+    SHA256SUMS
+    ccproxy-exit-agent-<platform>[.exe]
+    release.json
+    release.json.sig
 ```
 
-`agent_version` is the running binary's `main.version`, which `build.sh` stamps. This is the field #66 persists
-and shows in the console as **Agent version**. The control plane in this change stores it, with the update
-outcome, in `agent_update_status` for the rollout view. When #66 lands, its per-host column and this table
-should read from the same heartbeat field, so one of the two can be dropped. The desktop updater (#68) does not
-use these routes. It shares only the idea of a signed record with an explicit sequence, and can reuse
-`egress/agent/release` if that helps.
+The control plane validates the published files before listing or serving them. The Agent uses its
+host token for these routes:
 
-Agent routes (host token):
+- `GET /agent/update` returns `204` when the host has no active target, is outside the rollout, or
+  the rollout is paused. Otherwise it returns the rollout id and the signed target record.
+- `GET /agent/release/{version}` returns a published signed record for the version already running.
+  A newly installed Agent uses this to establish the current release sequence. The record's binary
+  digest must match its own executable before the Agent can accept a later target.
+- `GET /agent/update/{version}/{platform}` returns the target binary only after the control plane
+  rechecks its size and SHA-256 against `release.json`.
 
-- `GET /agent/update` returns 204, or `{"rollout_id", "release", "signature"}`.
-- `GET /agent/update/{version}/{platform}` returns a published binary. It is served only while it matches
-  `release.json`.
+The first condition is important. A host with the new launcher must also have its currently
+installed signed release published in `CP_AGENT_RELEASES`. Otherwise it reports that its running
+release is not established and will not advance to a target.
 
-Admin routes (audited): `GET /admin/agent-releases`, `GET /admin/agent-rollout`, `PUT /admin/agent-rollout`,
-`POST /admin/agent-rollout/pause`, `POST /admin/agent-rollout/resume`, `DELETE /admin/agent-rollout`. The same
-actions are in `controlplane/cpctl.py` (`agent-releases`, `agent-rollout`, `agent-rollout-set`,
-`agent-rollout-pause`, `agent-rollout-resume`, `agent-rollout-clear`).
+Administrators use these existing commands:
 
-`GET /admin/agent-rollout` gives each host an `outcome` for the current rollout:
+```bash
+cpctl.py agent-releases
+cpctl.py agent-rollout
+cpctl.py agent-rollout-set agent-<version> macmini-sg-208
+cpctl.py agent-rollout-set agent-<version> --all
+cpctl.py agent-rollout-pause
+cpctl.py agent-rollout-resume
+cpctl.py agent-rollout-clear
+```
 
-| Outcome | Meaning |
-| --- | --- |
-| `not_targeted` | Keeps its release. |
-| `waiting` | Targeted but not started: before the next check, or the rollout is paused. |
-| `in_progress` | Downloading or confirming. |
-| `on_target` | Running the rollout's version. |
-| `failed` | Rolled back, refused or failed for this rollout id. See `error`. |
-| `upgrade_needed` | The Agent has no updater. Run the installer once. |
-| `disabled` | The updater is off (no key in the build, or `--update off`). See `error`. |
-| `unknown` | No heartbeat yet. |
+Repeating `agent-rollout-set` creates a new rollout id and retries a host that previously rejected
+or rolled back that version. Read the host error before retrying.
 
-## Operator runbook
+## Host layout and lifecycle
 
-### One-time setup (project owner)
+The installer places a stable launcher at:
 
-1. Generate the release key on a trusted machine, and keep the private key offline:
+```text
+/opt/ccproxy-exit/bin/ccproxy-exit-agent
+```
+
+The service always starts that path. On Linux and macOS, the launcher uses `exec` to run the chosen
+release. On Windows, it supervises the selected release as a child, using a kill-on-close job and
+its own restart loop. This keeps update recovery independent of a scheduler interpreting a nonzero
+exit as a restart.
+
+Candidates are never copied over the stable launcher. The Agent stages each verified candidate at:
+
+```text
+/opt/ccproxy-exit/bin/releases/<version>/ccproxy-exit-agent-<platform>[.exe]
+```
+
+The persistent selection and health state is:
+
+```text
+/var/lib/ccproxy-exit/agent/update-state.json
+```
+
+The Agent checks its rollout at `--update-interval`, which defaults to 120 seconds. It verifies the
+record and release sequence, downloads the platform candidate with a byte limit, validates its
+size and SHA-256, and runs `version` plus `check-args` before activation. Download and self-test
+run in the background while heartbeat, configuration sync, sing-box, and XTCP work continue.
+
+Activation records the candidate and exits with status 75. The launcher counts candidate starts
+and runs it in the confirming phase. The candidate confirms after two consecutive healthy cycles
+within `--update-health-timeout`, which defaults to 600 seconds. Health includes an accepted
+heartbeat and at least the sing-box and XTCP health recorded at activation. A missing candidate,
+failed startup, too many starts, or a missed health deadline restores the previous release and
+records the reason. A rollout target that is rejected or rolled back is blocked until the operator
+creates a new rollout id.
+
+An installer upgrade is also a recovery path. When the stable launcher itself changes, it resets
+the update selection to the installed launcher and removes staged releases. The operator then
+publishes the matching signed installed release before beginning a managed rollout again.
+
+## Publishing and pilot procedure
+
+1. Generate a release key on an owner-controlled machine and add its public key to
+   `egress/agent/release_keys.txt` before building the Agent that will trust it.
+2. Store the private key as `AGENT_RELEASE_SIGNING_KEY` in the protected release environment.
+3. Run **Actions → exit-agent → Run workflow** on `main`.
+4. Download the `aifree-exit-agent` artifact and place its complete signed contents in
+   `CP_AGENT_RELEASES/<version>/`.
+5. Verify the copied artifact before changing any rollout:
 
    ```bash
-   cd egress/agent && go run ./cmd/agent-release keygen /secure/agent-release.key
-   ```
-
-2. Add the printed `ed25519:...` line to `egress/agent/release_keys.txt`. Commit it through a normal PR.
-3. Store the private key (the file's single line) as the GitHub Actions secret `AGENT_RELEASE_SIGNING_KEY`. A
-   protected environment with required reviewers is the better home for it.
-4. Give the control plane a release store, mounted read-only, for example:
-   `-v /srv/ccproxy/agent-releases:/agent-releases:ro -e CP_AGENT_RELEASES=/agent-releases`.
-5. Bootstrap each existing host once, because Agents from before this change have no updater:
-   - Build and serve an Agent that contains the key: run the workflow, then point `CP_AGENT_DIST` at its
-     artifact.
-   - Rerun the host's install command from the console. It keeps the token if you press Enter at the prompt,
-     and it keeps the configuration.
-   - `cpctl.py agent-rollout` then shows the host as something other than `upgrade_needed`.
-
-### Publish a release
-
-1. Merge to `main`, then run **Actions → exit-agent → Run workflow**. The summary names the version and the
-   release sequence (the run number). If the signing secret is missing, the run warns and the artifact is for
-   installers only.
-2. Download the `aifree-exit-agent` artifact. Unpack it to `CP_AGENT_RELEASES/<version>/` on the control plane
-   (the directory name must equal `VERSION`).
-3. Check it there:
-
-   ```bash
-   go run ./cmd/agent-release verify -dist <dir> -keys release_keys.txt
-   ```
-
-   ```bash
+   cd egress/agent
+   go run ./cmd/agent-release verify -dist <published-release-directory> -keys release_keys.txt
    cpctl.py agent-releases
    ```
 
-### Roll it out
+6. Ensure the installed release is also published, then create a one-host pilot:
 
-```bash
-cpctl.py agent-rollout-set agent-<new> macmini-sg-208     # pilot: one host
-cpctl.py agent-rollout                                    # watch: outcome, running version, state, error
-```
+   ```bash
+   cpctl.py agent-rollout-set agent-<new-version> macmini-sg-208
+   cpctl.py agent-rollout
+   ```
 
-Within one check interval (120 s by default), plus about 15 s for confirmation, the pilot shows `on_target` and
-`updated`, and its heartbeat reports the new `agent_version`. Check the host's traffic and XTCP ports in the
-console. Then widen the rollout:
+7. Watch the pilot until the rollout view reports the target as `on_target`, shows the expected
+   running Agent version, and has no update error. Exercise its assigned traffic and, for an XTCP
+   host, every active entry port. Pause the rollout before investigation if the host rolls back.
+8. Widen only after the pilot is accepted. `agent-rollout-clear` stops future targeting and never
+   downgrades a host.
 
-```bash
-cpctl.py agent-rollout-set agent-<new> host-a host-b host-c   # a cohort
-cpctl.py agent-rollout-set agent-<new> --all                  # everyone
-```
+For a healthy release that must be undone, publish the desired older source as a new signed release
+with a higher sequence and roll out that new version. Do not attempt to replay an earlier sequence.
 
-The rollout commands:
+## Security and recovery properties
 
-| Command | Effect |
-| --- | --- |
-| `cpctl.py agent-rollout-pause` | No further host starts the update. A host already confirming finishes or rolls back. |
-| `cpctl.py agent-rollout-resume` | Continues the paused rollout. |
-| `cpctl.py agent-rollout-set <same args>` | Retries hosts that failed: it creates a new rollout id. Read their `error` first. |
-| `cpctl.py agent-rollout-clear` | Stops the rollout. Every host keeps what it runs; nothing is downgraded. |
+- The private release key never reaches the control plane or exit hosts.
+- The Agent checks the signature, target platform, size, SHA-256, signed sequence, executable
+  version, and its own command-line compatibility before activation.
+- An interrupted or damaged staged candidate does not replace the stable launcher. It is retried
+  only through normal signed rollout handling.
+- The launcher stores its choice before it runs a candidate, so a candidate that exits before its
+  own update logic starts can still be rolled back on the next launcher start.
+- A control-plane compromise can withhold an update. It cannot make an established host run an
+  unsigned release or silently downgrade the signed sequence.
 
-After the whole fleet runs the new release, point `CP_AGENT_DIST` at the same directory so new installs get it
-too. A release directory is also a valid installer dist.
+## macOS acceptance scope
 
-### Undo a bad release
+This rollout currently needs macOS acceptance before it is presented as ready for fleet use. The
+acceptance host must use the launchd service installed at
+`system/com.ccproxy.exit.agent`, a signed published installed release, and a separately signed
+candidate release. The acceptance run must demonstrate all of the following:
 
-- **Not healthy:** the Agent rolls itself back and reports `failed` / `rolled_back`. Pause the rollout and fix
-  the release.
-- **Healthy, but you want the old code back:** revert on `main` and publish again, which gives a new, higher
-  sequence. Then roll that release out.
-- **Emergency on one host**, if you have shell access:
-  - Linux:
+1. The stable launcher stages and activates the candidate through launchd without replacing its own
+   installed path.
+2. The candidate reaches the required healthy cycles and reports the target Agent version and
+   update outcome through the control plane.
+3. A deliberately unhealthy candidate is recovered by the launcher to the prior release, with the
+   recorded reason visible in the rollout status.
+4. Existing sing-box traffic continues across a successful update and rollback. An XTCP host also
+   keeps its active frpc mapping and every assigned port reachable.
+5. Reboot recovery starts the stable launcher and the selected release without an interactive macOS
+   login.
 
-    ```bash
-    sudo cp /opt/ccproxy-exit/bin/ccproxy-exit-agent.previous /opt/ccproxy-exit/bin/ccproxy-exit-agent.new && sudo mv /opt/ccproxy-exit/bin/ccproxy-exit-agent.new /opt/ccproxy-exit/bin/ccproxy-exit-agent && sudo systemctl restart ccproxy-exit-agent
-    ```
-
-  - macOS: the same paths with `launchctl kickstart -k system/com.ccproxy.exit.agent`.
-  - Or rerun the install command, which installs `CP_AGENT_DIST`.
-
-  Then exclude the host from the rollout, or clear the rollout.
-
-### Rotate the release key
-
-1. Add the new public key to `release_keys.txt`, keep the old one, and publish that build, signed with the
-   **old** key.
-2. Once every host runs it, switch the secret to the new key.
-3. Remove the old public key in a later release.
-
-## Platform coverage
-
-| Platform | Service restart | Validated here | Gaps |
-| --- | --- | --- | --- |
-| Linux (systemd), amd64/arm64 | exit 75, then `Restart=always` | `controlplane/test/xtcp/run-e2e.sh`: the real installer, systemd, sing-box 1.14.4 and frp 0.72.0. See the evidence list below. | Validated in a Debian 12 container (arm64), not on a bare-metal or VM host. |
-| macOS (launchd), arm64/amd64 | exit 75, then `KeepAlive` | `TestUpdateWithRealBinaries` on darwin/arm64 runs compiled Agents under a restart-on-exit supervisor with sing-box as a separate process: v1 → v2, then v3 rolled back. | Not run under a real launchd daemon on a Mac host (for example macmini-sg-208). Do that as the pilot. |
-| Windows (scheduled task), amd64/arm64 | `--update-restart-cmd` (PowerShell: end and start the task) | Cross-compiled and vetted only. | **Not run on Windows.** Untested: renaming the running `.exe`, the detached restart helper surviving the task's end, and the task restarting a crashed candidate (Task Scheduler's restart-on-failure may not count a non-zero exit). sing-box runs under the Agent there, so every Agent update restarts sing-box: a few seconds without service. Pilot one Windows host and watch it before including others. |
-
-Evidence produced for this change (local, 2026-11-25, macOS arm64 with Docker Desktop):
-
-- `go test -race -short ./...` in `egress/agent`, including the updater unit tests. `TestUpdateWithRealBinaries`
-  was run separately, without `-short`.
-- `go vet` for all six targets.
-- The control-plane Go suite with `TEST_DATABASE_URL` (PostgreSQL 14), including
-  `TestAgentRolloutTargetsPausesAndReports`.
-- The Python suites in `controlplane/tests` with `TEST_DATABASE_URL`: installer, Go Agent against the Go
-  server, control plane, console, monitor, migration and reviews (104 tests, 4 skipped as before).
-- The release tool rehearsal: `build.sh --verify`, then `record`, `sign` and `verify`. Verification fails on a
-  tampered binary and with the repository's empty key list.
-- `controlplane/test/xtcp/run-e2e.sh` with the update phase. It covers:
-  - a host outside the rollout, and a paused rollout, both keeping the release;
-  - a tampered release binary being refused;
-  - the automatic v1 → v2 update through systemd, with continuous Direct and XTCP probes for two users on two
-    ports;
-  - unchanged sing-box and frpc MainPIDs;
-  - the v3 rollback rehearsal;
-  - the reboot and uninstall checks.
-
-## Security notes
-
-- The private key never reaches the control plane or the hosts. A compromised control plane can withhold
-  updates, or offer an older *signed* release to a host whose running sequence is unknown (a host installed by
-  the installer, before its first update). It cannot make a host run unsigned code.
-- Every update request carries the host token and never follows redirects, like all Agent requests. The binary
-  is written by root (or SYSTEM) next to the installed binary, so the installer's trusted-path rules still hold.
-- `AGENT_EXTRA_RELEASE_KEYS` (`build.sh`) and `-X main.extraReleaseKeys` exist for test builds only, such as the
-  e2e. A build for real hosts must not set them; `build.sh` prints a warning when it does.
+The final test evidence and any remaining platform gaps belong in the rollout or pull-request
+record. This document intentionally does not claim that those acceptance steps have completed.
