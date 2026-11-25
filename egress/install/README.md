@@ -107,7 +107,8 @@ measurement and rollout.
 
 A host can use frp XTCP instead of a public entry. The exit host runs frpc next to sing-box. frpc registers one
 `xtcp` proxy with the frps rendezvous service and forwards it to sing-box on `127.0.0.1:<entry port>`. The user's
-machine runs the matching frpc visitor and points aifree at the visitor's local port. frps only brokers the
+machine runs the matching frpc visitor and points aifree at the visitor's local port. The desktop app does this by
+itself (see **Customer devices** below); CLI users run the visitor by hand or with `ccproxy up --visitor`. frps only brokers the
 rendezvous. The two machines punch a direct UDP path (QUIC) and the data flows between them. The exit side has no
 relay option, and a visitor without `fallbackTo` closes the connection when hole punching fails. No traffic falls
 back to frps.
@@ -130,6 +131,35 @@ host page (or `GET /admin/users/{name}/xtcp-visitor`) shows the user's visitor c
 token from the `FRP_AUTH_TOKEN` environment variable. An upgraded exit agent picks up new, moved and released
 mappings by itself (next section). A host whose agent predates this shows **Agent upgrade needed**; it learns new
 mappings only when its install command runs again.
+
+**Customer devices (issue #61).** Set the host's public entry address to `127.0.0.1`: the client's sing-box config
+then dials the visitor on `127.0.0.1:<entry port>`. A signed-in device fetches its own visitor settings from
+`GET /v1/xtcp-visitor` (device token; 204 for a public-entry host; 409 with a reason when the user has no exit or
+mapping yet, or when the public entry address is not `127.0.0.1`). The response holds the frps address, TLS name,
+CA and token, and that user's proxy name, scoped secret key and port. It never holds `mapping_secret`, another
+mapping's key or another host's settings. It also reports the mapping's sync state (`ready`, `pending`, `failed`,
+`upgrade_needed`) so the app can say that the exit host is not ready yet.
+
+- **Shared frps token.** Every device that needs a visitor receives the frps token that all exit hosts and visitors
+  share (decided in #61; frp 0.72.0 has no per-user token). A customer can therefore log in to frps and disrupt
+  rendezvous, but cannot read or join another user's mapping. Cutting one customer off from frps means rotating
+  the token for everyone. Per-customer credentials are a follow-up.
+- **Rotation.** Change the frps token or CA in **Configure XTCP** (and on frps). Upgraded exit agents apply it by
+  themselves. Desktop apps pick it up at their next sync (every 30 s while connected). frpc then refuses the old
+  token, and the app restarts the visitor with the new settings. The tunnel recovers without a reinstall.
+- **What the app does.** It bundles the same pinned frpc 0.72.0 as the exit installer and runs it unprivileged,
+  after the tunnel's TUN is up. The token reaches frpc through its environment, never its command line. The
+  configuration, CA and token are 0600 files in the app's state directory, removed on sign-out, on a 401 and when the
+  host goes back to the public entry. The visitor stops on Disconnect, sign-out, app exit and when the app dies.
+  frps unreachable, a refused token, a rejected CA, an exit host that is not online, failed hole punching and a busy
+  local port each produce their own message. Nothing retries in a tight loop and nothing falls back to a relay.
+- **Manual visitors** keep working: **Visitor config** is unchanged, and a hand-run frpc on the user's machine
+  works as before. Do not run both on one machine: they would compete for the same local port, and the app reports
+  the port as busy.
+- **Windows firewall (not yet verified).** The exit installer adds an inbound rule for its frpc. The desktop
+  installer installs per user and adds none. Whether a customer's `frpc.exe` needs one for hole punching has not
+  been tested on a Windows machine yet. If it does, the fix is a rule for the bundled `frpc.exe` added by the
+  elevated tunnel helper.
 
 The install command does not change. With the host's agent token, the installer asks
 `GET /install/xtcp/frpc.toml` and `GET /install/xtcp/ca.pem`. A 204 means the public entry, and nothing about the

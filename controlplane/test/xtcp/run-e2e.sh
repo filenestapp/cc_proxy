@@ -8,13 +8,18 @@
 #            the agent from cp and sing-box 1.14.4 and frpc 0.72.0 from GitHub (SHA-256 pinned)
 #   visitor  official frpc as the XTCP visitor (QUIC, no fallback) on 127.0.0.1:20443, and a sing-box client built
 #            from aifree's own client config (/v1/config?mode=proxy) on 127.0.0.1:2080
-#   echo     answers with the caller's IPv4 (and /big with 20 MB)
+#   echo     answers with the caller's IPv4 (and /big with 20 MB); also target.test (a client rule domain)
+#   cp-http  the same control plane over plain HTTP, for the ccproxy client (its TLS trusts public roots only)
+#   desktop  the real ccproxy client (client/cli, Linux TUN, app mode) with `up --visitor`: it fetches its own
+#            visitor from /v1/xtcp-visitor and runs frpc 0.72.0 laid out next to it as the desktop bundle ships it
 #
 # Checks: XTCP registration; the agent's XTCP sync under systemd (installed file confirmed without reload, a second
 # shared port hot-reloaded and confirmed without rerunning the installer, release removes the proxy, ready after a
 # reboot); the proxied request leaves from the exit host's egress IPv4; a 20 MB transfer does not pass through frps; a
-# blocked hole punch closes the connection with no relay; services come back after a reboot without login; uninstall
-# removes them. Needs Docker (with systemd containers) and internet access (GitHub, STUN).
+# blocked hole punch closes the connection with no relay; services come back after a reboot without login; the
+# ccproxy client runs the visitor itself (issue #61: busy port and blocked punch reported, connect, traffic via the
+# exit, stop, crash, token rotation recovered, revoke; no frpc and no visitor files left); uninstall removes them.
+# Needs Docker (with systemd containers and /dev/net/tun) and internet access (GitHub, STUN).
 #   controlplane/test/xtcp/run-e2e.sh            KEEP=1 leaves the containers running
 set -euo pipefail
 
@@ -23,17 +28,18 @@ REPO="$(cd "$HERE/../../.." && pwd)"
 OUT="$HERE/out"
 NET=ccx-e2e
 SUBNET=172.31.90.0/24
-IP_CP=172.31.90.5 IP_FRPS=172.31.90.10 IP_EXIT=172.31.90.20 IP_VISITOR=172.31.90.30 IP_ECHO=172.31.90.40
+IP_CP=172.31.90.5 IP_CP_HTTP=172.31.90.6 IP_DESKTOP=172.31.90.50 IP_FRPS=172.31.90.10 IP_EXIT=172.31.90.20 IP_VISITOR=172.31.90.30 IP_ECHO=172.31.90.40
 FRP_VERSION=0.72.0
 SINGBOX_VERSION=1.14.4
 case "$(uname -m)" in arm64|aarch64) ARCH=arm64 ;; *) ARCH=amd64 ;; esac
 rnd() { openssl rand -hex 24; }
 ADMIN_TOKEN="admin-$(rnd)" FRPS_TOKEN="frps-$(rnd)" XTCP_KEY="xtcp-$(rnd)" PG_PASSWORD="pg-$(rnd)"
-CONTAINERS="ccx-pg ccx-cp ccx-frps ccx-exit ccx-visitor ccx-echo"
+CONTAINERS="ccx-pg ccx-cp ccx-cp-http ccx-frps ccx-exit ccx-visitor ccx-echo ccx-desktop"
 
 cleanup() {
   docker cp ccx-visitor:/tmp/visitor.log "$OUT/" >/dev/null 2>&1 || true
   docker cp ccx-visitor:/tmp/visitor-blocked.log "$OUT/" >/dev/null 2>&1 || true
+  docker cp ccx-desktop:/tmp/up.log "$OUT/desktop-up.log" >/dev/null 2>&1 || true
   if [[ "${KEEP:-0}" != 1 ]]; then
     docker rm -f $CONTAINERS >/dev/null 2>&1 || true
     docker network rm $NET >/dev/null 2>&1 || true
@@ -72,6 +78,22 @@ docker build -q -t ccx-tools - >/dev/null <<'EOF'
 FROM debian:12-slim
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates python3 procps >/dev/null \
  && rm -rf /var/lib/apt/lists/*
+EOF
+# The ccproxy client for Linux (static musl build). frpc and sing-box are mounted next to it, where the desktop bundle
+# puts them, so `ccproxy up --visitor` finds them without flags.
+docker build -q -t ccx-desktop -f - "$REPO/client" >/dev/null <<'EOF'
+FROM rust:1.95-alpine AS build
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY core core
+COPY cli cli
+RUN sed -i 's#, *"desktop/src-tauri"##' Cargo.toml && cargo build --release -p ccproxy
+FROM debian:12-slim
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates iproute2 procps python3 >/dev/null \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/ccproxy /opt/aifree/ccproxy
+RUN ln -s /opt/aifree/ccproxy /usr/local/bin/ccproxy
 EOF
 
 echo "== frp $FRP_VERSION and sing-box $SINGBOX_VERSION for the test peers (checked against the installer's pins)"
@@ -129,7 +151,7 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 http.server.ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()
 EOF
-docker run -d --name ccx-echo --network $NET --ip $IP_ECHO -v "$OUT/echo.py:/echo.py:ro" ccx-tools python3 /echo.py >/dev/null
+docker run -d --name ccx-echo --network $NET --ip $IP_ECHO --network-alias target.test -v "$OUT/echo.py:/echo.py:ro" ccx-tools python3 /echo.py >/dev/null
 docker run -d --name ccx-exit --hostname macmini-sg-208 --network $NET --ip $IP_EXIT --privileged --cgroupns=host \
   -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock ccx-systemd >/dev/null
 
@@ -272,6 +294,9 @@ if waitfor 90 "XTCP sync after reboot" "[ \"\$(sync_state)\" = ready ]"; then ec
 else echo "FAIL XTCP sync after reboot: $(sync_state)"; status=1; fi
 docker exec ccx-visitor sh -c 'pkill frpc; sleep 1; frpc -c /etc/visitor.toml > /tmp/visitor.log 2>&1 &'
 waitfor 120 "tunnel after reboot" "[ \"\$(proxied http://$IP_ECHO:8080/ 2>/dev/null)\" = '$IP_EXIT' ]" && echo "PASS proxied IPv4 after reboot is $IP_EXIT" || { echo "FAIL tunnel after reboot"; status=1; }
+
+# shellcheck source=desktop-phase.sh
+source "$HERE/desktop-phase.sh"
 
 echo "== uninstall"
 UNCMD=$(api GET "/admin/install-commands?cp=https://cp:8443" | json '["linux"]["uninstall"]')

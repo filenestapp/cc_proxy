@@ -47,10 +47,12 @@ enum Cmd {
     },
     /// Show the session and the tunnel status.
     Status,
-    /// Fetch the config once.
+    /// Fetch the config once (and, with --visitor, the XTCP visitor settings).
     Sync {
         #[arg(long, default_value = DEFAULT_MODE)]
         mode: String,
+        #[arg(long)]
+        visitor: bool,
     },
     /// Run in the foreground: keep the config current and run sing-box (needs root / Administrator).
     Up {
@@ -174,9 +176,10 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Sync { mode } => {
+        Cmd::Sync { mode, visitor } => {
             let s = require_session(&paths)?;
-            println!("{:?}", sync_once(&paths, &s, &mode)?);
+            let outcome = if visitor { sync_with_visitor(&paths, &s, &mode)? } else { sync_once(&paths, &s, &mode)? };
+            println!("{outcome:?}");
         }
         Cmd::Logout => {
             if let Some(s) = Session::load(&paths) {

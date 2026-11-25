@@ -30,7 +30,7 @@ client/
 
 ```bash
 cd client/desktop
-scripts/fetch-binaries.sh                     # 编译 ccproxy，下载 sing-box 1.14.4 并按 GitHub 公布的 SHA-256 校验
+scripts/fetch-binaries.sh                     # 编译 ccproxy，下载 sing-box 1.14.4（按 GitHub 公布的 SHA-256 校验）和 frpc 0.72.0（按 controlplane/install/frpc.json 校验）
 cd src-tauri && npx @tauri-apps/cli@2.12.6 build --bundles app    # macOS；Windows 用 nsis，Linux 用 deb/appimage
 ```
 
@@ -57,6 +57,41 @@ ccproxy logout                                                 # 在服务端吊
 
 `ccproxy up` 把同步和守护放在同一个进程里，适合 Linux 服务器或排查问题。`ccproxy tunnel` 是桌面端提权后运行的那一半，不需要手动执行。
 
+## XTCP visitor (exit hosts behind NAT)
+
+When the user's exit host uses the XTCP transport ([egress/install/README.md](../egress/install/README.md#xtcp-transport-hosts-behind-nat)),
+the desktop app runs the frpc visitor itself. The customer needs no manual frpc. Hosts on the public entry are
+unaffected.
+
+- **Bundle.** `scripts/fetch-binaries.sh` adds frpc 0.72.0 next to `ccproxy` and `sing-box`. It verifies each asset
+  against the SHA-256 pin the exit installer uses (`controlplane/install/frpc.json`) and stops when the pin is
+  missing or differs. `TestFrpcPinMatchesTheDesktopBuild` keeps the script, the pin file and `tauri.conf.json` in
+  step.
+- **Settings.** With the sing-box config, the app polls `GET /v1/xtcp-visitor` (ETag, every 30 s while connected). It
+  renders the frpc configuration itself from validated fields and keeps `frpc-visitor.toml`, `frp-ca.pem`,
+  `frp-token` and `visitor.json` in the state directory, each mode 0600. A 204 (public-entry host), a 409, a 401 and
+  sign-out remove them. The connect fails with its own message when the tunnel config does not dial the
+  visitor's `127.0.0.1:<port>`.
+- **Lifecycle.** frpc does not need privileges, so the privileged supervisor never runs it. Once the supervisor reports
+  the TUN running, the app starts `ccproxy visitor` (the guard), which starts frpc. Starting frpc after the TUN
+  matters: with `auto_route`, frpc's own packets go through sing-box's direct outbound, and a path punched before the
+  TUN existed would change its source port. The token reaches frpc through the `FRP_AUTH_TOKEN` environment
+  variable, never its command line. frpc's log is redacted into `frpc.log` and classified into
+  `visitor-status.json`.
+  - The tunnel shows **Connected** only once frpc listens and the first direct path to the exit host is open
+    (`keepTunnelOpen`).
+  - The guard stops frpc when its stdin closes (Disconnect, sign-out, app exit, or a crashed app), when the
+    configuration is removed, or when frpc fails. On Windows frpc also sits in a kill-on-close job object; on Linux
+    it gets a parent-death signal. At start, the app kills an frpc that a killed guard left behind (`frpc.pid`,
+    checked to be frpc).
+- **Failures.** frps unreachable, a refused token, a rejected CA, an exit host not online, failed hole punching and a
+  busy local port each produce their own message and leave the tunnel `failed`. A failed configuration is not
+  restarted until it changes (for example a rotated token arrives) or the user connects again. An unreachable frps is
+  retried after a minute. frpc's own hole-punching retries are capped at 8 an hour. Nothing falls back to a relay.
+- **CLI.** `ccproxy up` keeps expecting a hand-run visitor, as before. `sudo ccproxy up --visitor [--frpc PATH]` runs
+  the same visitor code instead (frpc then runs as root, like the rest of `ccproxy up`). Do not combine it with a
+  hand-run frpc on the same port.
+
 ## 测试
 
 - 控制面的端到端测试 [controlplane/test/run-e2e.sh](../controlplane/test/run-e2e.sh) 第 3b 段，在 Docker 里的 Linux TUN 上运行真实的 `ccproxy`（`client/test/Dockerfile` 编译）。2026-11-22 全部通过：
@@ -82,7 +117,32 @@ ccproxy logout                                                 # 在服务端吊
 
   另外，`.test` 域名在 macOS 上会被系统本地直接判为「不存在」，规则域名不要用 `.test`。
 
+**XTCP visitor (issue #61), 2026-11-25:**
+
+- Docker e2e [controlplane/test/xtcp/run-e2e.sh](../controlplane/test/xtcp/run-e2e.sh) (desktop phase in
+  `desktop-phase.sh`): real frps and frpc 0.72.0, real `ccproxy up --visitor` on a Linux TUN in app mode, a non-primary
+  mapping. 58 checks passed, 0 failed. They cover:
+  - a busy port and a blocked hole punch each reported, and never shown as connected;
+  - frpc started after sing-box;
+  - traffic leaves via the exit's egress IPv4, and the exit-probe path agrees;
+  - 20 MB transferred with 0 bytes through frps;
+  - 0600 files, and the token on no command line and in no log;
+  - Ctrl-C, SIGKILL of the client, frps token rotation (recovered) and device revocation, each leaving no frpc
+    and no visitor files.
+- macOS (Apple silicon), real frpc/frps 0.72.0 darwin-arm64 with the real `ccproxy visitor` guard against a local
+  frps: exit not online, refused token, CA mismatch, frps unreachable and busy port each produced their own status;
+  no frpc was left behind and the token was in no log. The GUI and the TUN path were not exercised on macOS.
+- Rust: visitor unit tests, sync tests against a local HTTP server, guard and controller lifecycle tests with a fake
+  frpc (Unix), and `frpc verify` on the rendered configuration (`FRPC_TEST_BIN`). Go: `TestDeviceXTCPVisitorScope`
+  on PostgreSQL.
+- Observed: in one run the first request sent right after the visitor reported ready got an empty reply; requests a
+  moment later worked. The e2e waits for the first successful request.
+
 **未验证**：
+
+- XTCP visitor on Windows: compilation of the job-object code (no Windows toolchain here; the desktop CI workflow runs
+  clippy on Windows), runtime behaviour, and whether `frpc.exe` needs a firewall rule for hole punching.
+- XTCP visitor in the desktop GUI itself on any OS (the same core code ran through `ccproxy`), and with a TUN on macOS.
 
 - Linux 的 pkexec、Windows 的 UAC 提权（macOS 的 osascript 已在真机验证）。
 - Windows 和 Linux 的安装包：已写好 CI 构建流程，没有实际运行过。

@@ -1,5 +1,6 @@
 # Build aifree desktop packages for macOS, Windows, and Linux.
-# Each job bundles the ccproxy helper and a SHA-256-verified sing-box next to the app, then uploads the installers.
+# Each job bundles the ccproxy helper, a SHA-256-verified sing-box and the pinned frpc (XTCP visitor) next to the app,
+# then uploads the installers.
 # Unsigned: macOS notarisation and Windows code signing need certificates and are not configured here.
 name: desktop
 
@@ -51,7 +52,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Sidecars (aifree CLI compatibility helper + verified sing-box)
+      - name: Sidecars (aifree CLI compatibility helper + verified sing-box and frpc)
         run: desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
       - name: Core and CLI checks
         run: cargo clippy --locked -p ccproxy -p ccproxy-core --target ${{ matrix.target }} -- -D warnings
