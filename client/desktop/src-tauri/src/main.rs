@@ -199,7 +199,7 @@ impl App {
             v.tunnel_message = status.message.clone();
             // On an XTCP exit the tunnel is connected only once the visitor is ready.
             if v.want_connected && status.state == "running" {
-                if let Some((state, message)) = visitor::tunnel_view(&self.paths) {
+                if let Some((state, message)) = visitor::tunnel_view(&self.paths, self.visitor.lock().unwrap().guard_pid()) {
                     v.tunnel = state;
                     v.tunnel_message = message;
                 }

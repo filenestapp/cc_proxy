@@ -344,6 +344,10 @@ pub struct VisitorStatus {
     pub updated: u64,
     /// [`fingerprint`] of the configuration this guard runs.
     pub fingerprint: String,
+    /// Pid of the guard that wrote it. A connection trusts only the status of the guard it started itself, never one a
+    /// previous connection or app run left behind.
+    #[serde(default)]
+    pub guard: u32,
 }
 
 pub fn read_status(paths: &Paths) -> Option<VisitorStatus> {
@@ -356,7 +360,11 @@ fn now() -> u64 {
 
 /// What the app shows for the tunnel while a visitor is required and the supervisor runs: (state, message), with
 /// state "running" only once the visitor listens and the first direct path to the exit host is open.
-pub fn tunnel_view(paths: &Paths) -> Option<(String, String)> {
+///
+/// `guard` is the guard this connection started ([`VisitorProcess::guard_pid`]). Only a status that guard wrote, for
+/// the current configuration, counts; without a guard of its own the connection is still starting, whatever status a
+/// previous connection left behind.
+pub fn tunnel_view(paths: &Paths, guard: Option<u32>) -> Option<(String, String)> {
     let fp = fingerprint(paths)?;
     let info = read_info(paths);
     let port = info.as_ref().map(|i| i.bind_port).unwrap_or_default();
@@ -367,7 +375,7 @@ pub fn tunnel_view(paths: &Paths) -> Option<(String, String)> {
         }
         ("connecting".to_string(), m)
     };
-    let status = read_status(paths).filter(|s| s.fingerprint == fp);
+    let status = guard.and_then(|g| read_status(paths).filter(|s| s.fingerprint == fp && s.guard == g));
     Some(match status {
         None => waiting("Starting the XTCP visitor."),
         Some(s) => match s.state.as_str() {
@@ -458,7 +466,7 @@ struct Guard<'a> {
 impl Guard<'_> {
     fn status(&self, state: &str, reason: Option<Reason>, message: &str) {
         let s = VisitorStatus { state: state.into(), reason, message: self.redact(message), updated: now(),
-                                fingerprint: self.fingerprint.clone() };
+                                fingerprint: self.fingerprint.clone(), guard: std::process::id() };
         if let Ok(data) = serde_json::to_vec_pretty(&s) {
             let _ = write_atomic(&self.paths.visitor_status(), &data, true);
         }
@@ -657,7 +665,7 @@ pub struct Launcher {
 pub struct VisitorProcess {
     guard: Option<(Child, ChildStdin, String)>,
     /// The configuration the last guard ran and when it exited, so a failed configuration is not retried.
-    exited: Option<(String, Instant, Option<Reason>)>,
+    exited: Option<(String, Instant, Option<Reason>, u32)>,
 }
 
 impl VisitorProcess {
@@ -674,13 +682,14 @@ impl VisitorProcess {
                 Ok(None) if *running == fp => return Ok(()),
                 Ok(None) => self.stop(),
                 _ => {
-                    let reason = read_status(paths).filter(|s| s.fingerprint == *running).and_then(|s| s.reason);
-                    self.exited = Some((running.clone(), Instant::now(), reason));
+                    let pid = child.id();
+                    let reason = read_status(paths).filter(|s| s.fingerprint == *running && s.guard == pid).and_then(|s| s.reason);
+                    self.exited = Some((running.clone(), Instant::now(), reason, child.id()));
                     self.guard = None;
                 }
             }
         }
-        if let Some((failed, at, reason)) = &self.exited {
+        if let Some((failed, at, reason, _)) = &self.exited {
             let retry = *reason == Some(Reason::ServerUnreachable) && at.elapsed() >= UNREACHABLE_RETRY;
             if *failed == fp && !retry {
                 return Ok(());
@@ -692,6 +701,16 @@ impl VisitorProcess {
     /// Forget a failed configuration so the next [`ensure`](Self::ensure) tries again (a new Connect).
     pub fn reset(&mut self) {
         self.exited = None;
+    }
+
+    /// The guard this controller started for the current connection: the running one, else the last one that exited
+    /// (so its failure stays visible). None before the first start, after [`reset`](Self::reset) and after a stop.
+    pub fn guard_pid(&self) -> Option<u32> {
+        match (&self.guard, &self.exited) {
+            (Some((child, _, _)), _) => Some(child.id()),
+            (None, Some((_, _, _, pid))) => Some(*pid),
+            _ => None,
+        }
     }
 
     pub fn is_running(&mut self) -> bool {
@@ -718,6 +737,7 @@ impl VisitorProcess {
 
     /// Stop the guard (closing its stdin stops frpc), waiting briefly before killing it.
     pub fn stop(&mut self) {
+        self.exited = None;
         if let Some((mut child, stdin, _)) = self.guard.take() {
             drop(stdin);
             let deadline = Instant::now() + Duration::from_secs(5);

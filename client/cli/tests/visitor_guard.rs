@@ -134,7 +134,7 @@ fn guard_reports_ready_keeps_the_token_off_the_command_line_and_stops_when_stdin
     let e = env("ready");
     let mut g = guard(&e, Stdio::piped());
     wait_for("ready", || state_of(&e.paths).as_deref() == Some("ready"));
-    assert_eq!(visitor::tunnel_view(&e.paths).unwrap().0, "running");
+    assert_eq!(visitor::tunnel_view(&e.paths, Some(g.id())).unwrap().0, "running");
     let pid = launches(&e.paths)[0];
     assert!(alive(pid));
     let dir = &e.paths.dir;
@@ -201,7 +201,7 @@ fn failed_with(tag: &str, m: &str, reason: Reason) {
     let s = visitor::read_status(&e.paths).unwrap();
     assert_eq!((s.state.as_str(), s.reason), ("failed", Some(reason)), "{s:?}");
     assert_eq!(s.message, reason.message(&s.message_detail(), 20440));
-    let (state, message) = visitor::tunnel_view(&e.paths).unwrap();
+    let (state, message) = visitor::tunnel_view(&e.paths, Some(g.id())).unwrap();
     assert_eq!((state.as_str(), message.as_str()), ("failed", s.message.as_str()));
     for pid in launches(&e.paths) {
         wait_for("frpc to exit", || !alive(pid));
@@ -251,6 +251,45 @@ fn a_failed_hole_punch_is_reported_while_frpc_keeps_its_bounded_retries() {
 
 fn launcher(e: &Env) -> Launcher {
     Launcher { ccproxy: PathBuf::from(env!("CARGO_BIN_EXE_ccproxy")), frpc: e.frpc.clone() }
+}
+
+/// PR #64 e2e: after a previous connection's guard was killed (its last word was "ready"), a fresh connection whose
+/// hole punch fails must never show connected: only its own guard's status counts.
+#[test]
+fn a_fresh_connection_ignores_the_ready_status_of_a_previous_one() {
+    let e = env("fresh");
+    let l = launcher(&e);
+    // Connection 1 becomes ready; its guard is then killed outright, leaving "ready" on disk.
+    let mut old = guard(&e, Stdio::piped());
+    wait_for("ready", || state_of(&e.paths).as_deref() == Some("ready"));
+    old.kill().unwrap();
+    old.wait().unwrap();
+    for pid in launches(&e.paths) {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    assert_eq!(state_of(&e.paths).as_deref(), Some("ready"), "the stale status is still there");
+
+    // Connection 2, same configuration, UDP blocked: starting, then failed, never running.
+    mode(&e.paths, "punch");
+    let mut p = VisitorProcess::default();
+    assert_eq!(visitor::tunnel_view(&e.paths, p.guard_pid()).unwrap().0, "connecting", "before its guard starts");
+    p.ensure(&e.paths, &l).unwrap();
+    let mut seen = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let (state, _) = visitor::tunnel_view(&e.paths, p.guard_pid()).unwrap();
+        if seen.last() != Some(&state) {
+            seen.push(state.clone());
+        }
+        if state == "failed" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(seen.last().map(String::as_str), Some("failed"), "{seen:?}");
+    assert!(!seen.iter().any(|s| s == "running"), "a stale ready status was shown as connected: {seen:?}");
+    drop(p);
+    cleanup(&e);
 }
 
 #[test]

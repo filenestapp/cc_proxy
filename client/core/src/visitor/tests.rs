@@ -138,31 +138,54 @@ fn state(tag: &str) -> Paths {
 
 #[test]
 fn the_tunnel_counts_as_connected_only_when_the_visitor_is_ready() {
+    const GUARD: u32 = 4242;
     let paths = state("view");
-    assert_eq!(tunnel_view(&paths), None, "no visitor configured");
+    assert_eq!(tunnel_view(&paths, Some(GUARD)), None, "no visitor configured");
     let mut s = spec();
     s.exit_state = "pending".into();
     write_files(&paths, &s).unwrap();
     let fp = fingerprint(&paths).unwrap();
-    let (state, msg) = tunnel_view(&paths).unwrap();
+    let (state, msg) = tunnel_view(&paths, Some(GUARD)).unwrap();
     assert_eq!(state, "connecting");
     assert!(msg.contains("Starting") && msg.contains("(pending)"), "{msg}");
 
-    let put = |st: &str, reason: Option<Reason>, message: &str, fp: &str| {
-        let v = VisitorStatus { state: st.into(), reason, message: message.into(), updated: 1, fingerprint: fp.into() };
+    let put = |st: &str, reason: Option<Reason>, message: &str, fp: &str, guard: u32| {
+        let v = VisitorStatus { state: st.into(), reason, message: message.into(), updated: 1, fingerprint: fp.into(), guard };
         fs::write(paths.visitor_status(), serde_json::to_vec(&v).unwrap()).unwrap();
     };
-    put("listening", None, "", &fp);
-    assert_eq!(tunnel_view(&paths).unwrap().0, "connecting");
-    put("ready", None, "", &fp);
-    assert_eq!(tunnel_view(&paths).unwrap(), ("running".into(), String::new()));
-    put("ready", None, "", "an-older-configuration");
-    assert_eq!(tunnel_view(&paths).unwrap().0, "connecting", "a status for another configuration does not count");
+    put("listening", None, "", &fp, GUARD);
+    assert_eq!(tunnel_view(&paths, Some(GUARD)).unwrap().0, "connecting");
+    put("ready", None, "", &fp, GUARD);
+    assert_eq!(tunnel_view(&paths, Some(GUARD)).unwrap(), ("running".into(), String::new()));
+    put("ready", None, "", "an-older-configuration", GUARD);
+    assert_eq!(tunnel_view(&paths, Some(GUARD)).unwrap().0, "connecting", "a status for another configuration does not count");
     let busy = Reason::LocalPortBusy.message("", 20440);
-    put("failed", Some(Reason::LocalPortBusy), &busy, &fp);
-    assert_eq!(tunnel_view(&paths).unwrap(), ("failed".into(), busy));
-    put("stopped", None, "", &fp);
-    assert_eq!(tunnel_view(&paths).unwrap().0, "failed");
+    put("failed", Some(Reason::LocalPortBusy), &busy, &fp, GUARD);
+    assert_eq!(tunnel_view(&paths, Some(GUARD)).unwrap(), ("failed".into(), busy));
+    put("stopped", None, "", &fp, GUARD);
+    assert_eq!(tunnel_view(&paths, Some(GUARD)).unwrap().0, "failed");
+    fs::remove_dir_all(&paths.dir).unwrap();
+}
+
+/// PR #64 e2e: a fresh connection must not report connected from the "ready" status a previous connection left
+/// behind for the same configuration (its guard was killed before it could write "stopped").
+#[test]
+fn a_stale_ready_status_does_not_count_for_a_fresh_connection() {
+    let paths = state("stale-ready");
+    write_files(&paths, &spec()).unwrap();
+    let stale = VisitorStatus { state: "ready".into(), reason: None, message: String::new(), updated: 1,
+                                fingerprint: fingerprint(&paths).unwrap(), guard: 1111 };
+    fs::write(paths.visitor_status(), serde_json::to_vec(&stale).unwrap()).unwrap();
+    // No guard of its own yet (the TUN is not up, or the guard has not started).
+    assert_eq!(tunnel_view(&paths, None).unwrap().0, "connecting");
+    // Its own guard started but has written nothing yet.
+    assert_eq!(tunnel_view(&paths, Some(2222)).unwrap().0, "connecting");
+    // Only the guard that wrote it can make it count.
+    assert_eq!(tunnel_view(&paths, Some(1111)).unwrap().0, "running");
+    // A status file from a build without the guard field never counts.
+    let legacy = serde_json::json!({"state": "ready", "message": "", "updated": 1, "fingerprint": fingerprint(&paths).unwrap()});
+    fs::write(paths.visitor_status(), legacy.to_string()).unwrap();
+    assert_eq!(tunnel_view(&paths, Some(2222)).unwrap().0, "connecting");
     fs::remove_dir_all(&paths.dir).unwrap();
 }
 

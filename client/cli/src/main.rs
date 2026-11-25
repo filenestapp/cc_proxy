@@ -303,7 +303,7 @@ fn headless(paths: &Paths, mode: &str, interval: u64, launcher: &visitor::Launch
                 eprintln!("could not start the XTCP visitor: {e:#}");
             }
         }
-        if let Some((state, message)) = visitor::tunnel_view(paths) {
+        if let Some((state, message)) = visitor::tunnel_view(paths, proc.guard_pid()) {
             let line = format!("xtcp visitor: {state} {message}");
             if line != shown {
                 println!("{line}");

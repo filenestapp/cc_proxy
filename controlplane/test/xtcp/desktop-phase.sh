@@ -35,16 +35,19 @@ stop_up() { dx pkill -INT -x ccproxy || true; waitfor 20 "ccproxy to stop" "gone
 gone() { ! dx pgrep -x "$1" >/dev/null; }
 logged() { dx grep -q -- "$1" /tmp/up.log; }
 via() { dx curl -q -sS --max-time 15 "http://$1:8080/${2:-}" 2>/dev/null || true; }
-frpc_env_token() { dx sh -c 'p=$(pgrep -x frpc) && tr "\0" "\n" < /proc/$p/environ' 2>/dev/null | sed -n 's/^FRP_AUTH_TOKEN=//p'; }
+# Read frpc's environment as its own user: container root has no ptrace right over another UID's /proc/<pid>/environ.
+frpc_env_token() { ux sh -c 'p=$(pgrep -x frpc) && tr "\0" "\n" < /proc/$p/environ' 2>/dev/null | sed -n 's/^FRP_AUTH_TOKEN=//p'; }
+# A command's combined output, whatever its exit status (run-e2e.sh sets pipefail, and these commands fail on purpose).
+output_of() { dx "$@" 2>&1 || true; }
 start_jiffies() { dx sh -c "cut -d' ' -f22 /proc/\$(pgrep -x $1)/stat"; }
 
 docker exec -u cust -e CCPROXY_PASSWORD=carol-password-0123 ccx-desktop ccproxy login --server $CPH --user carol --device carol-linux || status=1
 
 echo "-- the privileged path runs no visitor (PR #64 review)"
-check "ccproxy up (root) has no visitor option" "dx ccproxy up --visitor 2>&1 | grep -q \"unexpected argument '--visitor'\""
+check "ccproxy up (root) has no visitor option" "output_of ccproxy up --visitor | grep -q \"unexpected argument '--visitor'\""
 check "the visitor guard refuses root and starts no frpc" \
-  "dx sh -c 'ccproxy --state-dir $STATE visitor --frpc /opt/aifree/frpc < /dev/null 2>&1' | grep -q 'must not run as root' && gone frpc"
-check "ccproxy headless refuses root" "dx ccproxy --state-dir $STATE headless 2>&1 | grep -q 'must not run as root'"
+  "output_of sh -c 'ccproxy --state-dir $STATE visitor --frpc /opt/aifree/frpc < /dev/null' | grep -q 'must not run as root' && gone frpc"
+check "ccproxy headless refuses root" "output_of ccproxy --state-dir $STATE headless | grep -q 'must not run as root'"
 
 echo "-- a busy local port is reported as such"
 dx sh -c 'nohup python3 -m http.server 20445 --bind 127.0.0.1 >/dev/null 2>&1 &'
