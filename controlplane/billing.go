@@ -46,6 +46,7 @@ ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS checkout_price_id text NOT NU
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS checkout_amount integer NOT NULL DEFAULT 0;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS checkout_expires_at bigint;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS checkout_session_id text NOT NULL DEFAULT '';
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS checkout_started boolean;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_status text NOT NULL DEFAULT '';
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS past_due_since double precision;
 CREATE INDEX IF NOT EXISTS subscriptions_customer ON subscriptions(customer_id, updated_at DESC);
@@ -276,6 +277,7 @@ type checkoutReservation struct {
 type pendingCheckoutPlanChange struct {
 	reservation checkoutReservation
 	sessionID   string
+	legacy      bool
 }
 
 func (e *pendingCheckoutPlanChange) Error() string {
@@ -287,16 +289,23 @@ func (s *store) reserveCheckout(ctx context.Context, customerID int64, plan stri
 	err := s.write(ctx, func(tx pgx.Tx) error {
 		var currentPlan, status, sessionID string
 		var providerSubscription bool
-		err := tx.QueryRow(ctx, `SELECT id,plan_code,status,stripe_subscription_id IS NOT NULL,checkout_price_id,checkout_amount,COALESCE(checkout_expires_at,0),checkout_session_id
+		var started *bool
+		err := tx.QueryRow(ctx, `SELECT id,plan_code,status,stripe_subscription_id IS NOT NULL,checkout_price_id,checkout_amount,
+			COALESCE(checkout_expires_at,0),checkout_session_id,checkout_started
 			FROM subscriptions WHERE customer_id=$1 AND status IN ('pending','active','past_due')`, customerID).
-			Scan(&reservation.ID, &currentPlan, &status, &providerSubscription, &reservation.PriceID, &reservation.Amount, &reservation.ExpiresAt, &sessionID)
+			Scan(&reservation.ID, &currentPlan, &status, &providerSubscription, &reservation.PriceID, &reservation.Amount, &reservation.ExpiresAt, &sessionID, &started)
 		if err == nil {
 			pending := status == "pending" && !providerSubscription
 			withinWindow := reservation.ExpiresAt > s.clock().Unix()
-			if pending && currentPlan == plan && withinWindow {
+			switch {
+			case pending && currentPlan == plan && withinWindow:
 				return nil
-			}
-			if pending && (sessionID != "" || withinWindow) {
+			case pending && sessionID == "" && started != nil && !*started:
+				// Start and replacement share the write lock. A retired reservation can no longer send a Stripe create request.
+				if _, err := tx.Exec(ctx, "UPDATE subscriptions SET status='expired',updated_at=$2 WHERE id=$1", reservation.ID, s.now()); err != nil {
+					return err
+				}
+			case pending && (sessionID != "" || withinWindow):
 				var priceID string
 				if err := tx.QueryRow(ctx, "SELECT stripe_price_id FROM plans WHERE code=$1 AND active", plan).Scan(&priceID); err != nil {
 					return missing(err, "plan")
@@ -305,11 +314,11 @@ func (s *store) reserveCheckout(ctx context.Context, customerID int64, plan stri
 					return failureCode(503, "stripe_unavailable", "plan is not configured in Stripe")
 				}
 				reservation.Plan = currentPlan
-				return &pendingCheckoutPlanChange{reservation: reservation, sessionID: sessionID}
+				return &pendingCheckoutPlanChange{reservation: reservation, sessionID: sessionID, legacy: started == nil}
+			default:
+				return failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
 			}
-			return failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
 		// An expired entitlement does not stop Stripe from collecting the original subscription.
@@ -330,8 +339,8 @@ func (s *store) reserveCheckout(ctx context.Context, customerID int64, plan stri
 			return failureCode(503, "stripe_unavailable", "plan is not configured in Stripe")
 		}
 		reservation.ExpiresAt = s.clock().Add(24 * time.Hour).Unix()
-		return tx.QueryRow(ctx, `INSERT INTO subscriptions(customer_id,plan_code,status,checkout_price_id,checkout_amount,checkout_expires_at,created_at,updated_at)
-			VALUES($1,$2,'pending',$3,$4,$5,$6,$6) RETURNING id`, customerID, plan, reservation.PriceID, reservation.Amount, reservation.ExpiresAt, s.now()).Scan(&reservation.ID)
+		return tx.QueryRow(ctx, `INSERT INTO subscriptions(customer_id,plan_code,status,checkout_price_id,checkout_amount,checkout_expires_at,checkout_started,created_at,updated_at)
+			VALUES($1,$2,'pending',$3,$4,$5,false,$6,$6) RETURNING id`, customerID, plan, reservation.PriceID, reservation.Amount, reservation.ExpiresAt, s.now()).Scan(&reservation.ID)
 	})
 	return reservation, err
 }
@@ -341,7 +350,8 @@ func (s *store) replacePendingCheckout(ctx context.Context, previous pendingChec
 	err := s.write(ctx, func(tx pgx.Tx) error {
 		// Stripe can deliver checkout.session.expired before its expire request returns.
 		tag, err := tx.Exec(ctx, `UPDATE subscriptions SET status='expired',checkout_session_id=$3,updated_at=$2
-			WHERE id=$1 AND status IN ('pending','expired') AND stripe_subscription_id IS NULL AND checkout_session_id IN ('',$3)`,
+			WHERE id=$1 AND status IN ('pending','expired') AND stripe_subscription_id IS NULL AND checkout_session_id IN ('',$3)
+			AND ($3 <> '' OR checkout_started IS NULL)`,
 			previous.reservation.ID, s.now(), previous.sessionID)
 		if err != nil {
 			return err
@@ -356,8 +366,8 @@ func (s *store) replacePendingCheckout(ctx context.Context, previous pendingChec
 			return failureCode(503, "stripe_unavailable", "plan is not configured in Stripe")
 		}
 		reservation.ExpiresAt = s.clock().Add(24 * time.Hour).Unix()
-		err = tx.QueryRow(ctx, `INSERT INTO subscriptions(customer_id,plan_code,status,checkout_price_id,checkout_amount,checkout_expires_at,created_at,updated_at)
-			VALUES($1,$2,'pending',$3,$4,$5,$6,$6) ON CONFLICT (customer_id) WHERE status IN ('pending','active','past_due')
+		err = tx.QueryRow(ctx, `INSERT INTO subscriptions(customer_id,plan_code,status,checkout_price_id,checkout_amount,checkout_expires_at,checkout_started,created_at,updated_at)
+			VALUES($1,$2,'pending',$3,$4,$5,false,$6,$6) ON CONFLICT (customer_id) WHERE status IN ('pending','active','past_due')
 			DO NOTHING RETURNING id`, reservation.CustomerID, plan, reservation.PriceID, reservation.Amount, reservation.ExpiresAt, s.now()).Scan(&reservation.ID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
@@ -365,6 +375,17 @@ func (s *store) replacePendingCheckout(ctx context.Context, previous pendingChec
 		return err
 	})
 	return reservation, err
+}
+
+func (s *store) startCheckoutRequest(ctx context.Context, reservationID int64) error {
+	return s.write(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE subscriptions SET checkout_started=true
+			WHERE id=$1 AND status='pending' AND stripe_subscription_id IS NULL`, reservationID)
+		if err == nil && tag.RowsAffected() == 0 {
+			return failureCode(409, "subscription_exists", "the Checkout reservation changed; try again")
+		}
+		return err
+	})
 }
 
 func (s *store) setCheckoutSessionID(ctx context.Context, reservationID int64, sessionID string) error {
@@ -759,6 +780,7 @@ func (s *store) completeProvisioning(ctx context.Context, id int64, note string)
 
 type stripeClient interface {
 	createCustomer(context.Context, string, string) (string, error)
+	validateCheckoutPrice(context.Context, checkoutReservation) error
 	createCheckout(context.Context, string, checkoutReservation) (stripeCheckoutSession, error)
 	expireCheckout(context.Context, string) error
 	createPortal(context.Context, string, string) (string, error)
@@ -771,10 +793,12 @@ type stripeCheckoutSession struct {
 }
 
 var errStripeCheckoutCompleted = errors.New("Stripe Checkout Session already completed")
+var errStripeCheckoutPriceMismatch = failureCode(503, "stripe_unavailable", checkoutPriceErrorMessage)
 
 const (
-	stripeAPIVersion = "2026-11-18.endive"
-	accountURL       = "https://app.aifree.sg/account"
+	stripeAPIVersion          = "2026-11-18.endive"
+	accountURL                = "https://app.aifree.sg/account"
+	checkoutPriceErrorMessage = "Stripe Price must match the active monthly CNY plan"
 )
 
 type stripeHTTPClient struct {
@@ -830,7 +854,7 @@ func (c *stripeHTTPClient) createCustomer(ctx context.Context, email, key string
 	return result.ID, err
 }
 
-func (c *stripeHTTPClient) createCheckout(ctx context.Context, customer string, reservation checkoutReservation) (stripeCheckoutSession, error) {
+func (c *stripeHTTPClient) validateCheckoutPrice(ctx context.Context, reservation checkoutReservation) error {
 	var price struct {
 		Active     bool
 		Currency   string
@@ -841,11 +865,18 @@ func (c *stripeHTTPClient) createCheckout(ctx context.Context, customer string, 
 		}
 	}
 	if err := c.call(ctx, http.MethodGet, "/prices/"+url.PathEscape(reservation.PriceID), nil, "", &price); err != nil {
-		return stripeCheckoutSession{}, err
+		return err
 	}
-	if !price.Active || price.Currency != "cny" || price.UnitAmount != reservation.Amount || price.Recurring.Interval != "month" || price.Recurring.IntervalCount != 1 {
-		return stripeCheckoutSession{}, failureCode(503, "stripe_unavailable", "Stripe Price must match the active monthly CNY plan")
+	if price.Currency != "cny" || price.UnitAmount != reservation.Amount || price.Recurring.Interval != "month" || price.Recurring.IntervalCount != 1 {
+		return errStripeCheckoutPriceMismatch
 	}
+	if !price.Active {
+		return failureCode(503, "stripe_unavailable", checkoutPriceErrorMessage)
+	}
+	return nil
+}
+
+func (c *stripeHTTPClient) createCheckout(ctx context.Context, customer string, reservation checkoutReservation) (stripeCheckoutSession, error) {
 	id := strconv.FormatInt(reservation.ID, 10)
 	values := url.Values{
 		"mode": {"subscription"}, "customer": {customer}, "line_items[0][price]": {reservation.PriceID},
@@ -1079,25 +1110,27 @@ func (a *api) accountCheckout(r *apiRequest) (response, error) {
 	}
 	if change != nil {
 		if change.sessionID == "" {
-			// Older reservations and interrupted requests can recover the same Session by its idempotency key.
-			previous, err := a.store.stripe.createCheckout(ctx, stripeCustomer, change.reservation)
-			if err != nil {
+			previous, err := a.submitCheckout(ctx, stripeCustomer, change.reservation)
+			// Legacy reservations lack a request marker. An immutable Price mismatch means their validation could never pass.
+			if err != nil && !(change.legacy && errors.Is(err, errStripeCheckoutPriceMismatch)) {
 				return response{}, err
 			}
 			change.sessionID = previous.ID
 		}
-		if err := a.store.stripe.expireCheckout(ctx, change.sessionID); err != nil {
-			if errors.Is(err, errStripeCheckoutCompleted) {
-				return response{}, failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
+		if change.sessionID != "" {
+			if err := a.store.stripe.expireCheckout(ctx, change.sessionID); err != nil {
+				if errors.Is(err, errStripeCheckoutCompleted) {
+					return response{}, failureCode(409, "subscription_exists", "a subscription or Checkout Session already exists")
+				}
+				return response{}, err
 			}
-			return response{}, err
 		}
 		reservation, err = a.store.replacePendingCheckout(ctx, *change, body.Plan)
 		if err != nil {
 			return response{}, err
 		}
 	}
-	checkout, err := a.store.stripe.createCheckout(ctx, stripeCustomer, reservation)
+	checkout, err := a.submitCheckout(ctx, stripeCustomer, reservation)
 	if err != nil {
 		return response{}, err
 	}
@@ -1105,6 +1138,16 @@ func (a *api) accountCheckout(r *apiRequest) (response, error) {
 		return response{}, err
 	}
 	return ok(object{"url": checkout.URL}, nil)
+}
+
+func (a *api) submitCheckout(ctx context.Context, stripeCustomer string, reservation checkoutReservation) (stripeCheckoutSession, error) {
+	if err := a.store.stripe.validateCheckoutPrice(ctx, reservation); err != nil {
+		return stripeCheckoutSession{}, err
+	}
+	if err := a.store.startCheckoutRequest(ctx, reservation.ID); err != nil {
+		return stripeCheckoutSession{}, err
+	}
+	return a.store.stripe.createCheckout(ctx, stripeCustomer, reservation)
 }
 
 func (a *api) accountPortal(r *apiRequest) (response, error) {
