@@ -366,6 +366,7 @@ func (a *api) accountRoutes() {
 	a.bind("POST /v1/account/login", "", "", a.accountLogin)
 	a.bind("POST /v1/account/logout", "customer", "", a.accountLogout)
 	a.bind("GET /v1/account/me", "customer", "", a.accountMe)
+	a.bind("POST /v1/account/mailbox/password", "customer", "", a.accountMailboxPassword)
 	a.bind("POST /v1/account/password", "customer", "", a.accountPassword)
 	a.bind("POST /v1/account/password/forgot", "", "", a.accountPasswordForgot)
 	a.bind("POST /v1/account/password/reset", "", "", a.accountPasswordReset)

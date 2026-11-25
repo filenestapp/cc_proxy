@@ -109,6 +109,9 @@ dl.kv dd{margin:0;font-weight:600;min-width:0;overflow-wrap:anywhere}
 .pill.bad{background:var(--bad-bg);color:var(--bad)}
 .btns{display:flex;gap:10px;flex-wrap:wrap}
 .empty{color:var(--slate);font-size:.94rem;margin:0}
+.account-dialog{width:min(440px,calc(100% - 32px));max-height:calc(100% - 32px);color:var(--navy)}
+.account-dialog::backdrop{background:rgba(11,20,38,.48)}
+.account-dialog .mail-secret{font-family:var(--mono)}
 
 .plans{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 @media (max-width:900px){.plans{grid-template-columns:1fr}}
@@ -302,6 +305,34 @@ footer .row-between{gap:8px 20px}
   </section>
 </main>
 
+<dialog class="card account-dialog" id="mail-password-dialog" aria-labelledby="mail-password-title">
+  <h2 id="mail-password-title" data-t="mail_generate">Generate mailbox password</h2>
+  <form id="mail-password-form" novalidate>
+    <p class="muted" data-t="mail_generate_notice">A new password replaces the old mailbox password and signs out existing Webmail sessions.</p>
+    <div class="field">
+      <label for="mail-current-password" data-t="mail_current_password">Current aifree password</label>
+      <input id="mail-current-password" type="password" autocomplete="current-password" autofocus required>
+    </div>
+    <div class="notice" id="mail-password-notice" role="alert"></div>
+    <div class="btns">
+      <button class="btn btn-navy" type="submit" data-t="mail_generate">Generate mailbox password</button>
+      <button class="btn btn-outline" type="button" data-mail-password-close data-t="mail_close">Close</button>
+    </div>
+  </form>
+  <div id="mail-password-result" hidden>
+    <p class="muted" data-t="mail_password_once">Copy and save this password. It is shown once.</p>
+    <div class="field">
+      <label for="mail-generated-password" data-t="mail_login_password">Mailbox login password</label>
+      <input id="mail-generated-password" class="mail-secret" type="text" autocomplete="off" spellcheck="false" readonly>
+    </div>
+    <div class="notice" id="mail-copy-notice" role="status"></div>
+    <div class="btns">
+      <button class="btn btn-navy" type="button" id="mail-copy-password" data-t="mail_copy_password">Copy password</button>
+      <button class="btn btn-outline" type="button" data-mail-password-close data-t="mail_close">Close</button>
+    </div>
+  </div>
+</dialog>
+
 <footer>
   <div class="wrap row-between">
     <span>© 2026 aifree</span>
@@ -372,8 +403,13 @@ footer .row-between{gap:8px 20px}
       orders_title: "订单与收据", orders_none: "还没有订单。", order_date: "日期", amount: "金额", receipt: "收据", view_receipt: "查看收据",
       download_title: "下载客户端", download_lead: "在电脑上安装 aifree 桌面客户端，用本账号的邮箱和密码登录即可使用。",
       mail_title: "企业邮箱", mail_none: "订阅后可联系客服申请 @aifree.sg 邮箱。",
-      mail_address: "地址", open_webmail: "打开网页邮箱", mail_disabled_note: "如需恢复邮箱访问，请联系客服。",
-      mail_hint: "使用企业邮箱的密码登录网页邮箱。",
+      mail_login_account: "登录账号", mail_login_site: "登录入口", open_webmail: "打开网页邮箱",
+      mail_disabled_note: "如需恢复邮箱访问，请联系客服。",
+      mail_generate: "生成邮箱密码", mail_current_password: "当前 aifree 密码", mail_close: "关闭",
+      mail_generate_notice: "生成新密码会替换原邮箱密码，并退出已登录的网页邮箱会话。",
+      mail_password_once: "密码只显示这一次，请复制并保存。", mail_login_password: "邮箱登录密码",
+      mail_copy_password: "复制密码", mail_copied: "密码已复制。", mail_copy_failed: "请手动复制选中的密码。",
+      mail_wrong_password: "当前 aifree 密码不正确。",
       security_title: "修改密码", security_sub: "修改后，其他设备和浏览器上的登录会失效。", change_password: "修改密码",
       password_changed: "密码已修改。",
       never: "—", unavailable: "暂时无法加载，请稍后刷新。",
@@ -399,6 +435,7 @@ footer .row-between{gap:8px 20px}
       e_address_taken: "这个邮箱地址已被占用。",
       e_invalid_local_part: "邮箱名不符合要求。",
       e_mail_unavailable: "邮件服务暂时不可用，请稍后再试。",
+      e_mailbox_inactive: "邮箱当前不可用。请刷新页面查看邮箱状态。",
       e_stripe_unavailable: "支付服务暂时不可用，请稍后再试。",
       e_unauthorized: "登录已过期，请重新登录。",
       e_network: "网络连接失败，请检查网络后重试。",
@@ -456,8 +493,13 @@ footer .row-between{gap:8px 20px}
       orders_title: "Orders & receipts", orders_none: "No orders yet.", order_date: "Date", amount: "Amount", receipt: "Receipt", view_receipt: "View receipt",
       download_title: "Download the client", download_lead: "Install the aifree desktop client and sign in with this account's email and password.",
       mail_title: "Business email", mail_none: "Subscribers can contact support to request an @aifree.sg mailbox.",
-      mail_address: "Address", open_webmail: "Open webmail", mail_disabled_note: "Contact support if you need help restoring access.",
-      mail_hint: "Sign in to webmail with your mailbox password.",
+      mail_login_account: "Login account", mail_login_site: "Webmail", open_webmail: "Open webmail",
+      mail_disabled_note: "Contact support if you need help restoring access.",
+      mail_generate: "Generate mailbox password", mail_current_password: "Current aifree password", mail_close: "Close",
+      mail_generate_notice: "A new password replaces the old mailbox password and signs out existing Webmail sessions.",
+      mail_password_once: "Copy and save this password. It is shown once.", mail_login_password: "Mailbox login password",
+      mail_copy_password: "Copy password", mail_copied: "Password copied.", mail_copy_failed: "Copy the selected password manually.",
+      mail_wrong_password: "Your current aifree password is incorrect.",
       security_title: "Change password", security_sub: "Other devices and browsers will be signed out.", change_password: "Change password",
       password_changed: "Password changed.",
       never: "—", unavailable: "Couldn't load this right now. Please refresh in a moment.",
@@ -483,6 +525,7 @@ footer .row-between{gap:8px 20px}
       e_address_taken: "That address is already taken.",
       e_invalid_local_part: "That mailbox name isn't allowed.",
       e_mail_unavailable: "The mail service is unavailable. Please try again later.",
+      e_mailbox_inactive: "The mailbox is unavailable. Refresh the page to check its status.",
       e_stripe_unavailable: "Payments are temporarily unavailable. Please try again later.",
       e_unauthorized: "Your session has expired. Please sign in again.",
       e_network: "Network error. Check your connection and try again.",
@@ -632,6 +675,7 @@ footer .row-between{gap:8px 20px}
   // ---------- routing ----------
   var VIEWS = ["login", "register", "forgot", "reset", "verify", "dash"];
   function show(view) {
+    if (view !== "dash" && mailPasswordDialog.open) closeMailboxPassword();
     state.view = view;
     document.getElementById("booting").hidden = true;
     VIEWS.forEach(function (v) { document.getElementById("view-" + v).hidden = v !== view; });
@@ -1049,18 +1093,99 @@ footer .row-between{gap:8px 20px}
     var body = clear(document.getElementById("mail-body"));
     if (!mb) { body.appendChild(el("p", { class: "empty", text: t("mail_none") })); return; }
     var kv = el("dl", { class: "kv" });
-    kv.appendChild(el("dt", { text: t("mail_address") }));
+    kv.appendChild(el("dt", { text: t("mail_login_account") }));
     kv.appendChild(el("dd", { class: "mono", text: mb.address }));
     kv.appendChild(el("dt", { text: t("status") }));
     kv.appendChild(el("dd", null, [pill(t("m_" + mb.status), mb.status === "active" ? "ok" : "bad")]));
     body.appendChild(kv);
     if (mb.status === "disabled") { body.appendChild(el("p", { class: "muted", text: t("mail_disabled_note") })); return; }
     var url = mb.webmail_url && /^https:\/\//.test(mb.webmail_url) ? mb.webmail_url : WEBMAIL;
-    body.appendChild(el("p", { class: "muted", style: "font-size:.9rem", text: t("mail_hint") }));
-    body.appendChild(el("a", { class: "btn btn-outline btn-sm", href: url, target: "_blank", rel: "noopener noreferrer", text: t("open_webmail") }));
+    var host = url.replace(/^https:\/\//, "");
+    kv.appendChild(el("dt", { text: t("mail_login_site") }));
+    kv.appendChild(el("dd", null, [el("a", {
+      href: url, target: "_blank", rel: "noopener noreferrer",
+      text: host, "aria-label": t("open_webmail") + " " + host
+    })]));
+    body.appendChild(el("button", { class: "btn btn-outline btn-sm", type: "button", text: t("mail_generate"), onclick: function () {
+      clearMailboxPassword();
+      mailPasswordDialog.showModal();
+    } }));
   }
 
   // ---------- dashboard actions ----------
+  var mailPasswordDialog = document.getElementById("mail-password-dialog");
+  var mailPasswordForm = document.getElementById("mail-password-form");
+  var mailPasswordResult = document.getElementById("mail-password-result");
+  var mailPasswordNotice = document.getElementById("mail-password-notice");
+  var mailCopyNotice = document.getElementById("mail-copy-notice");
+  var mailPasswordSubmit = mailPasswordForm.querySelector("button[type=submit]");
+  var mailCurrentPassword = document.getElementById("mail-current-password");
+  var mailGeneratedPassword = document.getElementById("mail-generated-password");
+  var mailCopyPassword = document.getElementById("mail-copy-password");
+  var mailPasswordAttempt = 0;
+
+  function clearMailboxPassword() {
+    mailPasswordAttempt++;
+    mailCurrentPassword.value = "";
+    mailGeneratedPassword.value = "";
+    mailPasswordForm.hidden = false;
+    mailPasswordResult.hidden = true;
+    busy(mailPasswordSubmit, false);
+    notice(mailPasswordNotice, "", "");
+    notice(mailCopyNotice, "", "");
+  }
+
+  function closeMailboxPassword() {
+    clearMailboxPassword();
+    if (mailPasswordDialog.open) mailPasswordDialog.close();
+  }
+
+  mailPasswordDialog.querySelectorAll("[data-mail-password-close]").forEach(function (button) {
+    button.addEventListener("click", closeMailboxPassword);
+  });
+  mailPasswordDialog.addEventListener("close", function () {
+    if (!mailPasswordDialog.open) clearMailboxPassword();
+  });
+  window.addEventListener("pagehide", closeMailboxPassword);
+
+  mailPasswordForm.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    if (mailPasswordSubmit.disabled) return;
+    if (!mailCurrentPassword.value) { notice(mailPasswordNotice, "err", t("required")); return; }
+    var attempt = ++mailPasswordAttempt;
+    busy(mailPasswordSubmit, true);
+    notice(mailPasswordNotice, "", "");
+    var result = api("POST", "/v1/account/mailbox/password", { current_password: mailCurrentPassword.value });
+    mailCurrentPassword.value = "";
+    result.then(function (data) {
+      if (attempt !== mailPasswordAttempt || !mailPasswordDialog.open) return;
+      if (!data || !data.password) throw new ApiError(502, "mail_unavailable");
+      mailGeneratedPassword.value = data.password;
+      mailPasswordForm.hidden = true;
+      mailPasswordResult.hidden = false;
+      mailCopyPassword.focus();
+    }).catch(function (err) {
+      if (attempt !== mailPasswordAttempt || !mailPasswordDialog.open || handleAuthError(err)) return;
+      notice(mailPasswordNotice, "err", err.code === "invalid_credentials" ? t("mail_wrong_password") : errorText(err));
+      mailCurrentPassword.focus();
+    }).then(function () {
+      if (attempt === mailPasswordAttempt) busy(mailPasswordSubmit, false);
+    });
+  });
+
+  mailCopyPassword.addEventListener("click", function () {
+    var attempt = mailPasswordAttempt;
+    Promise.resolve().then(function () {
+      return navigator.clipboard.writeText(mailGeneratedPassword.value);
+    }).then(function () {
+      if (attempt === mailPasswordAttempt) notice(mailCopyNotice, "ok", t("mail_copied"));
+    }).catch(function () {
+      if (attempt !== mailPasswordAttempt) return;
+      mailGeneratedPassword.select();
+      notice(mailCopyNotice, "info", t("mail_copy_failed"));
+    });
+  });
+
   document.getElementById("resend").addEventListener("click", function () {
     var btn = this, box = document.getElementById("dash-notice");
     busy(btn, true);

@@ -174,6 +174,11 @@ func TestAccountUIRoutes(t *testing.T) {
 		t.Fatalf("devices after revoke = %+v", devices)
 	}
 
+	const mailboxPasswordPath = "/v1/account/mailbox/password"
+	const mailboxPasswordBody = `{"current_password":"uipass123"}`
+	c.expect(c.do(http.MethodPost, mailboxPasswordPath, mailboxPasswordBody, false), 403, "csrf")
+	c.expect(c.do(http.MethodPost, mailboxPasswordPath, mailboxPasswordBody, true), 409, "mailbox_inactive")
+
 	c.expect(c.do(http.MethodPost, "/v1/account/password", `{"current_password":"wrongpass1","new_password":"uipass456"}`, true), 401, "invalid_credentials")
 	if c.cookie == nil {
 		t.Fatal("a wrong current password must not end the session")

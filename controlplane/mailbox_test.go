@@ -434,6 +434,64 @@ func TestMailboxProvisioningWithReceiveOnlyCloudMail(t *testing.T) {
 	}
 }
 
+func TestCustomerGeneratesPasswordForOwnActiveMailbox(t *testing.T) {
+	ctx := t.Context()
+	s := testStore(t)
+	fake, admin := newFakeCloudMail(t)
+	s.mailboxAdmin = admin
+	h := newAPIWithMail(s, testAdminToken, "", nil, nil)
+	customer, cookie, csrf := billingCustomer(t, s)
+	_, err := s.pool.Exec(ctx, `INSERT INTO subscriptions(customer_id,plan_code,status,current_period_end,created_at,updated_at)
+		VALUES ($1,'standard','active',$2,$3,$3)`, customer.ID, s.now()+3600, s.now())
+	require(t, err)
+	mailbox, initialPassword, err := s.createMailbox(ctx, customer.ID, "customer-login")
+	require(t, err)
+	_, otherToken, otherCSRF, _, err := s.registerCustomer(ctx, "another@example.test", testPassword, "", "")
+	require(t, err)
+	other := &http.Cookie{Name: customerSessionCookie, Value: otherToken}
+
+	const path = "/v1/account/mailbox/password"
+	body := fmt.Sprintf(`{"current_password":%q}`, testPassword)
+	wantMailboxHTTP(t, accountRequest(t, h, http.MethodPost, path, body, nil, ""), 401, "")
+	wantMailboxHTTP(t, accountRequest(t, h, http.MethodPost, path, body, cookie, ""), 403, "csrf")
+	wantMailboxHTTP(t, accountRequest(t, h, http.MethodPost, path, body, other, otherCSRF), 409, "mailbox_inactive")
+	wantMailboxHTTP(t, accountRequest(t, h, http.MethodPost, path, `{"current_password":"incorrect"}`, cookie, csrf), 401, "invalid_credentials")
+	if fake.count("/api/user/setPwd") != 0 {
+		t.Fatal("an unauthorized request contacted the mailbox password API")
+	}
+
+	fake.failNext("/api/user/setPwd", fakeCloudMailReply{status: 503, code: 503})
+	failed := accountRequest(t, h, http.MethodPost, path, body, cookie, csrf)
+	wantMailboxHTTP(t, failed, 502, "mail_unavailable")
+	if strings.Contains(failed.Body.String(), `"password"`) {
+		t.Fatal("a failed password change returned a credential")
+	}
+
+	rec := accountRequest(t, h, http.MethodPost, path, body, cookie, csrf)
+	wantMailboxHTTP(t, rec, 200, "")
+	var generated struct{ Password string }
+	require(t, json.Unmarshal(rec.Body.Bytes(), &generated))
+	user, exists := fake.user(mailbox.Address)
+	if !exists || generated.Password == "" || generated.Password == initialPassword || user.Password != generated.Password {
+		t.Fatal("the generated password did not match the customer's mailbox")
+	}
+	me := accountRequest(t, h, http.MethodGet, "/v1/account/me", "", cookie, "")
+	if strings.Contains(me.Body.String(), initialPassword) || strings.Contains(me.Body.String(), generated.Password) {
+		t.Fatal("the customer profile exposed a mailbox password")
+	}
+	_, err = s.checkCustomerCredentials(ctx, customer.Email, testPassword)
+	require(t, err)
+
+	// An expired subscription cannot change the mailbox while provider disable is pending.
+	_, err = s.pool.Exec(ctx, "UPDATE subscriptions SET status='cancelled' WHERE customer_id=$1", customer.ID)
+	require(t, err)
+	freshHandler := newAPIWithMail(s, testAdminToken, "", nil, nil)
+	wantMailboxHTTP(t, accountRequest(t, freshHandler, http.MethodPost, path, body, cookie, csrf), 409, "mailbox_inactive")
+	if fake.count("/api/user/setPwd") != 2 {
+		t.Fatal("a customer without entitlement contacted the mailbox password API")
+	}
+}
+
 func TestCloudMailV360LookupUsesExactAddressAcrossPages(t *testing.T) {
 	fake, admin := newFakeCloudMail(t)
 	const address = "mailbox@aifree.sg"

@@ -170,7 +170,7 @@ An administrator creates the mailbox in **Customers** and manages it in **Mailbo
 
 | Method and path | Behavior |
 | --- | --- |
-| `POST /admin/customers/{id}/mailbox` | Accepts `{local_part}`. Returns 201 with `{mailbox, initial_password}` after setup completes. This response is the only control plane response that includes the initial password. |
+| `POST /admin/customers/{id}/mailbox` | Accepts `{local_part}`. Returns 201 with `{mailbox, initial_password}` after setup completes. This response supplies the initial password once. |
 | `GET /admin/mailboxes` | Lists mailbox addresses, customers, status, pending setup, and scheduled deletion. |
 | `POST /admin/mailboxes/{id}/disable` | Disables access and returns 204. A manual disable persists across renewals. |
 | `POST /admin/mailboxes/{id}/enable` | Restores access for an eligible customer and returns 204. |
@@ -179,6 +179,8 @@ An administrator creates the mailbox in **Customers** and manages it in **Mailbo
 Error codes include `no_entitlement` (403), `quota_exceeded` and `address_taken` (409), `invalid_local_part` and `invalid_confirmation` (400), and `mail_unavailable` (502). Repeat the setup request with the same customer and address to resume a pending setup.
 
 `GET /admin/customers` includes `mailbox_entitled` and a current mailbox summary. The customer reads their own mailbox through `GET /v1/account/me` as `{address, status, webmail_url}`. The customer status is `active` or `disabled`. The webmail URL is `https://mail.aifree.sg`.
+
+`POST /v1/account/mailbox/password` accepts `{current_password}` for the signed-in customer's aifree account. It requires a customer session, its CSRF token, and an active mailbox with current entitlement. A successful request replaces the Webmail password, signs out existing Webmail sessions, and returns 200 with `{password}` once. The control plane does not store the new password. A mailbox without access returns 409 `mailbox_inactive`.
 
 ### Lifecycle
 

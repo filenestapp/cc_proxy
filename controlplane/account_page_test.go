@@ -77,7 +77,7 @@ func TestAccountPageSelfContained(t *testing.T) {
 	for _, path := range []string{
 		"/v1/account/register", "/v1/account/verify", "/v1/account/verify/resend", "/v1/account/login",
 		"/v1/account/logout", "/v1/account/me", "/v1/account/password", "/v1/account/password/forgot",
-		"/v1/account/password/reset", "/v1/account/plans", "/v1/account/checkout", "/v1/account/portal",
+		"/v1/account/password/reset", "/v1/account/mailbox/password", "/v1/account/plans", "/v1/account/checkout", "/v1/account/portal",
 		"/v1/account/subscription", "/v1/account/orders", "/v1/account/devices",
 	} {
 		if !strings.Contains(page, `"`+path+`"`) && !strings.Contains(page, `"`+path+`/"`) {
@@ -94,7 +94,7 @@ func TestAccountPageErrorCodes(t *testing.T) {
 		"invalid_email", "weak_password", "email_taken", "invalid_credentials", "invalid_token",
 		"email_unverified", "suspended", "rate_limited", "already_verified", "csrf",
 		"subscription_exists", "no_active_subscription", "no_entitlement", "quota_exceeded",
-		"address_taken", "invalid_local_part", "mail_unavailable", "stripe_unavailable",
+		"address_taken", "invalid_local_part", "mail_unavailable", "mailbox_inactive", "stripe_unavailable",
 	}
 	for _, code := range codes {
 		if n := strings.Count(page, "e_"+code+":"); n != 2 {

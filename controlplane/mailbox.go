@@ -27,6 +27,7 @@ const (
 const mailboxPaidSQL = `EXISTS (SELECT 1 FROM subscriptions s WHERE s.customer_id=c.id
 	AND s.status IN ('active','past_due') AND ` + subscriptionDeadlineSQL + ` > $1)`
 const mailboxEligibleSQL = `(c.status='active' AND c.email_verified_at IS NOT NULL AND ` + mailboxPaidSQL + `)`
+const mailboxLoginActiveSQL = `m.status='active' AND NOT m.manually_disabled AND ` + mailboxEligibleSQL
 
 const mailboxSchemaSQL = `
 CREATE TABLE IF NOT EXISTS mailboxes (
@@ -130,7 +131,7 @@ func saveMailbox(ctx context.Context, db database, m mailboxRecord) error {
 func (s *store) customerMailbox(ctx context.Context, customerID int64) (*customerMailboxView, error) {
 	var mailbox customerMailboxView
 	err := s.pool.QueryRow(ctx, `SELECT m.address,
-		CASE WHEN m.status='active' AND NOT m.manually_disabled AND `+mailboxEligibleSQL+` THEN 'active' ELSE 'disabled' END
+		CASE WHEN `+mailboxLoginActiveSQL+` THEN 'active' ELSE 'disabled' END
 		FROM mailboxes m JOIN customers c ON c.id=m.customer_id
 		WHERE m.customer_id=$2 AND NOT m.setup_pending AND m.status IN ('active','disabled','deleting')`, s.now(), customerID).
 		Scan(&mailbox.Address, &mailbox.Status)
@@ -139,6 +140,41 @@ func (s *store) customerMailbox(ctx context.Context, customerID int64) (*custome
 	}
 	mailbox.WebmailURL = mailboxWebmailURL
 	return &mailbox, err
+}
+
+func (s *store) rotateCustomerMailboxPassword(ctx context.Context, customerID int64, currentPassword string) (string, error) {
+	var password string
+	err := s.writeMailbox(ctx, customerID, func(tx pgx.Tx) error {
+		var userID int64
+		var passwordHash string
+		err := tx.QueryRow(ctx, `SELECT m.cloudmail_user_id, c.password_hash
+			FROM mailboxes m JOIN customers c ON c.id=m.customer_id
+			WHERE m.customer_id=$2 AND NOT m.setup_pending AND `+mailboxLoginActiveSQL, s.now(), customerID).
+			Scan(&userID, &passwordHash)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return failureCode(409, "mailbox_inactive", "an active mailbox is required")
+		}
+		if err != nil {
+			return err
+		}
+		if !checkPassword(currentPassword, passwordHash) {
+			return invalidCredentials()
+		}
+		if s.mailboxAdmin == nil {
+			return mailboxUnavailable()
+		}
+		remoteCtx, cancel := context.WithTimeout(ctx, mailboxRemoteTimeout)
+		defer cancel()
+		password = randomToken(24)
+		if err := s.mailboxAdmin.setPassword(remoteCtx, userID, password); err != nil {
+			return mailboxUnavailable()
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return password, nil
 }
 
 func (s *store) reserveMailbox(ctx context.Context, customerID int64, address string) (int64, error) {
@@ -450,6 +486,20 @@ func (a *api) mailboxAdminRoutes() {
 	a.bind("POST /admin/mailboxes/{id}/disable", "admin", "mailbox_disable", a.adminMailboxChange(disableMailbox))
 	a.bind("POST /admin/mailboxes/{id}/enable", "admin", "mailbox_enable", a.adminMailboxChange(enableMailbox))
 	a.bindWithBody("DELETE /admin/mailboxes/{id}", "admin", "mailbox_delete", a.adminMailboxChange(deleteMailbox), true)
+}
+
+func (a *api) accountMailboxPassword(r *apiRequest) (response, error) {
+	var body struct {
+		CurrentPassword string `json:"current_password"`
+	}
+	if err := r.decode(&body, "current_password"); err != nil {
+		return response{}, err
+	}
+	if err := a.accountRateLimit("mailbox_password", strconv.FormatInt(r.Customer.CustomerID, 10), r.Address); err != nil {
+		return response{}, err
+	}
+	password, err := a.store.rotateCustomerMailboxPassword(r.Context(), r.Customer.CustomerID, body.CurrentPassword)
+	return ok(object{"password": password}, err)
 }
 
 func (a *api) adminMailboxCreate(r *apiRequest) (response, error) {
