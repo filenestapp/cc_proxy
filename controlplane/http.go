@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/hmac"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,9 +17,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 )
-
-//go:embed console.html
-var consolePage []byte
 
 const (
 	sessionCookie          = "cp_session"
@@ -171,6 +167,7 @@ func newAPIWithMailAndPublicURL(s *store, adminToken, probeToken string, proxies
 	a.accountRoutes()
 	a.accountPageRoutes()
 	a.installRoutes()
+	a.agentUpdateRoutes()
 	a.xtcpRoutes()
 	a.mux.HandleFunc("/", noRoute)
 	return routeByHost(a.mux)

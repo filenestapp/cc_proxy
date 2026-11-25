@@ -273,7 +273,7 @@ func TestConsoleOffersTheThreeCommands(t *testing.T) {
 		`api("GET", "/admin/install-url")`,
 		`new URLSearchParams({ cp: $("#inst-cp", root).value.trim() })`,
 		`api("GET", "/admin/install-commands?" + q)`,
-		`id="install" type="button">Install command`,
+		`id="install" type="button">${trHTML("Install command")}`,
 		// Switching OS or editing the URL clears the commands and disables Copy at once, and only the response to
 		// the latest request may fill them.
 		"if (mine !== seq || want !== os) return;",
@@ -292,7 +292,7 @@ func TestConsoleOffersTheThreeCommands(t *testing.T) {
 	}
 	// XTCP hosts: the help names frpc instead of port forwarding; the Install command offers Enter to reuse a token.
 	for _, want := range []string{
-		`if (transport && transport.transport === "xtcp")`,
+		`transport?.transport === "xtcp"`,
 		"the installer also downloads the pinned frpc and starts it at boot",
 		"so no inbound port forwarding is needed",
 		"press Enter to reuse the token already installed on this host",

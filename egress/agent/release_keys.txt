@@ -1,0 +1,6 @@
+# Public keys the exit agent trusts for automatic updates, one "ed25519:<base64>" line each (see
+# docs/exit-agent-updates.md). The matching private key is the exit-agent workflow secret AGENT_RELEASE_SIGNING_KEY.
+# Generate a pair with: go run ./cmd/agent-release keygen /secure/path/agent-release.key
+#
+# With no key here, an agent built from this tree never updates itself and reports the update state "disabled".
+# Keep the old key listed for one release when rotating, so hosts on the old key can move to the new one.

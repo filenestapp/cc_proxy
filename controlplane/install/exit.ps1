@@ -22,6 +22,13 @@
 # "CCProxyExitFrpc". frpc registers an xtcp proxy for sing-box with frps (TLS on TCP 7003, verified against the CA
 # from the control plane); visitors connect directly, with no relay fallback.
 # The control plane certificate must be trusted by Windows (a public CA, or a private CA in LocalMachine\Root).
+#
+# Automatic updates (docs/exit-agent-updates.md): an agent installed by this version updates itself when the
+# operator includes the host in a rollout. It verifies the signed release, keeps the running binary as
+# ccproxy-exit-agent.exe.previous, renames the running file aside and puts the new one in its place, then starts a
+# detached PowerShell that ends and starts the "CCProxyExitAgent" task. The new agent rolls itself back to .previous
+# unless it reports healthy. sing-box runs under the agent here, so it restarts with the agent (a few seconds without
+# service). An older agent has no updater: run this installer once to move it to this path.
 param(
     [string]$ControlPlane,
     [string]$TokenFile,

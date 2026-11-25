@@ -1,4 +1,10 @@
-# Test the Go exit agent and publish its reproducible build (the files the control plane serves to installers).
+# Test the Go exit agent and publish its reproducible build: the files the control plane serves to installers
+# (CP_AGENT_DIST) and, signed, an agent release for managed automatic updates (CP_AGENT_RELEASES). Running this
+# workflow is how an operator publishes an agent release; see docs/exit-agent-updates.md.
+#
+# The release sequence is this workflow's run number, so a later run is always a newer release, whatever its source
+# hash. With the secret AGENT_RELEASE_SIGNING_KEY (agent-release keygen) the record is signed and checked against
+# egress/agent/release_keys.txt; without it the artifact is unsigned and the control plane refuses to roll it out.
 name: exit-agent
 
 on:
@@ -11,7 +17,7 @@ jobs:
   build:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: egress/agent
@@ -28,6 +34,28 @@ jobs:
           go test ./...
       - name: Reproducible build
         run: ./build.sh --verify
+      - name: Release record
+        run: go run ./cmd/agent-release record -dist dist -sequence "$GITHUB_RUN_NUMBER" -commit "$GITHUB_SHA"
+      - name: Sign the release
+        env:
+          AGENT_RELEASE_SIGNING_KEY: ${{ secrets.AGENT_RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$AGENT_RELEASE_SIGNING_KEY" ]; then
+            echo "::warning::AGENT_RELEASE_SIGNING_KEY is not set: this build is not an agent release (installers only)"
+            exit 0
+          fi
+          go run ./cmd/agent-release sign -dist dist
+          # Fails when the key is not in release_keys.txt: agents built from this tree would refuse the release.
+          go run ./cmd/agent-release verify -dist dist -keys release_keys.txt
+      - name: Summary
+        run: |
+          {
+            echo "### ccproxy-exit-agent $(cat dist/VERSION), release sequence $GITHUB_RUN_NUMBER"
+            if [ -f dist/release.json.sig ]; then echo "Signed release: copy the artifact to CP_AGENT_RELEASES/$(cat dist/VERSION)/ on the control plane."; else echo "Unsigned: installers only."; fi
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: aifree-exit-agent

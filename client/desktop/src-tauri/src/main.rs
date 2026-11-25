@@ -13,6 +13,7 @@
 mod exit_probe;
 mod netcheck;
 mod tray;
+mod updates;
 
 use anyhow::Result;
 use ccproxy_core::api::{Api, LoginError};
@@ -351,9 +352,14 @@ fn main() {
         tray_language: Mutex::new(tray::Language::preferred()),
         visitor: Mutex::new(VisitorProcess::default()),
     });
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| tray::show_window(app)))
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| tray::show_window(app)));
+    if updates::CONFIGURED {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    builder
         .manage(app)
+        .manage(updates::PendingUpdate::default())
         .setup(|app| {
             let state = app.state::<Arc<App>>();
             // Only the primary instance gets here: the single-instance plugin ends a second launch while the app is
@@ -364,6 +370,7 @@ fn main() {
             let exit = state.inner().clone();
             std::thread::spawn(move || background(heartbeat));
             std::thread::spawn(move || exit_probe::monitor(exit));
+            updates::start_automatic_updates(app.handle().clone());
             if let Err(error) = tray::install(app.handle(), state.inner().clone()) {
                 eprintln!("Could not create the system tray: {error}");
             }
@@ -372,7 +379,8 @@ fn main() {
         .on_window_event(tray::window_event)
         .invoke_handler(tauri::generate_handler![
             system_languages, set_tray_language, get_state, login, logout, connect, disconnect,
-            netcheck::run_environment_check
+            netcheck::run_environment_check, updates::check_for_update, updates::install_update,
+            updates::defer_update, updates::update_state,
         ])
         .build(tauri::generate_context!())
         .expect("building the app")

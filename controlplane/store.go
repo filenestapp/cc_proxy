@@ -81,12 +81,20 @@ func (s *store) initializeSchema(ctx context.Context) error {
 					return err
 				}
 			}
+			// Older Agents did not report their binary version. This nullable field preserves
+			// their heartbeats and lets the console distinguish an unavailable value.
+			if _, err := tx.Exec(ctx, `ALTER TABLE agents ADD COLUMN IF NOT EXISTS agent_version text`); err != nil {
+				return err
+			}
 		}
 		// Additive as well: a previous binary ignores the table, so rollback keeps working.
 		if err := ensureUsageTables(ctx, tx); err != nil {
 			return err
 		}
 		if err := ensureXTCPTable(ctx, tx); err != nil {
+			return err
+		}
+		if err := ensureAgentUpdateTables(ctx, tx); err != nil {
 			return err
 		}
 		if err := ensureCustomerTables(ctx, tx); err != nil {

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // splitCommand splits a command line like Python's shlex.split: whitespace separates words; single quotes are
@@ -75,4 +78,26 @@ func runCommand(line string, output io.Writer) error {
 	}
 	cmd.Stdout, cmd.Stderr = output, output
 	return cmd.Run()
+}
+
+// runCommandTimeout is runCommand bounded by timeout: a hung service manager must not stall the agent's cycle. The
+// command is killed at the deadline, and output pipes are abandoned shortly after (a child that keeps them open).
+func runCommandTimeout(line string, output io.Writer, timeout time.Duration) error {
+	argv, err := splitCommand(line)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	if output == nil {
+		output = os.Stderr
+	}
+	cmd.Stdout, cmd.Stderr = output, output
+	cmd.WaitDelay = 2 * time.Second
+	err = cmd.Run()
+	if ctx.Err() != nil {
+		return fmt.Errorf("timed out after %s", timeout)
+	}
+	return err
 }

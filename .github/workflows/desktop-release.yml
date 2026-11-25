@@ -1,0 +1,126 @@
+# Produce signed desktop updater artifacts after an explicit release decision on main.
+name: desktop-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer version to publish, for example 0.2.0
+        required: true
+        type: string
+      notes:
+        description: Optional customer-facing update notes
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb,appimage
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    defaults:
+      run:
+        shell: bash
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release credentials
+        env:
+          UPDATER_PUBLIC_KEY: ${{ secrets.AIFREE_UPDATER_PUBLIC_KEY }}
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: test -n "$UPDATER_PUBLIC_KEY" && test -n "$SIGNING_KEY"
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup target add ${{ matrix.target }}
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Sidecars
+        run: desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
+      - name: Render release-only updater configuration
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          AIFREE_UPDATER_PUBLIC_KEY: ${{ secrets.AIFREE_UPDATER_PUBLIC_KEY }}
+        run: node desktop/scripts/release-config.mjs desktop/src-tauri/tauri.conf.json desktop/src-tauri/tauri.release.conf.json "$RELEASE_VERSION" "$AIFREE_UPDATER_PUBLIC_KEY" https://downloads.aifree.sg/desktop/stable.json
+      - name: Build signed updater artifacts
+        working-directory: client/desktop/src-tauri
+        env:
+          AIFREE_UPDATER_PUBLIC_KEY: ${{ secrets.AIFREE_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: npx --yes @tauri-apps/cli@2.12.6 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config tauri.release.conf.json -- --locked
+      - name: Sign Debian updater packages when Tauri does not create their signatures
+        if: runner.os == 'Linux'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          shopt -s nullglob
+          for package in target/${{ matrix.target }}/release/bundle/deb/*.deb; do
+            test -f "$package.sig" || npx --yes @tauri-apps/cli@2.12.6 signer sign --app-version "$RELEASE_VERSION" "$package"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aifree-update-${{ matrix.target }}
+          path: |
+            client/target/${{ matrix.target }}/release/bundle/**/*.tar.gz
+            client/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            client/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            client/target/${{ matrix.target }}/release/bundle/**/*.deb
+            client/target/${{ matrix.target }}/release/bundle/**/*.exe
+            client/target/${{ matrix.target }}/release/bundle/**/*.sig
+          if-no-files-found: error
+          retention-days: 30
+
+  manifest:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: aifree-update-*
+          path: artifacts
+      - name: Build the stable update manifest
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.notes }}
+        run: node client/desktop/scripts/release-manifest.mjs artifacts "$RELEASE_VERSION" https://downloads.aifree.sg/desktop stable.json "$RELEASE_NOTES"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aifree-stable-update-${{ inputs.version }}
+          path: |
+            artifacts
+            stable.json
+          retention-days: 30

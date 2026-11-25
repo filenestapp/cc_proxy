@@ -12,6 +12,10 @@
 # so a node verifies the binary it downloads. Same source + same VERSION gives byte-identical binaries: pinned Go
 # toolchain (go.mod), no cgo, -trimpath, no VCS stamping, empty build ID. Check with: build.sh twice and compare
 # SHA256SUMS, or `build.sh --verify` which does exactly that.
+#
+# The agent trusts the release signing keys in release_keys.txt (automatic updates, docs/exit-agent-updates.md).
+# AGENT_EXTRA_RELEASE_KEYS ("ed25519:..." keys, comma separated) adds more for test builds only, such as the e2e
+# rehearsal in controlplane/test/xtcp; never set it for a build that goes to real hosts.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -36,7 +40,7 @@ build() { # build OUTDIR
     os=${t%/*} arch=${t#*/} ext=
     [ "$os" = windows ] && ext=.exe
     GOTOOLCHAIN=$toolchain CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOFLAGS=-mod=readonly \
-      go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X main.version=$version" \
+      go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X main.version=$version${AGENT_EXTRA_RELEASE_KEYS:+ -X main.extraReleaseKeys=$AGENT_EXTRA_RELEASE_KEYS}" \
       -o "$out/ccproxy-exit-agent-$os-$arch$ext" .
   done
   (cd "$out" && if command -v sha256sum >/dev/null 2>&1; then sha256sum ccproxy-exit-agent-*; else shasum -a 256 ccproxy-exit-agent-*; fi) > "$out/SHA256SUMS.tmp"
@@ -57,5 +61,6 @@ if [ -n "$verify" ]; then
     exit 1
   fi
 fi
+if [ -n "${AGENT_EXTRA_RELEASE_KEYS:-}" ]; then echo "WARNING: test build, extra release keys: $AGENT_EXTRA_RELEASE_KEYS" >&2; fi
 echo "ccproxy-exit-agent $version ($toolchain):"
 cat dist/SHA256SUMS

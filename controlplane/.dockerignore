@@ -7,6 +7,8 @@
 !account.html
 !install/
 !install/**
+!locales/
+!locales/*.json
 !sqlite_export.py
 !Dockerfile
 *_test.go
