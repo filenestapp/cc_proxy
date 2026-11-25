@@ -13,7 +13,7 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#14213D">
-<link rel="stylesheet" href="/assets/site.css">
+<link rel="stylesheet" href="/assets/site.css?v=0.2.0-downloads">
 </head>
 <body>
 <a class="skip" href="#main">跳到正文</a>
@@ -37,11 +37,33 @@
 <main id="main">
 <div class="page-hero"><div class="wrap"><h1>下载 aifree 客户端</h1><p>安装后用注册邮箱和密码登录，点“连接”即可。</p></div></div>
 <div class="prose">
-<p>客户端安装包在用户中心提供下载，这样每次拿到的都是与你账号匹配的最新版本。登录用户中心后进入“客户端下载”。</p>
+<p>版本 0.2.0。选择与你的操作系统和处理器匹配的安装包。</p>
 <div class="dl-grid">
-  <div class="node" id="macos"><h2 style="margin:0;font-size:1.15rem">macOS</h2><p>Apple 芯片（M1 及更新）</p><a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account">登录后下载</a></div>
-  <div class="node" id="windows"><h2 style="margin:0;font-size:1.15rem">Windows</h2><p>Windows 10 / 11，64 位</p><a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account">登录后下载</a></div>
-  <div class="node" id="linux"><h2 style="margin:0;font-size:1.15rem">Linux</h2><p>deb 包或 AppImage，x86_64</p><a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account">登录后下载</a></div>
+  <div class="node" id="macos">
+    <h2 style="margin:0;font-size:1.15rem">macOS</h2>
+    <p>Apple 芯片（M1 及更新）</p>
+    <div class="dl-options">
+      <a class="btn btn-primary btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/darwin-aarch64/aifree_0.2.0_aarch64.dmg">Apple silicon DMG</a>
+    </div>
+  </div>
+  <div class="node" id="windows">
+    <h2 style="margin:0;font-size:1.15rem">Windows</h2>
+    <p>Windows 10 / 11</p>
+    <div class="dl-options">
+      <a class="btn btn-primary btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/windows-x86_64/aifree_0.2.0_x64-setup.exe">x64</a>
+      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/windows-aarch64/aifree_0.2.0_arm64-setup.exe">ARM64</a>
+    </div>
+  </div>
+  <div class="node" id="linux">
+    <h2 style="margin:0;font-size:1.15rem">Linux</h2>
+    <p>x64 和 ARM64</p>
+    <div class="dl-options">
+      <a class="btn btn-primary btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-deb/aifree_0.2.0_amd64.deb">x64 DEB</a>
+      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-appimage/aifree_0.2.0_amd64.AppImage">x64 AppImage</a>
+      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-deb/aifree_0.2.0_arm64.deb">ARM64 DEB</a>
+      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-appimage/aifree_0.2.0_aarch64.AppImage">ARM64 AppImage</a>
+    </div>
+  </div>
 </div>
 <h2>安装与首次连接</h2>
 <ol>
@@ -50,13 +72,8 @@
   <li>点“连接”。客户端需要创建一个虚拟网卡，系统会请求一次管理员授权：macOS 输入开机密码，Windows 确认 UAC 提示，Linux 通过 polkit 授权。</li>
   <li>连接后，主界面会显示你的出口 IP。关闭窗口时客户端留在系统托盘继续运行；从托盘菜单选择“退出”会同时断开连接。</li>
 </ol>
-<h2>系统提示“无法验证开发者”怎么办？</h2>
-<p>当前版本的安装包还没有做系统签名，首次打开时系统可能拦截：</p>
-<ul>
-  <li><strong>macOS</strong>：打开“系统设置 › 隐私与安全性”，在页面下方找到 aifree，点“仍要打开”。</li>
-  <li><strong>Windows</strong>：在 SmartScreen 提示中点“更多信息”，再点“仍要运行”。</li>
-</ul>
-<p>请只从用户中心下载安装包。如果你在其他地方看到 aifree 安装包，不要安装，并告诉我们：<a href="mailto:support@aifree.sg">support@aifree.sg</a>。</p>
+<h2>安装包签名</h2>
+<p>macOS 安装包已通过 Apple 公证。Windows 安装包的数字签名发布者为 TENSOR SHIFT PTE. LTD.</p>
 <h2>环境检查</h2>
 <p>客户端里的“环境检查”可以对比当前设备的出口、DNS、UDP 等情况，帮助排查连接问题。运行检查时，部分观测数据会发送给第三方检测服务，详见<a href="/privacy/">隐私政策</a>。只有你主动点击时才会运行。</p>
 </div>

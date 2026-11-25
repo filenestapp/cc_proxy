@@ -46,6 +46,36 @@ func TestAccountPageRoutes(t *testing.T) {
 	}
 }
 
+func TestAccountPageDesktopDownloadLinks(t *testing.T) {
+	_, panel, found := strings.Cut(string(accountPage), `aria-labelledby="h-download">`)
+	if !found {
+		t.Fatal("account dashboard is missing the download panel")
+	}
+	panel, _, found = strings.Cut(panel, "</article>")
+	if !found || strings.Contains(panel, "data-site=") {
+		t.Fatal("download links must point directly to installers")
+	}
+
+	const base = "https://downloads.aifree.sg/desktop/0.2.0/"
+	installers := []string{
+		"darwin-aarch64/aifree_0.2.0_aarch64.dmg",
+		"windows-x86_64/aifree_0.2.0_x64-setup.exe",
+		"windows-aarch64/aifree_0.2.0_arm64-setup.exe",
+		"linux-x86_64-deb/aifree_0.2.0_amd64.deb",
+		"linux-x86_64-appimage/aifree_0.2.0_amd64.AppImage",
+		"linux-aarch64-deb/aifree_0.2.0_arm64.deb",
+		"linux-aarch64-appimage/aifree_0.2.0_aarch64.AppImage",
+	}
+	if count := strings.Count(panel, "<a "); count != len(installers) {
+		t.Fatalf("download panel has %d links, want %d", count, len(installers))
+	}
+	for _, installer := range installers {
+		if count := strings.Count(panel, `href="`+base+installer+`"`); count != 1 {
+			t.Errorf("download panel has %d links to %s, want 1", count, installer)
+		}
+	}
+}
+
 func TestAccountPageUnknownSubpath(t *testing.T) {
 	handler := newAPIWithMail(nil, "", "", nil, nil)
 	for _, path := range []string{"/account/admin", "/account/login/extra"} {
