@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "aifree",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "sg.aifree.desktop",
   "build": {
     "frontendDist": "../ui"
@@ -29,5 +29,6 @@
     "externalBin": ["binaries/ccproxy", "binaries/sing-box"],
     "shortDescription": "aifree client",
     "category": "Utility"
-  }
+  },
+  "plugins": {}
 }

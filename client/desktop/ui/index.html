@@ -126,6 +126,12 @@
   .footer { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding-top: 11px; }
   .footer span { overflow-wrap: anywhere; }
   .footer button { border: 0; background: transparent; color: var(--accent); white-space: nowrap; padding: 4px 0; text-decoration: underline; text-underline-offset: 3px; }
+  .update-card { display: grid; gap: 8px; margin: 0 0 16px; padding: 13px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 11px; }
+  .update-card h2 { color: var(--accent); }
+  .update-card p { color: var(--muted); }
+  .update-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
+  .update-actions button { min-height: 34px; padding: 5px 10px; font-weight: 620; }
+  .update-actions .link { border: 0; background: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
   .notice { margin-top: 12px; border-radius: 8px; padding: 8px 10px; font-size: 13px; background: var(--warn-soft); color: var(--warn); overflow-wrap: anywhere; }
   .notice.bad { background: var(--bad-soft); color: var(--bad); }
   .notice:empty { display: none; }
@@ -217,6 +223,15 @@
   </header>
 
   <p id="loading" class="detail" role="status">Loading session…</p>
+  <section id="update-card" class="update-card" hidden aria-labelledby="update-title">
+    <h2 id="update-title" data-i18n="update_available">Update available</h2>
+    <p id="update-detail"></p>
+    <p id="update-error" class="notice bad" role="status"></p>
+    <div class="update-actions">
+      <button id="update-later" class="link" type="button" data-i18n="update_later">Later</button>
+      <button id="update-install" type="button" data-i18n="update_install">Install and restart</button>
+    </div>
+  </section>
   <form id="login" hidden novalidate>
     <h1 data-i18n="sign_in">Sign in</h1>
     <div class="fields">
@@ -303,6 +318,7 @@ import { createPreferenceMenu } from "./preferences.mjs";
   let systemLanguages = webviewLanguages();
   let languagePreference = "system", activeLanguage, readingSystemLanguage = false;
   let view, pending = "", operationError = null, stopping = false, revision = 0;
+  let availableUpdate = null, updateError = "", updateBusy = false, updateDismissed = false;
   let loadingFailed = false;
 
   const STATES = {
@@ -384,7 +400,24 @@ import { createPreferenceMenu } from "./preferences.mjs";
     if (details.hidden) details.open = false;
   }
 
+  function renderUpdate() {
+    const card = $("update-card");
+    const visible = Boolean(availableUpdate || updateError) && !updateDismissed;
+    card.hidden = !visible;
+    if (!visible) return;
+    text("update-detail", availableUpdate
+      ? t("update_ready").replace("{version}", availableUpdate.version)
+      : t("update_failed"));
+    text("update-error", updateError ? t("update_failed") : "");
+    const connected = Boolean(view?.want_connected || view?.tunnel === "running");
+    const retry = Boolean(updateError && !availableUpdate);
+    $("update-install").disabled = updateBusy || (Boolean(availableUpdate) && connected);
+    text("update-install", updateBusy ? t("update_installing") : retry ? t("update_retry") : connected ? t("update_disconnect_first") : t("update_install"));
+    $("update-later").disabled = updateBusy;
+  }
+
   function render() {
+    renderUpdate();
     text("loading", t(loadingFailed ? "loading_failed" : "loading"));
     const inspecting = environment.isOpen();
     $("environment-entry").hidden = inspecting;
@@ -477,6 +510,31 @@ import { createPreferenceMenu } from "./preferences.mjs";
     }
   }
 
+  async function checkForUpdate() {
+    try {
+      availableUpdate = await invoke("check_for_update");
+      updateError = "";
+    } catch (error) {
+      updateError = String(error);
+    }
+    render();
+  }
+
+  async function installUpdate() {
+    if (!availableUpdate || updateBusy) return;
+    updateBusy = true;
+    updateError = "";
+    render();
+    try {
+      await invoke("install_update");
+    } catch (error) {
+      availableUpdate = null;
+      updateError = String(error);
+      updateBusy = false;
+      render();
+    }
+  }
+
   function showPassword(show) {
     $("password").type = show ? "text" : "password";
     $("show-password").setAttribute("aria-pressed", String(show));
@@ -529,8 +587,11 @@ import { createPreferenceMenu } from "./preferences.mjs";
   });
   $("toggle").addEventListener("click", () => run(view.want_connected || view.tunnel === "running" ? "disconnect" : "connect"));
   $("logout").addEventListener("click", () => run("logout"));
+  $("update-install").addEventListener("click", () => availableUpdate ? installUpdate() : checkForUpdate());
+  $("update-later").addEventListener("click", () => { updateDismissed = true; render(); });
 
   refresh(true);
+  checkForUpdate();
   setInterval(() => refresh(false), 1500);
   setInterval(() => refresh(true), 60000);
 })();
