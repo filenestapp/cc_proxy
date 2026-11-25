@@ -28,3 +28,6 @@ x509-cert = { version = "0.2", default-features = false, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gio = "0.18"
+
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2"
