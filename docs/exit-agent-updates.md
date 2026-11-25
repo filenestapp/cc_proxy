@@ -245,10 +245,13 @@ too. A release directory is also a valid installer dist.
 
 Evidence produced for this change (local, 2026-11-25, macOS arm64 with Docker Desktop):
 
-- `go test -race ./...` in `egress/agent`, including the updater unit tests and `TestUpdateWithRealBinaries`.
+- `go test -race -short ./...` in `egress/agent`, including the updater unit tests. `TestUpdateWithRealBinaries`
+  was run separately, without `-short`.
 - `go vet` for all six targets.
 - The control-plane Go suite with `TEST_DATABASE_URL` (PostgreSQL 14), including
   `TestAgentRolloutTargetsPausesAndReports`.
+- The Python suites in `controlplane/tests` with `TEST_DATABASE_URL`: installer, Go Agent against the Go
+  server, control plane, console, monitor, migration and reviews (104 tests, 4 skipped as before).
 - The release tool rehearsal: `build.sh --verify`, then `record`, `sign` and `verify`. Verification fails on a
   tampered binary and with the repository's empty key list.
 - `controlplane/test/xtcp/run-e2e.sh` with the update phase. It covers:

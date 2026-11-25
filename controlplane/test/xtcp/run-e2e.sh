@@ -36,6 +36,7 @@ ADMIN_TOKEN="admin-$(rnd)" FRPS_TOKEN="frps-$(rnd)" XTCP_KEY="xtcp-$(rnd)" PG_PA
 CONTAINERS="ccx-pg ccx-cp ccx-frps ccx-exit ccx-visitor ccx-echo"
 
 cleanup() {
+  docker exec ccx-exit journalctl -u ccproxy-exit-agent --no-pager > "$OUT/exit-agent.journal" 2>/dev/null || true
   docker cp ccx-visitor:/tmp/visitor.log "$OUT/" >/dev/null 2>&1 || true
   docker cp ccx-visitor:/tmp/visitor-blocked.log "$OUT/" >/dev/null 2>&1 || true
   if [[ "${KEEP:-0}" != 1 ]]; then
@@ -279,7 +280,9 @@ host_field() { # host_field KEY: this host's field in GET /admin/agent-rollout
 running_version() { docker exec ccx-exit /opt/ccproxy-exit/bin/ccproxy-exit-agent version | awk '{print $2}'; }
 unit_pid() { docker exec ccx-exit systemctl show -p MainPID --value "$1"; }
 agent_restarts() { docker exec ccx-exit systemctl show -p NRestarts --value ccproxy-exit-agent; }
-agent_log() { docker exec ccx-exit journalctl -u ccproxy-exit-agent --no-pager; }
+# agent_logged PATTERN: the agent's journal has a matching line. Saved to a file first: with pipefail, journalctl piped
+# into grep -q fails (SIGPIPE) when the match comes early in a long journal.
+agent_logged() { docker exec ccx-exit journalctl -u ccproxy-exit-agent --no-pager > "$OUT/agent-journal.txt"; grep -q -- "$1" "$OUT/agent-journal.txt"; }
 # bob back on the second port, with his own visitor (user key) and client; a Direct client that reaches alice's
 # sing-box listener on the exit host without frp.
 api POST /admin/users/bob/assign "{\"ip\":\"$IP_EXIT\",\"port\":20444}" >/dev/null
@@ -336,7 +339,7 @@ check "$V2 is the installed binary; $V1 is kept as .previous" \
   "[ \"\$(running_version)\" = $V2 ] && [ \"\$(docker exec ccx-exit /opt/ccproxy-exit/bin/ccproxy-exit-agent.previous version | awk '{print \$2}')\" = $V1 ]"
 check "systemd restarted the agent once (exit 75, Restart=always)" "[ \"\$(agent_restarts)\" = $((RESTARTS + 1)) ]"
 check "the new agent confirmed itself healthy and adopted sing-box's config without a reload" \
-  "agent_log | grep -q 'update: agent-e2e-v2 (sequence 2) confirmed healthy' && agent_log | grep -q 'adopted it without a reload'"
+  "agent_logged 'update: agent-e2e-v2 (sequence 2) confirmed healthy' && agent_logged 'adopted it without a reload'"
 check "sing-box and frpc were not restarted (MainPIDs unchanged)" "[ \"\$(unit_pid ccproxy-exit-singbox)\" = '$SB_PID' ] && [ \"\$(unit_pid ccproxy-exit-frpc)\" = '$FRPC_PID' ]"
 check "both XTCP ports are still ready" "[ \"\$(port_status)\" = '20443=ready 20444=ready' ] && [ \"\$(sync_state)\" = ready ]"
 check "enrollment and configuration are untouched (token, install.conf, frpc.toml)" \
@@ -357,7 +360,7 @@ if waitfor 300 "the rollback" "[ \"\$(host_field state)\" = rolled_back ] && [ \
   echo "PASS $V3 was rolled back to $V2 ($((SECONDS - started))s): $(host_field error)"
 else echo "FAIL rollback: state $(host_field state), target $(host_field target_version)"; status=1; fi
 check "the console shows the rollout failed for this host, running $V2" "[ \"\$(host_field outcome)\" = failed ] && [ \"\$(host_field agent_version)\" = $V2 ] && [ \"\$(running_version)\" = $V2 ]"
-check "$V3 did start (and exited) before the rollback" "agent_log | grep -q 'broken test release: exiting at start' && agent_log | grep -q 'update: rolling back agent-e2e-v3-broken to agent-e2e-v2'"
+check "$V3 did start (and exited) before the rollback" "agent_logged 'broken test release: exiting at start' && agent_logged 'update: rolling back agent-e2e-v3-broken to agent-e2e-v2'"
 check "after the rollback both ports are ready and sing-box and frpc kept running" \
   "[ \"\$(port_status)\" = '20443=ready 20444=ready' ] && [ \"\$(unit_pid ccproxy-exit-singbox)\" = '$SB_PID' ] && [ \"\$(unit_pid ccproxy-exit-frpc)\" = '$FRPC_PID' ]"
 check "alice and bob (XTCP) and alice (Direct) still leave from $IP_EXIT" "[ \"\$(via 2080)\" = $IP_EXIT ] && [ \"\$(via 2081)\" = $IP_EXIT ] && [ \"\$(via 2082)\" = $IP_EXIT ]"
