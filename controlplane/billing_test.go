@@ -21,6 +21,8 @@ type fakeStripe struct {
 	reservation                                 checkoutReservation
 	subscriptions                               map[string]stripeSubscription
 	readErr, expireErr                          error
+	checkoutErr                                 error
+	onValidate                                  func(checkoutReservation) error
 	onExpire                                    func()
 }
 
@@ -28,9 +30,18 @@ func (f *fakeStripe) createCustomer(_ context.Context, _, _ string) (string, err
 	f.customers++
 	return "cus_test", nil
 }
+func (f *fakeStripe) validateCheckoutPrice(_ context.Context, reservation checkoutReservation) error {
+	if f.onValidate != nil {
+		return f.onValidate(reservation)
+	}
+	return nil
+}
 func (f *fakeStripe) createCheckout(_ context.Context, _ string, reservation checkoutReservation) (stripeCheckoutSession, error) {
 	f.checkout++
 	f.reservation = reservation
+	if f.checkoutErr != nil {
+		return stripeCheckoutSession{}, f.checkoutErr
+	}
 	return stripeCheckoutSession{ID: "cs_test", URL: "https://checkout.test/session"}, nil
 }
 func (f *fakeStripe) expireCheckout(_ context.Context, sessionID string) error {
@@ -256,6 +267,97 @@ func TestCheckoutPlanChangeRecoversMissingSessionID(t *testing.T) {
 	changed := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"premium"}`, cookie, csrf)
 	if changed.Code != http.StatusOK || fake.reservation.Plan != "premium" || fake.checkout != 3 {
 		t.Fatalf("plan switch after recovering the Session: %d %s", changed.Code, changed.Body.String())
+	}
+}
+
+func TestCheckoutPlanChangeAfterPriceValidationFails(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		legacy bool
+	}{
+		{name: "unstarted reservation"},
+		{name: "legacy reservation with immutable mismatch", legacy: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := testStore(t)
+			c, cookie, csrf := billingCustomer(t, s)
+			_, err := s.pool.Exec(t.Context(), `UPDATE plans SET stripe_price_id='price_' || code WHERE code IN ('standard','premium')`)
+			require(t, err)
+			fake := &fakeStripe{onValidate: func(reservation checkoutReservation) error {
+				if reservation.Plan == "standard" {
+					return errStripeCheckoutPriceMismatch
+				}
+				return nil
+			}}
+			h := billingAPI(s, fake)
+			first := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"standard"}`, cookie, csrf)
+			if first.Code != http.StatusServiceUnavailable || responseCode(t, first) != "stripe_unavailable" || fake.checkout != 0 {
+				t.Fatalf("invalid price created a Session: %d %s", first.Code, first.Body.String())
+			}
+			if test.legacy {
+				_, err := s.pool.Exec(t.Context(), "UPDATE subscriptions SET checkout_started=NULL WHERE customer_id=$1", c.ID)
+				require(t, err)
+			}
+			changed := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"premium"}`, cookie, csrf)
+			if changed.Code != http.StatusOK || fake.checkout != 1 || fake.expires != 0 || fake.reservation.Plan != "premium" {
+				t.Fatalf("valid replacement was blocked or replayed the rejected checkout: %d %s", changed.Code, changed.Body.String())
+			}
+			var oldStatus, oldID string
+			require(t, s.pool.QueryRow(t.Context(), "SELECT status,checkout_session_id FROM subscriptions WHERE customer_id=$1 AND plan_code='standard'", c.ID).Scan(&oldStatus, &oldID))
+			if oldStatus != "expired" || oldID != "" {
+				t.Fatalf("unexpected rejected reservation: status=%s Session=%q", oldStatus, oldID)
+			}
+		})
+	}
+}
+
+func TestCheckoutRetiredDuringPriceValidationCannotStart(t *testing.T) {
+	s := testStore(t)
+	_, cookie, csrf := billingCustomer(t, s)
+	_, err := s.pool.Exec(t.Context(), `UPDATE plans SET stripe_price_id='price_' || code WHERE code IN ('standard','premium')`)
+	require(t, err)
+	fake := &fakeStripe{}
+	h := billingAPI(s, fake)
+	fake.onValidate = func(reservation checkoutReservation) error {
+		if reservation.Plan == "standard" {
+			replacement := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"premium"}`, cookie, csrf)
+			if replacement.Code != http.StatusOK {
+				t.Fatalf("replace checkout during Price validation: %d %s", replacement.Code, replacement.Body.String())
+			}
+		}
+		return nil
+	}
+	retired := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"standard"}`, cookie, csrf)
+	if retired.Code != http.StatusConflict || responseCode(t, retired) != "subscription_exists" || fake.checkout != 1 || fake.reservation.Plan != "premium" {
+		t.Fatalf("retired reservation sent another Checkout request: %d %s", retired.Code, retired.Body.String())
+	}
+}
+
+func TestCheckoutPlanChangePreservesUnconfirmedSession(t *testing.T) {
+	s := testStore(t)
+	c, cookie, csrf := billingCustomer(t, s)
+	_, err := s.pool.Exec(t.Context(), `UPDATE plans SET stripe_price_id='price_' || code WHERE code IN ('standard','premium')`)
+	require(t, err)
+	fake := &fakeStripe{checkoutErr: errors.New("Stripe response was lost")}
+	h := billingAPI(s, fake)
+	first := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"standard"}`, cookie, csrf)
+	if first.Code != http.StatusInternalServerError || fake.checkout != 1 {
+		t.Fatalf("initial Checkout did not reach Stripe: %d %s", first.Code, first.Body.String())
+	}
+	fake.onValidate = func(reservation checkoutReservation) error {
+		if reservation.Plan == "standard" {
+			return failureCode(503, "stripe_unavailable", "Stripe Price became inactive")
+		}
+		return nil
+	}
+	changed := accountRequest(t, h, http.MethodPost, "/v1/account/checkout", `{"plan":"premium"}`, cookie, csrf)
+	if changed.Code != http.StatusServiceUnavailable || fake.checkout != 1 {
+		t.Fatalf("another Session was created while the prior outcome was unknown: %d %s", changed.Code, changed.Body.String())
+	}
+	var started bool
+	require(t, s.pool.QueryRow(t.Context(), `SELECT checkout_started FROM subscriptions WHERE customer_id=$1 AND status='pending'`, c.ID).Scan(&started))
+	if !started {
+		t.Fatal("the possibly sent Stripe request lost its persisted marker")
 	}
 }
 
@@ -545,13 +647,17 @@ func TestStripeCheckoutUsesMatchingPriceAndStableIdempotencyKey(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}}
-	_, err := client.createCheckout(t.Context(), "cus_fixture", reservation)
+	err := client.validateCheckoutPrice(t.Context(), reservation)
 	wantStatus(t, err, http.StatusServiceUnavailable)
+	if !errors.Is(err, errStripeCheckoutPriceMismatch) {
+		t.Fatalf("mismatched Price lacks immutable rejection evidence: %v", err)
+	}
 	if len(keys) != 0 {
 		t.Fatal("mismatched Stripe price started a Checkout Session")
 	}
 	priceAmount = 60000
 	for range 2 {
+		require(t, client.validateCheckoutPrice(t.Context(), reservation))
 		checkout, err := client.createCheckout(t.Context(), "cus_fixture", reservation)
 		require(t, err)
 		if checkout.ID != "cs_fixture" || checkout.URL != "https://checkout.stripe.com/c/pay/fixture" {
