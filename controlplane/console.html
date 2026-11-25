@@ -275,8 +275,9 @@
   .login .card { padding: 22px; }
   .login h1 { font-size: 22px; margin: 0 0 4px; }
   .login .brand-mark { margin-bottom: 14px; }
-  .appearance { flex: none; width: auto; font-size: 12px; }
-  .login .appearance { float: right; }
+  .console-controls { display: flex; flex-wrap: wrap; gap: 6px; }
+  .console-controls select { width: auto; font-size: 12px; }
+  .login .console-controls { justify-content: flex-end; margin-bottom: 12px; }
   .badge.info { background: var(--idle-soft); color: var(--ink); }
   .usage-nav { display: flex; align-items: center; gap: 6px; }
   .usage-nav b { min-width: 13ch; text-align: center; font-variant-numeric: tabular-nums; }
@@ -296,50 +297,57 @@
 <body>
 <div id="login" class="login" hidden>
   <form class="card" id="login-form">
-    <select class="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-    <span class="brand-mark" data-icon="topology"></span><h1>aifree Console</h1>
-    <p class="muted small" style="margin:0 0 16px">Sign in with an administrator account.</p>
-    <div class="form-row"><label for="l-user">Username</label><input id="l-user" autocomplete="username" required></div>
-    <div class="form-row"><label for="l-pass">Password</label><input id="l-pass" type="password" autocomplete="current-password" required></div>
+    <div class="console-controls">
+      <select class="language" data-l10n-label="Language" aria-label="Language"><option value="system" data-l10n="Browser language">Browser language</option><option value="en" lang="en">English</option><option value="zh-Hans" lang="zh-Hans">Simplified Chinese</option></select>
+      <select class="appearance" data-l10n-label="Appearance" aria-label="Appearance"><option value="system" data-l10n="System appearance">System appearance</option><option value="light" data-l10n="Light">Light</option><option value="dark" data-l10n="Dark">Dark</option></select>
+    </div>
+    <span class="brand-mark" data-icon="topology"></span><h1 data-l10n="aifree Console">aifree Console</h1>
+    <p class="muted small" style="margin:0 0 16px" data-l10n="Sign in with an administrator account.">Sign in with an administrator account.</p>
+    <div class="form-row"><label for="l-user" data-l10n="Username">Username</label><input id="l-user" autocomplete="username" required></div>
+    <div class="form-row"><label for="l-pass" data-l10n="Password">Password</label><input id="l-pass" type="password" autocomplete="current-password" required></div>
     <div class="err small" id="l-err" role="alert" style="color:var(--bad);min-height:1.4em"></div>
-    <button class="primary" style="width:100%;margin-top:6px" type="submit">Sign in</button>
+    <button class="primary" style="width:100%;margin-top:6px" type="submit" data-l10n="Sign in">Sign in</button>
   </form>
 </div>
 
 <div id="app" class="shell" hidden>
-  <nav class="side" aria-label="Main navigation">
+  <nav class="side" data-l10n-label="Main navigation" aria-label="Main navigation">
     <a class="brand" href="#/"><span class="brand-mark" data-icon="topology"></span>aifree</a>
     <div class="nav-links">
-      <a href="#/" data-nav="overview"><span data-icon="topology"></span>Topology</a>
-      <a href="#/hosts" data-nav="hosts"><span data-icon="server"></span>Hosts</a>
-      <a href="#/ips" data-nav="ips"><span data-icon="ips"></span>Egress IPs</a>
-      <a href="#/users" data-nav="users"><span data-icon="users"></span>Users</a>
-      <a href="#/customers" data-nav="customers"><span data-icon="users"></span>Customers</a>
-      <a href="#/mailboxes" data-nav="mailboxes"><span data-icon="mail"></span>Mailboxes</a>
-      <a href="#/usage" data-nav="usage"><span data-icon="chart"></span>Usage</a>
-      <a href="#/plans" data-nav="plans"><span data-icon="card"></span>Plans</a>
-      <a href="#/subscriptions" data-nav="subscriptions"><span data-icon="card"></span>Subscriptions</a>
-      <a href="#/orders" data-nav="orders"><span data-icon="receipt"></span>Orders</a>
-      <a href="#/provisioning" data-nav="provisioning"><span data-icon="queue"></span>Provisioning</a>
-      <a href="#/alerts" data-nav="alerts"><span data-icon="bell"></span>Alerts <span class="count" id="alert-count" hidden></span></a>
+      <a href="#/" data-nav="overview"><span data-icon="topology"></span><span data-l10n="Topology">Topology</span></a>
+      <a href="#/hosts" data-nav="hosts"><span data-icon="server"></span><span data-l10n="Hosts">Hosts</span></a>
+      <a href="#/ips" data-nav="ips"><span data-icon="ips"></span><span data-l10n="Egress IPs">Egress IPs</span></a>
+      <a href="#/users" data-nav="users"><span data-icon="users"></span><span data-l10n="Users">Users</span></a>
+      <a href="#/customers" data-nav="customers"><span data-icon="users"></span><span data-l10n="Customers">Customers</span></a>
+      <a href="#/mailboxes" data-nav="mailboxes"><span data-icon="mail"></span><span data-l10n="Mailboxes">Mailboxes</span></a>
+      <a href="#/usage" data-nav="usage"><span data-icon="chart"></span><span data-l10n="Usage">Usage</span></a>
+      <a href="#/plans" data-nav="plans"><span data-icon="card"></span><span data-l10n="Plans">Plans</span></a>
+      <a href="#/subscriptions" data-nav="subscriptions"><span data-icon="card"></span><span data-l10n="Subscriptions">Subscriptions</span></a>
+      <a href="#/orders" data-nav="orders"><span data-icon="receipt"></span><span data-l10n="Orders">Orders</span></a>
+      <a href="#/provisioning" data-nav="provisioning"><span data-icon="queue"></span><span data-l10n="Provisioning">Provisioning</span></a>
+      <a href="#/alerts" data-nav="alerts"><span data-icon="bell"></span><span data-l10n="Alerts">Alerts</span><span class="count" id="alert-count" hidden></span></a>
       <hr class="nav-divider">
-      <a href="#/settings" data-nav="settings"><span data-icon="settings"></span>Settings</a>
-      <a href="#/audit" data-nav="audit"><span data-icon="log"></span>Audit log</a>
-      <a href="#/admins" data-nav="admins"><span data-icon="shield"></span>Administrators</a>
+      <a href="#/settings" data-nav="settings"><span data-icon="settings"></span><span data-l10n="Settings">Settings</span></a>
+      <a href="#/audit" data-nav="audit"><span data-icon="log"></span><span data-l10n="Audit log">Audit log</span></a>
+      <a href="#/admins" data-nav="admins"><span data-icon="shield"></span><span data-l10n="Administrators">Administrators</span></a>
     </div>
   </nav>
   <main class="main">
     <header class="top">
       <h1 id="title">Network topology</h1>
       <span class="muted small" id="who"></span>
-      <select class="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-      <button id="logout" type="button">Sign out</button>
+      <div class="console-controls">
+        <select class="language" data-l10n-label="Language" aria-label="Language"><option value="system" data-l10n="Browser language">Browser language</option><option value="en" lang="en">English</option><option value="zh-Hans" lang="zh-Hans">Simplified Chinese</option></select>
+        <select class="appearance" data-l10n-label="Appearance" aria-label="Appearance"><option value="system" data-l10n="System appearance">System appearance</option><option value="light" data-l10n="Light">Light</option><option value="dark" data-l10n="Dark">Dark</option></select>
+      </div>
+      <button id="logout" type="button" data-l10n="Sign out">Sign out</button>
     </header>
     <div class="content" id="view"></div>
   </main>
 </div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 
+<script id="console-zh-hans" type="application/json">{}</script>
 <script>
 (() => {
   "use strict";
@@ -347,6 +355,103 @@
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const STALE = 180;
   let csrf = null, me = null, timer = null, routeToken = 0, stopObserving = null;
+  const chinese = JSON.parse($("#console-zh-hans").textContent);
+  const languageKey = "aifree-console-language";
+  let language = "en", preference = "system", loginMessage = "", languageDraft = null;
+  try {
+    const saved = localStorage.getItem(languageKey);
+    if (saved === "en" || saved === "zh-Hans") preference = saved;
+  } catch { /* Storage may be blocked. */ }
+
+  function interpolate(text, params) {
+    if (!params) return text;
+    return text.replace(/\{(\w+)\}/g, (slot, key) => Object.hasOwn(params, key) ? String(params[key]) : slot);
+  }
+  function tr(message, params) {
+    const messages = language === "zh-Hans" ? chinese.messages : undefined;
+    const text = messages && Object.hasOwn(messages, message) ? messages[message] : message;
+    return interpolate(text, params);
+  }
+  const trHTML = (message, params) => esc(tr(message, params));
+
+  // Keep API response text stable for other clients. Known console messages
+  // are localized at display time, with parameters captured from the response.
+  const serverMessages = Object.entries(chinese.serverMessages || {}).map(([message, translation]) => {
+    const pattern = message.split(/(\{\w+\})/).map((part, index) => index % 2
+      ? "(?<" + part.slice(1, -1) + ">.*?)"
+      : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
+    return { translation, pattern: new RegExp("^" + pattern + "$", "s") };
+  });
+  function consoleMessage(message) {
+    if (!message || language !== "zh-Hans") return message || "";
+    if (Object.hasOwn(chinese.messages || {}, message)) return tr(message);
+    for (const entry of serverMessages) {
+      const match = entry.pattern.exec(message);
+      if (match) return interpolate(entry.translation, match.groups);
+    }
+    return message;
+  }
+
+  function resolvedLanguage() {
+    if (preference !== "system") return preference;
+    for (const locale of navigator.languages || [navigator.language]) {
+      const base = (locale || "").split(/[-_]/, 1)[0].toLowerCase();
+      if (base === "zh") return "zh-Hans";
+      if (base === "en") return "en";
+    }
+    return "en";
+  }
+
+  function applyLanguage() {
+    const next = resolvedLanguage();
+    const changed = language !== next;
+    language = next;
+    document.documentElement.lang = language;
+    $$("[data-l10n]").forEach((el) => { el.textContent = tr(el.dataset.l10n); });
+    $$("[data-l10n-label]").forEach((el) => { el.setAttribute("aria-label", tr(el.dataset.l10nLabel)); });
+    $$(".language").forEach((select) => {
+      select.value = preference;
+      $('option[value="zh-Hans"]', select).textContent = chinese.name || "Simplified Chinese";
+    });
+    if (me) {
+      if (changed) refreshLanguageView();
+    } else {
+      document.title = tr("aifree Console");
+      $("#l-err").textContent = consoleMessage(loginMessage);
+    }
+  }
+
+  function refreshLanguageView() {
+    const fields = $$("#view form input[id], #view form textarea[id]");
+    if (fields.length) {
+      languageDraft = { hash: location.hash, fields: fields.flatMap((el) => {
+        const property = el.type === "checkbox" ? "checked" : "value";
+        const initial = property === "checked" ? el.defaultChecked : el.defaultValue;
+        return el[property] === initial ? [] : [{ id: el.id, property, value: el[property] }];
+      }) };
+    }
+    const token = routeToken + 1;
+    route().then(() => {
+      if (!current(token)) return;
+      if (languageDraft?.hash === location.hash) {
+        for (const { id, property, value } of languageDraft.fields) {
+          const element = document.getElementById(id);
+          if (element?.closest("#view form")) element[property] = value;
+        }
+      }
+      languageDraft = null;
+    });
+  }
+
+  function bindLanguage() {
+    $$(".language").forEach((select) => select.addEventListener("change", () => {
+      preference = select.value;
+      try { localStorage.setItem(languageKey, preference); } catch { /* Keep the in-page preference. */ }
+      applyLanguage();
+    }));
+    window.addEventListener("languagechange", applyLanguage);
+    applyLanguage();
+  }
   const ICONS = {
     topology: '<rect x="9" y="2" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-5h14v5"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/>',
     server: '<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/>',
@@ -378,25 +483,25 @@
     return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
   const enc = encodeURIComponent;
-  const fmtTime = (t) => (t ? new Date(t * 1000).toLocaleString(undefined, { hour12: false }) : "—");
+  const fmtTime = (time) => (time ? new Date(time * 1000).toLocaleString(language, { hour12: false }) : "—");
   function ago(sec) {
     if (sec == null) return "—";
     sec = Math.max(0, Math.round(sec));
-    if (sec < 60) return sec + " s ago";
-    if (sec < 3600) return Math.round(sec / 60) + " min ago";
-    if (sec < 86400) return Math.round(sec / 3600) + " h ago";
-    return Math.round(sec / 86400) + " d ago";
+    if (sec < 60) return tr("{count} s ago", { count: sec });
+    if (sec < 3600) return tr("{count} min ago", { count: Math.round(sec / 60) });
+    if (sec < 86400) return tr("{count} h ago", { count: Math.round(sec / 3600) });
+    return tr("{count} d ago", { count: Math.round(sec / 86400) });
   }
   const ms = (v) => (v == null ? "—" : v < 1 ? "<1 ms" : Math.round(v) + " ms");
-  const hist = (h) => '<div class="hist" title="Last ' + h.length + ' samples">' + h.map((ok) => '<i class="' + (ok ? "" : "f") + '"></i>').join("") + "</div>";
+  const hist = (h) => '<div class="hist" title="' + trHTML("Last {count} samples", { count: h.length }) + '">' + h.map((ok) => '<i class="' + (ok ? "" : "f") + '"></i>').join("") + "</div>";
   const IP_STATUS = { assigned: ["Assigned", "info"], available: ["Available", ""], cooldown: ["Cooling down", "warn"], banned: ["Banned", "bad"] };
-  const ipBadge = (s) => '<span class="badge ' + (IP_STATUS[s] || ["", ""])[1] + '">' + esc((IP_STATUS[s] || [s])[0]) + "</span>";
+  const ipBadge = (s) => '<span class="badge ' + (IP_STATUS[s] || ["", ""])[1] + '">' + trHTML((IP_STATUS[s] || [s])[0]) + "</span>";
   const now = () => Date.now() / 1000;
 
   function toast(text, bad) {
     const el = document.createElement("div");
     el.className = "toast" + (bad ? " bad" : "");
-    el.textContent = text;
+    el.textContent = bad ? consoleMessage(text) : text;
     $("#toasts").appendChild(el);
     setTimeout(() => el.remove(), bad ? 6000 : 3000);
   }
@@ -435,7 +540,7 @@
 
   /* fields: [{name, label, type: text|password|number|select|textarea|checkbox, value, options:[[v,label]], hint, placeholder, required}]
      onSubmit(values) may throw; its return value resolves the promise. */
-  function form(title, fields, onSubmit, submitText = "Save") {
+  function form(title, fields, onSubmit, submitText = tr("Save")) {
     return new Promise((resolve) => {
       const rows = fields.map((f, i) => {
         const id = "f" + i, req = f.required ? " required" : "";
@@ -452,7 +557,7 @@
         }
         return '<div class="form-row"><label for="' + id + '">' + esc(f.label) + "</label>" + input + (f.hint ? '<div class="hint">' + esc(f.hint) + "</div>" : "") + "</div>";
       }).join("");
-      const { ov, close } = overlay('<h3>' + esc(title) + '</h3><form novalidate>' + rows + '<div class="err" role="alert"></div><div class="buttons"><button type="button" data-cancel>Cancel</button><button class="primary" type="submit">' + esc(submitText) + "</button></div></form>");
+      const { ov, close } = overlay('<h3>' + esc(title) + '</h3><form novalidate>' + rows + `<div class="err" role="alert"></div><div class="buttons"><button type="button" data-cancel>${trHTML("Cancel")}</button><button class="primary" type="submit">` + esc(submitText) + "</button></div></form>");
       const formEl = $("form", ov);
       $("[data-cancel]", ov).onclick = () => { close(); resolve(undefined); };
       formEl.onsubmit = async (e) => {
@@ -466,15 +571,15 @@
         const btn = $("button[type=submit]", ov);
         btn.disabled = true;
         try { const r = await onSubmit(values); close(); resolve(r === undefined ? true : r); }
-        catch (err) { $(".err", ov).textContent = err.message; btn.disabled = false; }
+        catch (err) { $(".err", ov).textContent = consoleMessage(err.message); btn.disabled = false; }
       };
       const first = $("input,select,textarea", ov); if (first) first.focus();
     });
   }
 
-  function confirmBox(title, text, okText = "Confirm", danger = true) {
+  function confirmBox(title, text, okText = tr("Confirm"), danger = true) {
     return new Promise((resolve) => {
-      const { ov, close } = overlay("<h3>" + esc(title) + "</h3><p>" + text + '</p><div class="buttons"><button type="button" data-no>Cancel</button><button type="button" class="' + (danger ? "danger" : "primary") + '" data-yes>' + esc(okText) + "</button></div>");
+      const { ov, close } = overlay("<h3>" + esc(title) + "</h3><p>" + text + `</p><div class="buttons"><button type="button" data-no>${trHTML("Cancel")}</button><button type="button" class="` + (danger ? "danger" : "primary") + '" data-yes>' + esc(okText) + "</button></div>");
       $("[data-no]", ov).onclick = () => { close(); resolve(false); };
       $("[data-yes]", ov).onclick = () => { close(); resolve(true); };
       $("[data-yes]", ov).focus();
@@ -483,10 +588,10 @@
 
   // Show a credential exactly once (it cannot be retrieved later).
   function reveal(title, label, secret, extraHtml = "") {
-    const { ov, close } = overlay("<h3>" + esc(title) + '</h3><p class="small muted">' + esc(label) + ' (shown once. Save it now.)</p><div class="secret" id="secret">' + esc(secret) + "</div>" + extraHtml +
-      '<div class="buttons"><button type="button" data-copy>Copy</button><button type="button" class="primary" data-ok>Done</button></div>');
+    const { ov, close } = overlay("<h3>" + esc(title) + '</h3><p class="small muted">' + trHTML("{label} (shown once. Save it now.)", { label }) + '</p><div class="secret" id="secret">' + esc(secret) + "</div>" + extraHtml +
+      `<div class="buttons"><button type="button" data-copy>${trHTML("Copy")}</button><button type="button" class="primary" data-ok>${trHTML("Done")}</button></div>`);
     $("[data-copy]", ov).onclick = async () => {
-      try { await navigator.clipboard.writeText(secret); toast("Copied"); } catch (e) { toast("Could not copy. Select the value and copy it manually.", true); }
+      try { await navigator.clipboard.writeText(secret); toast(tr("Copied")); } catch (e) { toast(tr("Could not copy. Select the value and copy it manually."), true); }
     };
     $("[data-ok]", ov).onclick = close;
     return ov;
@@ -497,9 +602,12 @@
     stopUpdates();
     routeToken++;
     csrf = null; me = null;
+    languageDraft = null;
     $("#app").hidden = true;
     $("#login").hidden = false;
-    $("#l-err").textContent = msg || "";
+    loginMessage = msg || "";
+    $("#l-err").textContent = consoleMessage(loginMessage);
+    document.title = tr("aifree Console");
     $("#l-user").focus();
   }
 
@@ -520,13 +628,17 @@
 
   $("#login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    $("#l-err").textContent = "";
+    loginMessage = "";
+    $("#l-err").textContent = loginMessage;
     try {
       const s = await api("POST", "/admin/session", { username: $("#l-user").value.trim(), password: $("#l-pass").value });
       csrf = s.csrf; me = s.admin;
       $("#l-pass").value = "";
       start();
-    } catch (err) { $("#l-err").textContent = err.message === "wrong username or password" ? "Incorrect username or password." : err.message; }
+    } catch (err) {
+      loginMessage = err.message === "wrong username or password" ? "Incorrect username or password." : err.message;
+      $("#l-err").textContent = consoleMessage(loginMessage);
+    }
   });
   $("#logout").onclick = async () => { await act(() => api("DELETE", "/admin/session")); showLogin("Signed out."); };
 
@@ -544,10 +656,17 @@
       else link.removeAttribute("aria-current");
     });
     const token = ++routeToken;
-    $("#view").innerHTML = '<div class="empty">Loading…</div>';
-    fn(parts.slice(1), token).catch((e) => { if (token === routeToken && e.message !== "Signed out") $("#view").innerHTML = '<div class="empty">Could not load: ' + esc(e.message) + "</div>"; });
+    $("#view").innerHTML = `<div class="empty">${trHTML("Loading…")}</div>`;
+    return fn(parts.slice(1), token).catch((e) => {
+      if (token === routeToken && e.message !== "Signed out") {
+        $("#view").innerHTML = `<div class="empty">${trHTML("Could not load: {detail}", { detail: consoleMessage(e.message) })}</div>`;
+      }
+    });
   }
-  window.addEventListener("hashchange", () => { if (me) route(); });
+  window.addEventListener("hashchange", () => {
+    languageDraft = null;
+    if (me) route();
+  });
   const setTitle = (t) => { $("#title").textContent = t; document.title = t + " · aifree"; };
   const current = (token) => token === routeToken;
   function refreshEvery(sec, fn, token) { timer = setInterval(() => { if (current(token)) fn(); }, sec * 1000); }
@@ -566,49 +685,49 @@
       if (probe.latency_ms == null) return fastest;
       return !fastest || probe.latency_ms < fastest.latency_ms ? probe : fastest;
     }, null);
-    if (!probes.length) return { tone: "", label: "No data", best };
-    if (!recent.length) return { tone: "warn", label: "Stale probes", best };
-    if (!reachable.length) return { tone: "bad", label: "Unreachable", best };
-    if (reachable.length !== probes.length) return { tone: "warn", label: "Partial coverage", best };
-    return { tone: "ok", label: "Reachable", best };
+    if (!probes.length) return { tone: "", label: tr("No data"), best };
+    if (!recent.length) return { tone: "warn", label: tr("Stale probes"), best };
+    if (!reachable.length) return { tone: "bad", label: tr("Unreachable"), best };
+    if (reachable.length !== probes.length) return { tone: "warn", label: tr("Partial coverage"), best };
+    return { tone: "ok", label: tr("Reachable"), best };
   }
 
   function agentHealth(agent) {
-    if (!agent) return { tone: "", label: "No heartbeat" };
-    if (agent.age >= STALE) return { tone: "bad", label: "Agent offline" };
-    if (agent.singbox_running === false) return { tone: "bad", label: "sing-box stopped" };
-    if (!agent.in_sync && agent.apply_state === "unknown") return { tone: "warn", label: "Apply unconfirmed" };
-    if (agent.apply_error && !agent.in_sync) return { tone: "bad", label: "Apply failed" };
-    return agent.in_sync ? { tone: "ok", label: "Synced" } : { tone: "warn", label: "Sync pending" };
+    if (!agent) return { tone: "", label: tr("No heartbeat") };
+    if (agent.age >= STALE) return { tone: "bad", label: tr("Agent offline") };
+    if (agent.singbox_running === false) return { tone: "bad", label: tr("sing-box stopped") };
+    if (!agent.in_sync && agent.apply_state === "unknown") return { tone: "warn", label: tr("Apply unconfirmed") };
+    if (agent.apply_error && !agent.in_sync) return { tone: "bad", label: tr("Apply failed") };
+    return agent.in_sync ? { tone: "ok", label: tr("Synced") } : { tone: "warn", label: tr("Sync pending") };
   }
 
   function hostHealth(agent, entry, failedIps) {
     if (agent.tone === "bad") return agent;
     if (entry.tone === "bad") return entry;
-    if (failedIps) return { tone: "bad", label: "Egress failure" };
+    if (failedIps) return { tone: "bad", label: tr("Egress failure") };
     if (agent.tone === "warn") return agent;
     if (entry.tone === "warn") return entry;
     if (!agent.tone) return agent;
-    return entry.tone === "ok" ? { tone: "ok", label: "Healthy" } : { tone: "", label: "No probes" };
+    return entry.tone === "ok" ? { tone: "ok", label: tr("Healthy") } : { tone: "", label: tr("No probes") };
   }
 
-  const statusBadge = ({ tone, label }) => `<span class="badge ${tone}">${label}</span>`;
+  const statusBadge = ({ tone, label }) => `<span class="badge ${tone}">${esc(label)}</span>`;
   const endpoint = (host, port) => port ? `${host.includes(":") ? "[" + host + "]" : host}:${port}` : host;
-  const metric = (label, value, detail = "", color = "") => `<div class="stat"><span>${label}</span><b class="${color}">${value}</b>${detail ? "<span>" + detail + "</span>" : ""}</div>`;
+  const metric = (label, value, detail = "", color = "") => `<div class="stat"><span>${esc(label)}</span><b class="${color}">${value}</b>${detail ? "<span>" + esc(detail) + "</span>" : ""}</div>`;
 
   function entryProbes(entry, time) {
-    if (!entry) return '<p class="line">This host has no active entry port. Assign a user to start probing the entry.</p>';
+    if (!entry) return `<p class="line">${trHTML("This host has no active entry port. Assign a user to start probing the entry.")}</p>`;
     const health = probeHealth(entry.probes, time);
     const rows = entry.probes.map((probe) => {
-      const status = time - probe.at > STALE ? { tone: "warn", label: "Stale" } :
-        probe.ok ? { tone: "ok", label: "Reachable" } : { tone: "bad", label: "Unreachable" };
+      const status = time - probe.at > STALE ? { tone: "warn", label: tr("Stale") } :
+        probe.ok ? { tone: "ok", label: tr("Reachable") } : { tone: "bad", label: tr("Unreachable") };
       return `<tr><td>${esc(probe.source)}</td><td>${probe.ok ? ms(probe.latency_ms) : "—"}</td>
         <td>${statusBadge(status)}${probe.ok || !probe.detail ? "" : '<div class="line">' + esc(probe.detail) + "</div>"}</td>
         <td>${ago(time - probe.at)}</td><td>${hist(probe.history)}</td></tr>`;
     });
     return `<p class="line mono">${esc(endpoint(entry.host, entry.port))} ${statusBadge(health)}</p>` + (rows.length ?
-      '<div class="table-wrap"><table class="probe-table"><thead><tr><th>Location</th><th>Latency</th><th>Status</th><th>Last probe</th><th>History</th></tr></thead><tbody>' +
-      rows.join("") + '</tbody></table></div>' : '<p class="line">No probes have reported yet.</p>');
+      `<div class="table-wrap"><table class="probe-table"><thead><tr><th>${trHTML("Location")}</th><th>${trHTML("Latency")}</th><th>${trHTML("Status")}</th><th>${trHTML("Last probe")}</th><th>${trHTML("History")}</th></tr></thead><tbody>` +
+      rows.join("") + '</tbody></table></div>' : `<p class="line">${trHTML("No probes have reported yet.")}</p>`);
   }
 
   function ipCard(ip, time) {
@@ -616,23 +735,23 @@
     const users = ip.users.map((user) => `<a href="#/users/${enc(user)}">${esc(user)}</a> <span class="mono">:${esc(ip.ports[user])}</span>`).join(", ");
     const rows = ip.probes.map((probe) => {
       const tone = time - probe.at > STALE ? "warn" : probe.ok ? "ok" : "bad";
-      const delay = probe.ok ? ms(probe.latency_ms) : "Failed";
-      const label = tone === "warn" ? delay + " · stale" : delay;
+      const delay = probe.ok ? ms(probe.latency_ms) : tr("Failed");
+      const label = tone === "warn" ? tr("{delay} · stale", { delay }) : delay;
       return `<div class="probe"><div class="ttitle"><span class="line mono target" title="${esc(probe.target)}">${esc(probe.target.replace(/^https?:\/\//, ""))}</span>
         ${statusBadge({ tone, label })}</div>
         ${probe.ok || !probe.detail ? "" : '<div class="line">' + esc(probe.detail) + "</div>"}
         <div class="line">${ago(time - probe.at)}${hist(probe.history)}</div></div>`;
     });
     return `<article class="tcard ${health.tone}"><div class="ttitle"><b>${esc(ip.ip)}</b>${ipBadge(ip.status)}</div>
-      <div class="line">${users || "No users"}${ip.users.length > 1 ? " (shared)" : ""} · ${ip.devices} ${ip.devices === 1 ? "device" : "devices"}</div>
+      <div class="line">${users || trHTML("No users")}${ip.users.length > 1 ? " " + trHTML("(shared)") : ""} · ${ip.devices} ${trHTML(ip.devices === 1 ? "device" : "devices")}</div>
       ${ip.note ? '<div class="line">' + esc(ip.note) + "</div>" : ""}
-      ${rows.join("") || '<div class="line">No probe results yet.</div>'}</article>`;
+      ${rows.join("") || `<div class="line">${trHTML("No probe results yet.")}</div>`}</article>`;
   }
 
   function ipProbeHealth(probes, time) {
-    if (probes.some((probe) => !probe.ok && time - probe.at <= STALE)) return { tone: "bad", label: "Failed" };
+    if (probes.some((probe) => !probe.ok && time - probe.at <= STALE)) return { tone: "bad", label: tr("Failed") };
     const health = probeHealth(probes, time);
-    return health.tone === "ok" ? { tone: "ok", label: "Healthy" } : health;
+    return health.tone === "ok" ? { tone: "ok", label: tr("Healthy") } : health;
   }
 
   function topologyHosts(topology) {
@@ -665,10 +784,10 @@
       <span class="node-top"><b>${esc(host.name)}</b>${statusBadge(health)}</span>
       <span class="node-address mono">${esc(publicEntryLabel(host, entry?.port))}</span>
       <span class="node-metric">${best ? '<strong>' + ms(best.latency_ms) + '</strong><span>' + esc(best.source) + '</span>' :
-        '<span>No current latency</span>'}</span>
-      <span class="node-footer"><span><b>${node.ips.length}</b> ${node.ips.length === 1 ? "IP" : "IPs"}</span>
-        <span><b>${host.users}</b> ${host.users === 1 ? "user" : "users"}</span>
-        <span><b>${node.devices}</b> ${node.devices === 1 ? "device" : "devices"}</span></span>
+        `<span>${trHTML("No current latency")}</span>`}</span>
+      <span class="node-footer"><span><b>${node.ips.length}</b> ${trHTML(node.ips.length === 1 ? "IP" : "IPs")}</span>
+        <span><b>${host.users}</b> ${trHTML(host.users === 1 ? "user" : "users")}</span>
+        <span><b>${node.devices}</b> ${trHTML(node.devices === 1 ? "device" : "devices")}</span></span>
     </button>`;
   }
 
@@ -708,54 +827,54 @@
     const { host, agent, health } = node;
     return `<div class="inspector-head">
       <h2 id="inspector-title" tabindex="-1">${esc(host.name)} ${statusBadge(health)}</h2>
-      <a href="#/hosts/${enc(host.name)}">Manage host</a><button type="button" id="close-inspector">Close</button>
+      <a href="#/hosts/${enc(host.name)}">${trHTML("Manage host")}</a><button type="button" id="close-inspector">${trHTML("Close")}</button>
       </div><div class="thead">
-        <section class="tcard"><h3>Agent status</h3>
-          <dl class="kv"><dt>Status</dt><dd>${statusBadge(agentHealth(agent))}</dd>
-            <dt>Last heartbeat</dt><dd>${agent ? ago(agent.age) : "—"}</dd>
-            <dt>Installed config</dt><dd class="mono small">${esc(agent?.config_etag || "—")}</dd></dl>
+        <section class="tcard"><h3>${trHTML("Agent status")}</h3>
+          <dl class="kv"><dt>${trHTML("Status")}</dt><dd>${statusBadge(agentHealth(agent))}</dd>
+            <dt>${trHTML("Last heartbeat")}</dt><dd>${agent ? ago(agent.age) : "—"}</dd>
+            <dt>${trHTML("Installed config")}</dt><dd class="mono small">${esc(agent?.config_etag || "—")}</dd></dl>
           ${agent?.apply_error && !agent.in_sync ? '<p class="line">' + esc(agent.apply_error) + "</p>" : ""}
         </section>
-        <section class="tcard"><h3>Entry probes</h3>${entryProbes(node.entry, time)}</section>
+        <section class="tcard"><h3>${trHTML("Entry probes")}</h3>${entryProbes(node.entry, time)}</section>
       </div>
-      <div class="inspector-head ip-heading"><h3>Egress IPs (${node.ips.length})</h3><a href="#/ips?host=${enc(host.name)}">Open IP inventory</a></div>
+      <div class="inspector-head ip-heading"><h3>${trHTML("Egress IPs ({count})", { count: node.ips.length })}</h3><a href="#/ips?host=${enc(host.name)}">${trHTML("Open IP inventory")}</a></div>
       ${node.ips.length ? '<div class="tgrid">' + node.ips.map((ip) => ipCard(ip, time)).join("") + "</div>" :
-        '<p class="line">This host has no egress IPs.</p>'}`;
+        `<p class="line">${trHTML("This host has no egress IPs.")}</p>`}`;
   }
 
   PAGES.overview = async (_, token) => {
-    setTitle("Network topology");
+    setTitle(tr("Network topology"));
     $("#view").innerHTML = `
-      <div id="topology-stats" class="summary" aria-label="Network summary" hidden></div>
+      <div id="topology-stats" class="summary" aria-label="${trHTML("Network summary")}" hidden></div>
       <section class="topology" aria-labelledby="map-title">
         <div class="map-header">
-          <h2 id="map-title">Egress hosts</h2>
+          <h2 id="map-title">${trHTML("Egress hosts")}</h2>
           <div class="map-controls">
-            <input id="host-search" type="search" aria-label="Find a host" placeholder="Find a host">
-            <select id="health-filter" aria-label="Host health">
-              <option value="all">All states</option><option value="attention">Needs attention</option>
-              <option value="bad">Failed</option><option value="warn">Warning</option>
-              <option value="ok">Healthy</option><option value="unknown">No data</option>
+            <input id="host-search" type="search" aria-label="${trHTML("Find a host")}" placeholder="${trHTML("Find a host")}">
+            <select id="health-filter" aria-label="${trHTML("Host health")}">
+              <option value="all">${trHTML("All states")}</option><option value="attention">${trHTML("Needs attention")}</option>
+              <option value="bad">${trHTML("Failed")}</option><option value="warn">${trHTML("Warning")}</option>
+              <option value="ok">${trHTML("Healthy")}</option><option value="unknown">${trHTML("No data")}</option>
             </select>
-            <button id="refresh-map" type="button">${icon("refresh")} Refresh</button>
+            <button id="refresh-map" type="button">${icon("refresh")} ${trHTML("Refresh")}</button>
           </div>
         </div>
         <div class="map-canvas">
           <svg class="map-wires" aria-hidden="true"></svg>
-          <div class="map-root" hidden><span class="brand-mark">${icon("topology")}</span><div><b>Control plane</b><small id="host-count"></small></div></div>
-          <div id="node-grid" class="map-grid" role="group" aria-label="Egress hosts"></div>
-          <div id="map-empty" class="map-empty empty" role="status">Loading topology…</div>
+          <div class="map-root" hidden><span class="brand-mark">${icon("topology")}</span><div><b>${trHTML("Control plane")}</b><small id="host-count"></small></div></div>
+          <div id="node-grid" class="map-grid" role="group" aria-label="${trHTML("Egress hosts")}"></div>
+          <div id="map-empty" class="map-empty empty" role="status">${trHTML("Loading topology…")}</div>
         </div>
         <div class="map-footer">
-          <div class="map-legend"><span class="ok">Healthy</span><span class="warn">Warning</span><span class="bad">Failed</span><span>No data</span></div>
+          <div class="map-legend"><span class="ok">${trHTML("Healthy")}</span><span class="warn">${trHTML("Warning")}</span><span class="bad">${trHTML("Failed")}</span><span>${trHTML("No data")}</span></div>
           <span id="map-update" class="map-update"></span>
         </div>
       </section>
       <section id="host-inspector" class="inspector" aria-labelledby="inspector-title" hidden></section>
       <details id="alert-box" class="card alert-box" hidden>
-        <summary id="alert-summary">Active alerts</summary><div id="topology-alerts" class="alerts"></div>
+        <summary id="alert-summary">${trHTML("Active alerts")}</summary><div id="topology-alerts" class="alerts"></div>
       </details>
-      <section id="other-entries" class="section extra" aria-labelledby="extra-title" hidden><h2 id="extra-title">Other entries</h2><div class="tgrid"></div></section>`;
+      <section id="other-entries" class="section extra" aria-labelledby="extra-title" hidden><h2 id="extra-title">${trHTML("Other entries")}</h2><div class="tgrid"></div></section>`;
     const canvas = $(".map-canvas"), root = $(".map-root"), grid = $("#node-grid"), wires = $(".map-wires");
     const search = $("#host-search"), filter = $("#health-filter"), refresh = $("#refresh-map");
     const panel = $("#host-inspector"), empty = $("#map-empty"), updated = $("#map-update");
@@ -814,9 +933,9 @@
         if (focused) (nodeButton(focused) || search).focus({ preventScroll: true });
       }
       root.hidden = false;
-      $("#host-count").textContent = `${visible.length} of ${hosts.length} hosts`;
+      $("#host-count").textContent = tr("{visible} of {total} hosts", { visible: visible.length, total: hosts.length });
       empty.hidden = !!visible.length;
-      empty.innerHTML = hosts.length ? "No hosts match these filters." : 'No egress hosts yet. <a href="#/hosts">Add a host</a>';
+      empty.innerHTML = hosts.length ? trHTML("No hosts match these filters.") : `${trHTML("No egress hosts yet.")} <a href="#/hosts">${trHTML("Add a host")}</a>`;
       syncSelection();
       drawWires(canvas, root, grid, wires);
     };
@@ -835,16 +954,16 @@
         const alertsPanel = $("#topology-alerts");
         updateAlertCount(alerts);
         $("#alert-box").hidden = !alerts.length;
-        $("#alert-summary").textContent = `Active alerts (${alerts.length})`;
+        $("#alert-summary").textContent = tr("Active alerts ({count})", { count: alerts.length });
         alertsPanel.innerHTML = alerts.map((alert) => `<div class="alert ${alert.severity === "critical" ? "critical" : ""}">
-          <b>${alert.severity === "critical" ? "Critical" : "Warning"}</b> ${esc(alert.summary)}
-          <a href="#/alerts">View alerts</a></div>`).join("");
+          <b>${trHTML(alert.severity === "critical" ? "Critical" : "Warning")}</b> ${esc(consoleMessage(alert.summary))}
+          <a href="#/alerts">${trHTML("View alerts")}</a></div>`).join("");
         $("#topology-stats").hidden = false;
         $("#topology-stats").innerHTML = [
-          metric("Egress hosts", hosts.length, hosts.filter((node) => node.health.tone === "ok").length + " healthy"),
-          metric("Egress IPs", data.ips.length, data.ips.filter((ip) => ip.status === "assigned").length + " assigned"),
-          metric("Reachable entries", data.entries.length ? reachable + " / " + data.entries.length : "—", "Recent successful probes"),
-          metric("Active alerts", alerts.length ? '<a href="#/alerts" aria-label="View ' + alerts.length + ' active alerts">' + alerts.length + '</a>' : 0,
+          metric(tr("Egress hosts"), hosts.length, tr("{count} healthy", { count: hosts.filter((node) => node.health.tone === "ok").length })),
+          metric(tr("Egress IPs"), data.ips.length, tr("{count} assigned", { count: data.ips.filter((ip) => ip.status === "assigned").length })),
+          metric(tr("Reachable entries"), data.entries.length ? reachable + " / " + data.entries.length : "—", tr("Recent successful probes")),
+          metric(tr("Active alerts"), alerts.length ? `<a href="#/alerts" aria-label="${trHTML("View {count} active alerts", { count: alerts.length })}">${alerts.length}</a>` : 0,
             "", alerts.length ? "metric-bad" : ""),
         ].join("");
         const others = data.entries.filter((entry) => entry.kind === "extra");
@@ -857,14 +976,14 @@
           ${entryProbes(entry, data.now)}</details>`).join("");
         if (focusedEntry) $$("details", otherEntries).find((detail) => detail.dataset.entry === focusedEntry)?.querySelector("summary")?.focus({ preventScroll: true });
         draw();
-        lastUpdate = new Date().toLocaleTimeString();
+        lastUpdate = new Date().toLocaleTimeString(language);
         updated.classList.remove("bad");
-        updated.textContent = "Updated " + lastUpdate;
+        updated.textContent = tr("Updated {time}", { time: lastUpdate });
       } catch (error) {
         if (!current(token)) return;
         updated.classList.add("bad");
-        updated.textContent = lastUpdate ? "Refresh failed · showing data from " + lastUpdate : "Refresh failed";
-        if (!topology) empty.textContent = error.message + " Try Refresh.";
+        updated.textContent = lastUpdate ? tr("Refresh failed · showing data from {time}", { time: lastUpdate }) : tr("Refresh failed");
+        if (!topology) empty.textContent = tr("{detail} Try Refresh.", { detail: consoleMessage(error.message) });
       } finally {
         loading = false;
         refresh.removeAttribute("aria-busy");
@@ -893,21 +1012,21 @@
   // may already have an installed token (the Install command dialog; not after a rotation, where it no longer works).
   function installHelp(transport, reuseToken) {
     const token = reuseToken
-      ? "then the installer asks for the agent token (hidden; press Enter to reuse the token already installed on this host)"
-      : "then the installer asks for the agent token (hidden)";
-    if (transport && transport.transport === "xtcp") {
-      const x = transport;
-      const frpc = `This host uses XTCP: the installer also downloads the pinned frpc and starts it at boot. frpc registers proxy ${x.proxy_name} with frps ${x.server_addr}:${x.server_port} (TLS verified) and forwards it to sing-box on 127.0.0.1:${x.local_port}. Clients connect directly through their XTCP visitor, so no inbound port forwarding is needed.`;
-      return {
-        macos: `Run in Terminal on the Mac. sudo asks for the Mac password, ${token}. ${frpc} The Mac Agent registers its default interface's IPv4 when the egress pool is empty.`,
-        linux: `Run on the host. sudo asks for your password, ${token}. ${frpc} Name an interface only when the provider routes extra egress IPs to this host.`,
-        windows: `Run in PowerShell started with "Run as administrator"; ${token.replace("then the installer", "the installer")}. ${frpc} frpc runs as the CCProxyExitFrpc task, with a firewall rule for its UDP hole punching.`,
-      };
-    }
+      ? tr("When prompted for the Agent token, press Enter to reuse the token already installed on this host.")
+      : tr("The installer prompts for the Agent token with hidden input.");
+    const x = transport?.transport === "xtcp" ? transport : null;
+    const frpc = x ? tr("On XTCP hosts the installer also downloads the pinned frpc and starts it at boot. It registers {proxy} with frps at {server} using verified TLS and forwards to sing-box on 127.0.0.1:{port}. XTCP visitors connect directly, so no inbound port forwarding is needed.", {
+      proxy: x.proxy_name, server: endpoint(x.server_addr, x.server_port), port: x.local_port,
+    }) : "";
     return {
-      macos: `Run in Terminal on the Mac. sudo asks for the Mac password, ${token}. The Mac Agent registers its default interface's IPv4 when the egress pool is empty. Forward the TCP entry port range to the Mac.`,
-      linux: `Run on the host. sudo asks for your password, ${token}. Name an interface only when the provider routes extra egress IPs to this host; otherwise its existing address is the egress IP.`,
-      windows: `Run in PowerShell started with "Run as administrator"; ${token.replace("then the installer", "the installer")}.`,
+      macos: [tr("Run in Terminal on the Mac. sudo asks for the Mac password."), token, frpc,
+        tr("The Mac Agent registers its default interface's IPv4 when the egress pool is empty."),
+        x ? "" : tr("Forward the TCP entry port range to the Mac.")].filter(Boolean).join(" "),
+      linux: [tr("Run on the host. sudo asks for your password."), token, frpc,
+        tr("Name an interface only when the provider routes extra egress IPs to this host."),
+        x ? "" : tr("The host otherwise uses its existing address as the egress IP.")].filter(Boolean).join(" "),
+      windows: [tr('Run PowerShell with "Run as administrator".'), token, frpc,
+        x ? tr("The CCProxyExitFrpc task runs frpc with a firewall rule for UDP hole punching.") : ""].filter(Boolean).join(" "),
     };
   }
 
@@ -915,17 +1034,17 @@
     let os = "macos";
     root.innerHTML = `
       <div class="install-row">
-        <div class="form-row"><label for="inst-cp">Control plane HTTPS URL</label>
+        <div class="form-row"><label for="inst-cp">${trHTML("Control plane HTTPS URL")}</label>
           <input id="inst-cp" type="url" inputmode="url" autocomplete="url" placeholder="https://cp.example"></div>
-        <div class="form-row" id="inst-iface-row" hidden><label for="inst-iface">Interface for routed egress IPs (optional)</label>
+        <div class="form-row" id="inst-iface-row" hidden><label for="inst-iface">${trHTML("Interface for routed egress IPs (optional)")}</label>
           <input id="inst-iface" placeholder="eth0"></div>
       </div>
-      <div class="os-tabs" role="tablist" aria-label="Operating system">${INSTALL_OS.map(([k, l]) =>
+      <div class="os-tabs" role="tablist" aria-label="${trHTML("Operating system")}">${INSTALL_OS.map(([k, l]) =>
         `<button type="button" role="tab" data-os="${k}" aria-selected="${k === os}">${l}</button>`).join("")}</div>
       <p class="small muted" id="inst-how"></p>
-      <div class="install-cmd"><pre class="snippet" id="inst-cmd"></pre><button type="button" data-copy-cmd="inst-cmd">Copy</button></div>
-      <p class="small muted" style="margin:10px 0 0">Uninstall (stops the services and removes the files and the stored token):</p>
-      <div class="install-cmd"><pre class="snippet" id="inst-uninstall"></pre><button type="button" data-copy-cmd="inst-uninstall">Copy</button></div>
+      <div class="install-cmd"><pre class="snippet" id="inst-cmd"></pre><button type="button" data-copy-cmd="inst-cmd">${trHTML("Copy")}</button></div>
+      <p class="small muted" style="margin:10px 0 0">${trHTML("Uninstall (stops the services and removes the files and the stored token):")}</p>
+      <div class="install-cmd"><pre class="snippet" id="inst-uninstall"></pre><button type="button" data-copy-cmd="inst-uninstall">${trHTML("Copy")}</button></div>
       <p class="small muted" id="inst-note"></p>`;
     const how = installHelp(transport, reuseToken);
     let timer;
@@ -936,7 +1055,7 @@
       seq++;
       $("#inst-cmd", root).textContent = $("#inst-uninstall", root).textContent = "";
       root.querySelectorAll("[data-copy-cmd]").forEach((b) => { b.disabled = true; });
-      $("#inst-note", root).textContent = "Loading the command…";
+      $("#inst-note", root).textContent = tr("Loading the command…");
       $("#inst-iface-row", root).hidden = os !== "linux";
       $("#inst-how", root).textContent = how[os];
       return seq;
@@ -948,7 +1067,7 @@
       let cmds, error;
       try { cmds = await api("GET", "/admin/install-commands?" + q); } catch (e) { error = e; }
       if (mine !== seq || want !== os) return;  // a newer tab or input superseded this response
-      if (error) { $("#inst-note", root).textContent = error.message; return; }
+      if (error) { $("#inst-note", root).textContent = consoleMessage(error.message); return; }
       $("#inst-cmd", root).textContent = cmds[want].install;
       $("#inst-uninstall", root).textContent = cmds[want].uninstall;
       $("#inst-note", root).textContent = "";
@@ -965,7 +1084,7 @@
       if (copy) {
         const text = $("#" + copy.dataset.copyCmd, root).textContent;
         if (copy.disabled || !text) return;
-        try { await navigator.clipboard.writeText(text); toast("Command copied"); } catch (err) { toast("Could not copy. Select the command and copy it manually.", true); }
+        try { await navigator.clipboard.writeText(text); toast(tr("Command copied")); } catch (err) { toast(tr("Could not copy. Select the command and copy it manually."), true); }
       }
     });
     root.addEventListener("input", () => { invalidate(); clearTimeout(timer); timer = setTimeout(refresh, 300); });
@@ -974,31 +1093,31 @@
       let config, error;
       try { config = await api("GET", "/admin/install-url"); } catch (e) { error = e; }
       if (mine !== seq) return;
-      if (error) { $("#inst-note", root).textContent = error.message; return; }
+      if (error) { $("#inst-note", root).textContent = consoleMessage(error.message); return; }
       $("#inst-cp", root).value = config.public_url;
       refresh();
     })();
   }
   function showAgentToken(host, token, transport) {
-    const ov = reveal("Host " + host + " agent token", "Paste this token when the installer asks for it.", token,
-      '<h4 style="margin:16px 0 0">Install on the exit host</h4><div id="install-panel"></div>');
+    const ov = reveal(tr("Host {host} Agent token", { host }), tr("Paste this token when the installer asks for it."), token,
+      `<h4 style="margin:16px 0 0">${trHTML("Install on the exit host")}</h4><div id="install-panel"></div>`);
     installPanel($("#install-panel", ov), transport);
   }
   function showInstall(host, transport) {
-    const { ov, close } = overlay("<h3>Install or update the agent on " + esc(host) + '</h3><p class="small muted">The installer asks for the host\'s agent token. Lost it? Rotate the token; the old one stops working at once.</p><div id="install-panel"></div><div class="buttons"><button type="button" class="primary" data-ok>Done</button></div>');
+    const { ov, close } = overlay(`<h3>${trHTML("Install or update the Agent on {host}", { host })}</h3><p class="small muted">${trHTML("The installer asks for the host's agent token. Lost it? Rotate the token; the old one stops working at once.")}</p><div id="install-panel"></div><div class="buttons"><button type="button" class="primary" data-ok>${trHTML("Done")}</button></div>`);
     installPanel($("#install-panel", ov), transport, true);
     $("[data-ok]", ov).onclick = close;
   }
   function publicEntryLabel(host, port) {
-    return host.public_host ? endpoint(host.public_host, port) : "Waiting for Agent IPv4";
+    return host.public_host ? endpoint(host.public_host, port) : tr("Waiting for Agent IPv4");
   }
 
   const hostFields = (h = {}) => [
-    { name: "public_host", label: "Public entry address", value: h.auto_public_host ? "" : h.public_host, placeholder: "Automatic or IPv4/hostname", hint: "Leave blank to update from Agent heartbeats. Clients must reach the entry port." },
-    { name: "server_name", label: "Reality TLS server name (SNI)", value: h.server_name ?? "google.com", required: true, placeholder: "google.com", hint: "A public site reachable from the exit host over TLS 1.3." },
-    { name: "handshake_server", label: "Handshake target (optional)", value: h.handshake_server === h.server_name ? "" : h.handshake_server, placeholder: "Defaults to the TLS server name." },
-    { name: "port_min", label: "First user entry port", type: "number", value: h.port_range ? h.port_range[0] : 20000, required: true },
-    { name: "port_max", label: "Last user entry port", type: "number", value: h.port_range ? h.port_range[1] : 29999, required: true, hint: "Allow this port range through the host firewall." },
+    { name: "public_host", label: tr("Public entry address"), value: h.auto_public_host ? "" : h.public_host, placeholder: tr("Automatic or IPv4/hostname"), hint: tr("Leave blank to update from Agent heartbeats. Clients must reach the entry port.") },
+    { name: "server_name", label: tr("Reality TLS server name (SNI)"), value: h.server_name ?? "google.com", required: true, placeholder: "google.com", hint: tr("A public site reachable from the exit host over TLS 1.3.") },
+    { name: "handshake_server", label: tr("Handshake target (optional)"), value: h.handshake_server === h.server_name ? "" : h.handshake_server, placeholder: tr("Defaults to the TLS server name.") },
+    { name: "port_min", label: tr("First user entry port"), type: "number", value: h.port_range ? h.port_range[0] : 20000, required: true },
+    { name: "port_max", label: tr("Last user entry port"), type: "number", value: h.port_range ? h.port_range[1] : 29999, required: true, hint: tr("Allow this port range through the host firewall.") },
   ];
   function hostBody(v) {
     return { public_host: v.public_host, server_name: v.server_name, handshake_server: v.handshake_server,
@@ -1007,18 +1126,18 @@
 
   PAGES.hosts = async (args, token) => {
     if (args[0]) return hostDetail(args[0], token);
-    setTitle("Egress hosts");
+    setTitle(tr("Egress hosts"));
     const [hosts, topo] = await Promise.all([api("GET", "/admin/hosts"), api("GET", "/admin/topology")]);
     if (!current(token)) return;
     updateAlertCount(topo.alerts || []);
     const agents = Object.fromEntries(topo.agents.map((a) => [a.name, a]));
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + hosts.length + ' hosts</span><span class="spacer"></span><button class="primary" id="add-host">Add host</button></div>' +
-      '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Public entry</th><th>Port range</th><th>Egress IPs</th><th>Users</th><th>Agent</th><th>TLS server name</th></tr></thead><tbody>' +
+    $("#view").innerHTML = `<div class="toolbar"><span class="muted">${trHTML("{count} hosts", { count: hosts.length })}</span><span class="spacer"></span><button class="primary" id="add-host">${trHTML("Add host")}</button></div>` +
+      `<div class="table-wrap"><table><thead><tr><th>${trHTML("Name")}</th><th>${trHTML("Public entry")}</th><th>${trHTML("Port range")}</th><th>${trHTML("Egress IPs")}</th><th>${trHTML("Users")}</th><th>${trHTML("Agent")}</th><th>${trHTML("TLS server name")}</th></tr></thead><tbody>` +
       (hosts.map((h) => "<tr><td><a href=\"#/hosts/" + enc(h.name) + '"><b>' + esc(h.name) + "</b></a></td><td class=\"mono\">" + esc(publicEntryLabel(h)) + '</td><td class="mono">' + h.port_range[0] + "–" + h.port_range[1] + "</td><td>" + h.ips + "</td><td>" + h.users + "</td><td>" + statusBadge(agentHealth(agents[h.name])) + '</td><td class="mono small">' + esc(h.server_name) + "</td></tr>").join("") ||
-        '<tr><td colspan="7" class="empty">No egress hosts yet.</td></tr>') + "</tbody></table></div>";
+        `<tr><td colspan="7" class="empty">${trHTML("No egress hosts yet.")}</td></tr>`) + "</tbody></table></div>";
     $("#add-host").onclick = async () => {
-      const r = await form("Add egress host", [{ name: "name", label: "Host name", required: true, placeholder: "hk-1" }, ...hostFields()],
-        (v) => api("POST", "/admin/hosts", Object.assign({ name: v.name }, hostBody(v))), "Add");
+      const r = await form(tr("Add egress host"), [{ name: "name", label: tr("Host name"), required: true, placeholder: "hk-1" }, ...hostFields()],
+        (v) => api("POST", "/admin/hosts", Object.assign({ name: v.name }, hostBody(v))), tr("Add"));
       if (r) { showAgentToken(r.host, r.agent_token); route(); }
     };
   };
@@ -1027,65 +1146,74 @@
   async function editXtcp(name, h, x) {
     const on = x.transport === "xtcp";
     const fields = [
-      { name: "server_addr", label: "frps address", value: x.server_addr || "", required: true, placeholder: "203.0.113.10" },
-      { name: "server_port", label: "frps port", type: "number", value: x.server_port || 7003, required: true },
-      { name: "tls_server_name", label: "frps TLS server name", value: x.tls_server_name || "", placeholder: "Defaults to the frps address", hint: "The name in the frps certificate; it is always verified." },
-      { name: "ca_pem", label: on ? "CA certificate (PEM; leave empty to keep)" : "CA certificate (PEM)", type: "textarea", value: "", required: !on, placeholder: "-----BEGIN CERTIFICATE-----" },
-      { name: "auth_token", label: on ? "frps token (leave empty to keep)" : "frps token", type: "password", value: "", required: !on },
-      { name: "proxy_name", label: "XTCP proxy name", value: x.proxy_name || "ccproxy-" + name + "-direct", required: true, hint: "The visitor's serverName must match." },
-      { name: "secret_key", label: on ? "XTCP secret key (leave empty to keep)" : "XTCP secret key (leave empty to generate)", type: "password", value: "", hint: "Must match the visitor's secretKey." },
-      { name: "local_port", label: "sing-box entry port on the host", type: "number", value: x.local_port || "", required: true, hint: "The user's entry port, within " + h.port_range[0] + "–" + h.port_range[1] + "." },
+      { name: "server_addr", label: tr("frps address"), value: x.server_addr || "", required: true, placeholder: "203.0.113.10" },
+      { name: "server_port", label: tr("frps port"), type: "number", value: x.server_port || 7003, required: true },
+      { name: "tls_server_name", label: tr("frps TLS server name"), value: x.tls_server_name || "", placeholder: tr("Defaults to the frps address"), hint: tr("The name in the frps certificate; it is always verified.") },
+      { name: "ca_pem", label: on ? tr("CA certificate (PEM; leave empty to keep)") : tr("CA certificate (PEM)"), type: "textarea", value: "", required: !on, placeholder: "-----BEGIN CERTIFICATE-----" },
+      { name: "auth_token", label: on ? tr("frps token (leave empty to keep)") : tr("frps token"), type: "password", value: "", required: !on },
+      { name: "proxy_name", label: tr("XTCP proxy name"), value: x.proxy_name || "ccproxy-" + name + "-direct", required: true, hint: tr("The visitor's serverName must match.") },
+      { name: "secret_key", label: on ? tr("XTCP secret key (leave empty to keep)") : tr("XTCP secret key (leave empty to generate)"), type: "password", value: "", hint: tr("Must match the visitor's secretKey.") },
+      { name: "local_port", label: tr("sing-box entry port on the host"), type: "number", value: x.local_port || "", required: true, hint: tr("The user's entry port, within {min}–{max}.", { min: h.port_range[0], max: h.port_range[1] }) },
     ];
-    const r = await form((on ? "Edit" : "Configure") + " XTCP for " + name, fields, (v) => {
+    const r = await form(tr(on ? "Edit XTCP for {host}" : "Configure XTCP for {host}", { host: name }), fields, (v) => {
       const b = { server_addr: v.server_addr, server_port: Number(v.server_port), proxy_name: v.proxy_name, local_port: Number(v.local_port) };
       if (v.tls_server_name) b.tls_server_name = v.tls_server_name;
       for (const k of ["ca_pem", "auth_token", "secret_key"]) if (v[k]) b[k] = v[k];
       return api("PUT", "/admin/hosts/" + enc(name) + "/xtcp", b);
-    }, "Save");
+    }, tr("Save"));
     if (!r) return;
-    if (r.secret_key) reveal("XTCP secret key for " + name, "Put this secretKey in the visitor's frpc configuration.", r.secret_key);
-    else if (r.sync && r.sync.agent_capable) toast("Saved. The exit agent applies it on its next sync; watch Sync for Ready.");
-    else toast("Saved. Run the install command again on the host.");
+    if (r.secret_key) reveal(tr("XTCP secret key for {host}", { host: name }), tr("Put this secretKey in the visitor's frpc configuration."), r.secret_key);
+    else if (r.sync && r.sync.agent_capable) toast(tr("Saved. The exit agent applies it on its next sync; watch Sync for Ready."));
+    else toast(tr("Saved. Run the install command again on the host."));
     route();
   }
 
   // Per-port readiness from the agent's XTCP sync: ready only when frpc registered the proxy and sing-box listens.
-  const xtcpBadges = {
-    ready: '<span class="badge ok">Ready</span>',
-    pending: '<span class="badge info">Pending</span>',
-    failed: '<span class="badge bad">Failed</span>',
-    upgrade_needed: '<span class="badge warn">Agent upgrade needed</span>',
+  const XTCP_STATUS = {
+    ready: ["Ready", "ok"],
+    pending: ["Pending", "info"],
+    failed: ["Failed", "bad"],
+    upgrade_needed: ["Agent upgrade needed", "warn"],
   };
+  function xtcpBadge(state) {
+    const style = XTCP_STATUS[state];
+    return style ? statusBadge({ label: tr(style[0]), tone: style[1] }) : "";
+  }
   function xtcpMappingList(x) {
     const list = x.mappings || [{ proxy_name: x.proxy_name, port: x.local_port, user: "", primary: true }];
-    return list.map((m) => `<div><span class="mono">${esc(m.proxy_name)} → 127.0.0.1:${m.port}</span>${m.user ? ' <span class="muted">(' + esc(m.user) + ")</span>" : m.primary ? ' <span class="muted">(no user on this port)</span>' : ""} ${xtcpBadges[m.status] || ""}</div>`).join("");
+    return list.map((m) => `<div><span class="mono">${esc(m.proxy_name)} → 127.0.0.1:${m.port}</span>${m.user ? ' <span class="muted">(' + esc(m.user) + ")</span>" : m.primary ? ` <span class="muted">${trHTML("(no user on this port)")}</span>` : ""} ${xtcpBadge(m.status)}</div>`).join("");
   }
   function xtcpSync(x) {
     const s = x.sync;
     if (!s) return "";
     const agent = s.agent || {};
-    const when = agent.reported_at ? ' <span class="small muted">reported ' + ago(now() - agent.reported_at) + "</span>" : "";
+    const when = agent.reported_at ? ` <span class="small muted">${trHTML("Reported {time}", { time: ago(now() - agent.reported_at) })}</span>` : "";
     const detail = s.state === "ready"
-      ? '<div class="small muted">Generation ' + s.desired_generation + " confirmed by live frpc status; sing-box serves every entry port.</div>"
-      : '<div class="small muted">' + esc(s.message || "") + "</div>";
-    return (xtcpBadges[s.state] || esc(s.state)) + when + detail;
+      ? tr("frpc confirmed generation {generation} and sing-box serves every entry port.", { generation: s.desired_generation })
+      : consoleMessage(s.message);
+    return (xtcpBadge(s.state) || esc(s.state)) + when + `<div class="small muted">${esc(detail)}</div>`;
   }
   function xtcpState(x) {
-    if (x.sync && x.sync.agent_capable) return '<span class="small muted">Managed by the agent (see Sync). Installer fetch: ' + esc(x.frpc_state) + "</span>";
-    if (x.frpc_state === "current") return '<span class="badge ok">Current</span> <span class="small muted">fetched ' + (x.delivered_at ? ago(now() - x.delivered_at) : "") + "</span>";
-    if (x.frpc_state === "outdated") return '<span class="badge warn">Run the install command again</span><div class="small muted">The proxies changed since the host last fetched its frpc configuration. Existing proxies keep working; new or moved users connect after the rerun.</div>';
-    return '<span class="badge">Unknown</span><div class="small muted">Not fetched since mapping tracking began. Run the install command again to confirm.</div>';
+    if (x.sync?.agent_capable) {
+      const state = tr(({ current: "Current", unknown: "Unknown", outdated: "Outdated" })[x.frpc_state] || x.frpc_state);
+      return `<span class="small muted">${trHTML("Managed by the Agent. Installer fetch status: {state}", { state })}</span>`;
+    }
+    if (x.frpc_state === "current") return `<span class="badge ok">${trHTML("Current")}</span>${x.delivered_at
+      ? ` <span class="small muted">${trHTML("Fetched {time}", { time: ago(now() - x.delivered_at) })}</span>` : ""}`;
+    if (x.frpc_state === "outdated") return `<span class="badge warn">${trHTML("Run the install command again")}</span><div class="small muted">${trHTML("The proxies changed since the host last fetched its frpc configuration. Existing proxies keep working; new or moved users connect after the rerun.")}</div>`;
+    return `<span class="badge">${trHTML("Unknown")}</span><div class="small muted">${trHTML("Not fetched since mapping tracking began. Run the install command again to confirm.")}</div>`;
   }
   // One user's frpc visitor: only that user's proxy and scoped secret key. The frps token stays write-only.
   async function showVisitor(user) {
     const r = await act(() => api("GET", "/admin/users/" + enc(user) + "/xtcp-visitor"));
     if (!r) return;
-    const { ov, close } = overlay("<h3>XTCP visitor for " + esc(user) + '</h3><p class="small muted">frpc visitor for proxy <span class="mono">' + esc(r.proxy_name) +
-      "</span>. Its secret key opens only this user's entry port " + r.bind_port + ". Set <span class=\"mono\">FRP_AUTH_TOKEN</span> to the frps token in frpc's environment, save the frps CA as frp-ca.pem, and point aifree at <span class=\"mono\">" +
-      esc(r.bind_addr + ":" + r.bind_port) + '</span>.</p><pre class="secret" style="white-space:pre-wrap;max-height:50vh;overflow:auto">' + esc(r.frpc_toml) + "</pre>" +
-      '<div class="buttons"><button type="button" data-copy>Copy</button><button type="button" class="primary" data-ok>Done</button></div>');
+    const help = trHTML("This frpc visitor connects to {proxy}. Its secret key opens this user's entry port {port}. Set FRP_AUTH_TOKEN to the frps token in frpc's environment, save the CA as frp-ca.pem, and point aifree at {entry}.", {
+      proxy: r.proxy_name, port: r.bind_port, entry: endpoint(r.bind_addr, r.bind_port),
+    });
+    const { ov, close } = overlay(`<h3>${trHTML("XTCP visitor for {user}", { user })}</h3><p class="small muted">${help}</p><pre class="secret" style="white-space:pre-wrap;max-height:50vh;overflow:auto">${esc(r.frpc_toml)}</pre>` +
+      `<div class="buttons"><button type="button" data-copy>${trHTML("Copy")}</button><button type="button" class="primary" data-ok>${trHTML("Done")}</button></div>`);
     $("[data-copy]", ov).onclick = async () => {
-      try { await navigator.clipboard.writeText(r.frpc_toml); toast("Copied"); } catch (e) { toast("Could not copy. Select the text and copy it manually.", true); }
+      try { await navigator.clipboard.writeText(r.frpc_toml); toast(tr("Copied")); } catch (e) { toast(tr("Could not copy. Select the text and copy it manually."), true); }
     };
     $("[data-ok]", ov).onclick = close;
   }
@@ -1095,80 +1223,80 @@
       api("GET", "/admin/hosts/" + enc(name) + "/xtcp").catch(() => ({ transport: "public" }))]);
     if (!current(token)) return;
     const h = hosts.find((x) => x.name === name);
-    if (!h) { $("#view").innerHTML = '<div class="empty">Host not found. <a href="#/hosts">Back to list</a></div>'; return; }
+    if (!h) { $("#view").innerHTML = `<div class="empty">${trHTML("Host not found.")} <a href="#/hosts">${trHTML("Back to list")}</a></div>`; return; }
     const node = topologyHosts(topo).find(({ host }) => host.name === name);
     const agent = node?.agent;
     const probes = new Map(topo.ips.map((ip) => [ip.ip, ip.probes]));
     const onHost = users.filter((u) => u.host === name);
     updateAlertCount(topo.alerts || []);
     $("#view").innerHTML = `
-      <div class="toolbar"><a href="#/hosts">All hosts</a>
+      <div class="toolbar"><a href="#/hosts">${trHTML("All hosts")}</a>
         ${node ? statusBadge(node.health) : ""}<span class="spacer"></span>
-        <button class="primary" id="edit" type="button">Edit host</button>
-        <button id="install" type="button">Install command</button>
-        <button id="rotate" type="button">Rotate agent token</button>
-        <button class="danger" id="del" type="button">Delete host</button>
+        <button class="primary" id="edit" type="button">${trHTML("Edit host")}</button>
+        <button id="install" type="button">${trHTML("Install command")}</button>
+        <button id="rotate" type="button">${trHTML("Rotate agent token")}</button>
+        <button class="danger" id="del" type="button">${trHTML("Delete host")}</button>
       </div>
       <div class="grid2 section">
-        <section class="card"><h2>Public entry</h2><dl class="kv">
-          <dt>Address</dt><dd class="mono">${esc(publicEntryLabel(h))}</dd>
-          <dt>Address mode</dt><dd>${h.auto_public_host ? "Automatic" : "Manual"}</dd>
-          <dt>Port range</dt><dd class="mono">${h.port_range[0]}–${h.port_range[1]}</dd>
-          <dt>Entry capacity</dt><dd>${h.users} of ${h.port_capacity} ports in use · ${h.free_ports} free${h.free_ports === 0 ? ' <span class="badge warn">Full</span>' : ""}<div class="small muted">Each user needs a distinct entry port, also when users share an egress IP.</div></dd>
-          <dt>TLS server name</dt><dd class="mono">${esc(h.server_name)}</dd>
-          <dt>Reality public key</dt><dd class="mono small">${esc(h.reality_public_key)}</dd>
+        <section class="card"><h2>${trHTML("Public entry")}</h2><dl class="kv">
+          <dt>${trHTML("Address")}</dt><dd class="mono">${esc(publicEntryLabel(h))}</dd>
+          <dt>${trHTML("Address mode")}</dt><dd>${h.auto_public_host ? tr("Automatic") : tr("Manual")}</dd>
+          <dt>${trHTML("Port range")}</dt><dd class="mono">${h.port_range[0]}–${h.port_range[1]}</dd>
+          <dt>${trHTML("Entry capacity")}</dt><dd>${trHTML("{used} of {capacity} ports in use · {free} free", { used: h.users, capacity: h.port_capacity, free: h.free_ports })}${h.free_ports === 0 ? ` <span class="badge warn">${trHTML("Full")}</span>` : ""}<div class="small muted">${trHTML("Each user needs a distinct entry port, also when users share an egress IP.")}</div></dd>
+          <dt>${trHTML("TLS server name")}</dt><dd class="mono">${esc(h.server_name)}</dd>
+          <dt>${trHTML("Reality public key")}</dt><dd class="mono small">${esc(h.reality_public_key)}</dd>
         </dl></section>
-        <section class="card"><h2>Agent status</h2><dl class="kv">
-          <dt>Status</dt><dd>${statusBadge(agentHealth(agent))}</dd>
-          <dt>Last heartbeat</dt><dd>${agent ? ago(agent.age) : "—"}</dd>
-          <dt>sing-box</dt><dd>${agent?.singbox_running == null ? "Unknown" : agent.singbox_running ? "Running" : "Stopped"}</dd>
-          <dt>Installed config</dt><dd class="mono small">${esc(agent?.config_etag || "—")}</dd>
-          <dt>Current config</dt><dd class="mono small">${esc(topo.server_config_etags[name] || "—")}</dd>
+        <section class="card"><h2>${trHTML("Agent status")}</h2><dl class="kv">
+          <dt>${trHTML("Status")}</dt><dd>${statusBadge(agentHealth(agent))}</dd>
+          <dt>${trHTML("Last heartbeat")}</dt><dd>${agent ? ago(agent.age) : "—"}</dd>
+          <dt>sing-box</dt><dd>${agent?.singbox_running == null ? tr("Unknown") : agent.singbox_running ? tr("Running") : tr("Stopped")}</dd>
+          <dt>${trHTML("Installed config")}</dt><dd class="mono small">${esc(agent?.config_etag || "—")}</dd>
+          <dt>${trHTML("Current config")}</dt><dd class="mono small">${esc(topo.server_config_etags[name] || "—")}</dd>
         </dl>${agent?.apply_error && !agent.in_sync ? '<p class="line">' + esc(agent.apply_error) + "</p>" : ""}</section>
       </div>
-      <section class="section" id="transport"><h2>Transport<span class="spacer"></span>
-          <button id="xtcp-edit" type="button">${xtcp.transport === "xtcp" ? "Edit XTCP" : "Configure XTCP"}</button>
-          ${xtcp.transport === "xtcp" ? '<button class="danger" id="xtcp-off" type="button">Use public entry</button>' : ""}</h2>
+      <section class="section" id="transport"><h2>${trHTML("Transport")}<span class="spacer"></span>
+          <button id="xtcp-edit" type="button">${xtcp.transport === "xtcp" ? tr("Edit XTCP") : tr("Configure XTCP")}</button>
+          ${xtcp.transport === "xtcp" ? `<button class="danger" id="xtcp-off" type="button">${trHTML("Use public entry")}</button>` : ""}</h2>
         <div class="card">${xtcp.transport === "xtcp" ? `<dl class="kv">
-          <dt>Mode</dt><dd>XTCP through frps (direct connections only, no relay fallback)</dd>
-          <dt>frps</dt><dd class="mono">${esc(xtcp.server_addr)}:${xtcp.server_port} (TLS name ${esc(xtcp.tls_server_name)})</dd>
-          <dt>CA</dt><dd class="small">${esc(xtcp.ca_subject || "—")}, until ${esc(xtcp.ca_not_after || "—")}<br><span class="mono">SHA-256 ${esc(xtcp.ca_sha256 || "")}</span></dd>
-          <dt>Proxies</dt><dd>${xtcpMappingList(xtcp)}</dd>
-          <dt>Sync</dt><dd>${xtcpSync(xtcp)}</dd>
-          <dt>Exit host frpc</dt><dd>${xtcpState(xtcp)}</dd>
-          <dt>Credentials</dt><dd>${xtcp.has_auth_token ? "frps token set" : "no frps token"}, ${xtcp.has_secret_key ? "secret key set" : "no secret key"} (never shown again)</dd>
-        </dl><p class="small muted">The install command sets up frpc too. Run it again on the host after a change here.</p>`
-          : '<p class="muted">Public entry: clients connect to the public address above. Configure XTCP for a host behind NAT; the install command then also installs frpc.</p>'}</div></section>
-      <section class="section"><h2>Entry probes</h2><div class="card">${entryProbes(node?.entry, topo.now)}</div></section>
-      <section class="section"><h2>Egress IPs (${ips.length})<span class="spacer"></span><button class="primary" id="add-ips" type="button">Add IPs</button></h2>
+          <dt>${trHTML("Mode")}</dt><dd>${trHTML("XTCP through frps (direct connections only, no relay fallback)")}</dd>
+          <dt>frps</dt><dd class="mono">${trHTML("{server} (TLS name {name})", { server: endpoint(xtcp.server_addr, xtcp.server_port), name: xtcp.tls_server_name })}</dd>
+          <dt>${trHTML("CA")}</dt><dd class="small">${trHTML("{subject}, until {expiry}", { subject: xtcp.ca_subject || "—", expiry: xtcp.ca_not_after || "—" })}<br><span class="mono">SHA-256 ${esc(xtcp.ca_sha256 || "")}</span></dd>
+          <dt>${trHTML("Proxies")}</dt><dd>${xtcpMappingList(xtcp)}</dd>
+          <dt>${trHTML("Sync")}</dt><dd>${xtcpSync(xtcp)}</dd>
+          <dt>${trHTML("Exit host frpc")}</dt><dd>${xtcpState(xtcp)}</dd>
+          <dt>${trHTML("Credentials")}</dt><dd>${xtcp.has_auth_token ? tr("frps token set") : tr("no frps token")}, ${xtcp.has_secret_key ? tr("secret key set") : tr("no secret key")} ${trHTML("(never shown again)")}</dd>
+        </dl><p class="small muted">${trHTML(xtcp.sync?.agent_capable ? "The exit Agent applies XTCP changes on its next sync." : "The install command sets up frpc too. Run it again on the host after a change here.")}</p>`
+          : `<p class="muted">${trHTML("Public entry: clients connect to the public address above. Configure XTCP for a host behind NAT; the install command then also installs frpc.")}</p>`}</div></section>
+      <section class="section"><h2>${trHTML("Entry probes")}</h2><div class="card">${entryProbes(node?.entry, topo.now)}</div></section>
+      <section class="section"><h2>${trHTML("Egress IPs ({count})", { count: ips.length })}<span class="spacer"></span><button class="primary" id="add-ips" type="button">${trHTML("Add IPs")}</button></h2>
         ${ipTable(ips, probes, topo.now, false)}</section>
-      <section class="section"><h2>Assigned users (${onHost.length})</h2><div class="table-wrap">
-        <table><thead><tr><th>User</th><th>Mode</th><th>Egress IP</th><th>Entry port</th><th>Devices</th>${xtcp.transport === "xtcp" ? "<th></th>" : ""}</tr></thead><tbody>
+      <section class="section"><h2>${trHTML("Assigned users ({count})", { count: onHost.length })}</h2><div class="table-wrap">
+        <table><thead><tr><th>${trHTML("User")}</th><th>${trHTML("Mode")}</th><th>${trHTML("Egress IP")}</th><th>${trHTML("Entry port")}</th><th>${trHTML("Devices")}</th>${xtcp.transport === "xtcp" ? "<th></th>" : ""}</tr></thead><tbody>
         ${onHost.sort((a, b) => a.port - b.port).map((u) => `<tr><td><a href="#/users/${enc(u.name)}">${esc(u.name)}</a></td>
-          <td>${u.mode === "shared" ? "Shared" : "Exclusive"}</td>
-          <td class="mono">${esc(u.egress_ip)}${onHost.filter((o) => o.egress_ip === u.egress_ip).length > 1 ? ' <span class="badge info">Shared</span>' : ""}</td><td class="mono">${u.port}</td>
+          <td>${u.mode === "shared" ? tr("Shared") : tr("Exclusive")}</td>
+          <td class="mono">${esc(u.egress_ip)}${onHost.filter((o) => o.egress_ip === u.egress_ip).length > 1 ? ` <span class="badge info">${trHTML("Shared")}</span>` : ""}</td><td class="mono">${u.port}</td>
           <td>${u.devices.filter((device) => !device.revoked).length} / ${u.max_devices}</td>
-          ${xtcp.transport === "xtcp" ? `<td class="actions"><button class="link" data-visitor="${esc(u.name)}">Visitor config</button></td>` : ""}</tr>`).join("") ||
-          `<tr><td colspan="${xtcp.transport === "xtcp" ? 6 : 5}" class="empty">No users are assigned to this host.</td></tr>`}
+          ${xtcp.transport === "xtcp" ? `<td class="actions"><button class="link" data-visitor="${esc(u.name)}">${trHTML("Visitor config")}</button></td>` : ""}</tr>`).join("") ||
+          `<tr><td colspan="${xtcp.transport === "xtcp" ? 6 : 5}" class="empty">${trHTML("No users are assigned to this host.")}</td></tr>`}
         </tbody></table></div></section>`;
     $("#edit").onclick = async () => {
-      if (await form("Edit host " + name, hostFields(h), (v) => api("PUT", "/admin/hosts/" + enc(name), hostBody(v)))) { toast("Saved. The agent will apply the change on its next sync."); route(); }
+      if (await form(tr("Edit host {host}", { host: name }), hostFields(h), (v) => api("PUT", "/admin/hosts/" + enc(name), hostBody(v)))) { toast(tr("Saved. The agent will apply the change on its next sync.")); route(); }
     };
     $("#install").onclick = () => showInstall(name, xtcp);
     $$("[data-visitor]").forEach((b) => b.onclick = () => showVisitor(b.dataset.visitor));
     $("#xtcp-edit").onclick = () => editXtcp(name, h, xtcp);
     if ($("#xtcp-off")) $("#xtcp-off").onclick = async () => {
-      if (!(await confirmBox("Use the public entry for " + name, "frps credentials for this host are deleted. Run the install command again on the host: it stops and removes frpc.", "Use public entry"))) return;
-      if (await act(() => api("DELETE", "/admin/hosts/" + enc(name) + "/xtcp"), "Saved. Run the install command again on the host.")) route();
+      if (!(await confirmBox(tr("Use the public entry for {host}", { host: name }), trHTML("frps credentials for this host are deleted. Run the install command again on the host: it stops and removes frpc."), tr("Use public entry")))) return;
+      if (await act(() => api("DELETE", "/admin/hosts/" + enc(name) + "/xtcp"), tr("Saved. Run the install command again on the host."))) route();
     };
     $("#rotate").onclick = async () => {
-      if (!(await confirmBox("Rotate agent token", "The previous token expires immediately. Then run the install command again on the host and paste the new token: the rerun keeps the configuration and restarts the agent.", "Rotate"))) return;
+      if (!(await confirmBox(tr("Rotate agent token"), trHTML("The previous token expires immediately. Then run the install command again on the host and paste the new token: the rerun keeps the configuration and restarts the agent."), tr("Rotate")))) return;
       const r = await act(() => api("POST", "/admin/hosts/" + enc(name) + "/rotate-token"));
       if (r) showAgentToken(name, r.agent_token, xtcp);
     };
     $("#del").onclick = async () => {
-      if (!(await confirmBox("Delete host " + name, "This removes the host and its egress IPs. Release all user assignments first.", "Delete"))) return;
-      if (await act(() => api("DELETE", "/admin/hosts/" + enc(name)), "Deleted.")) location.hash = "#/hosts";
+      if (!(await confirmBox(tr("Delete host {host}", { host: name }), trHTML("This removes the host and its egress IPs. Release all user assignments first."), tr("Delete")))) return;
+      if (await act(() => api("DELETE", "/admin/hosts/" + enc(name)), tr("Deleted."))) location.hash = "#/hosts";
     };
     $("#add-ips").onclick = () => addIps(name);
     bindIpActions();
@@ -1176,28 +1304,28 @@
 
   // Expand "a.b.c.d", "a.b.c.d-e", "a.b.c.d-a.b.c.e" and "a.b.c.d/n" (n >= 22) into addresses.
   function expandIps(text) {
-    const toInt = (s) => { const p = s.split(".").map(Number); if (p.length !== 4 || p.some((x) => !(x >= 0 && x <= 255) || isNaN(x))) throw new Error("Invalid IPv4 address: " + s); return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]; };
+    const toInt = (s) => { const p = s.split(".").map(Number); if (p.length !== 4 || p.some((x) => !(x >= 0 && x <= 255) || isNaN(x))) throw new Error(tr("Invalid IPv4 address: {ip}", { ip: s })); return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]; };
     const toStr = (n) => [n >>> 24, (n >> 16) & 255, (n >> 8) & 255, n & 255].join(".");
     const out = [];
     for (const raw of text.split(/[\s,]+/).filter(Boolean)) {
       let lo, hi;
       if (raw.includes("/")) {
         const [ip, bits] = raw.split("/"); const b = Number(bits);
-        if (!(b >= 22 && b <= 32)) throw new Error("CIDR prefix must be between /22 and /32: " + raw);
+        if (!(b >= 22 && b <= 32)) throw new Error(tr("CIDR prefix must be between /22 and /32: {cidr}", { cidr: raw }));
         const size = 2 ** (32 - b); lo = Math.floor(toInt(ip) / size) * size; hi = lo + size - 1;
       } else if (raw.includes("-")) {
         const [a, b] = raw.split("-"); lo = toInt(a); hi = b.includes(".") ? toInt(b) : (lo - (lo & 255)) + Number(b);
-        if (!(hi >= lo)) throw new Error("Invalid range: " + raw);
+        if (!(hi >= lo)) throw new Error(tr("Invalid range: {range}", { range: raw }));
       } else { lo = hi = toInt(raw); }
-      for (let n = lo; n <= hi; n++) { out.push(toStr(n)); if (out.length > 1024) throw new Error("Add up to 1024 addresses at a time."); }
+      for (let n = lo; n <= hi; n++) { out.push(toStr(n)); if (out.length > 1024) throw new Error(tr("Add up to 1024 addresses at a time.")); }
     }
     return out;
   }
   async function addIps(host) {
-    const r = await form("Add egress IPs to " + host, [{ name: "ips", label: "IP addresses", type: "textarea", required: true, placeholder: "192.0.2.3\n192.0.2.10-20\n192.0.2.64/28",
-      hint: "Enter one address, last-octet range (.10-20), full range, or /22–/32 subnet per line. These addresses must already route to the host. The agent adds them to its interface." }],
-    (v) => api("POST", "/admin/hosts/" + enc(host) + "/ips", { ips: expandIps(v.ips) }), "Add");
-    if (r) { toast("Added " + r.added.length + " IP addresses"); route(); }
+    const r = await form(tr("Add egress IPs to {host}", { host }), [{ name: "ips", label: tr("IP addresses"), type: "textarea", required: true, placeholder: "192.0.2.3\n192.0.2.10-20\n192.0.2.64/28",
+      hint: tr("Enter one address, last-octet range (.10-20), full range, or /22–/32 subnet per line. These addresses must already route to the host. The agent adds them to its interface.") }],
+    (v) => api("POST", "/admin/hosts/" + enc(host) + "/ips", { ips: expandIps(v.ips) }), tr("Add"));
+    if (r) { toast(tr("Added {count} IP addresses", { count: r.added.length })); route(); }
   }
 
   function ipTable(ips, probes, time, withHost) {
@@ -1205,32 +1333,32 @@
       const results = probes.get(ip.ip) || [];
       const status = ipProbeHealth(results, time);
       const probeDetails = results.map((probe) => {
-        const outcome = probe.ok ? ms(probe.latency_ms) : probe.detail || "Failed";
+        const outcome = probe.ok ? ms(probe.latency_ms) : probe.detail || tr("Failed");
         return `<li class="line">${esc(probe.target)} · ${esc(outcome)} · ${ago(time - probe.at)}</li>`;
       }).join("");
       const health = probeDetails ? `<details class="probe-details"><summary>${statusBadge(status)}</summary><ul>${probeDetails}</ul></details>` :
         statusBadge(status);
       const list = ip.holders || ip.users.map((user) => ({ user, port: ip.ports[user] }));
       const holders = (list.map((h) => `<a href="#/users/${enc(h.user)}">${esc(h.user)}</a><span class="mono">:${esc(h.port)}</span>`).join(", ") || "—") +
-        (list.length > 1 ? ` <span class="badge info">Shared · ${list.length} users</span>` : "");
+        (list.length > 1 ? ` <span class="badge info">${trHTML("Shared · {count} users", { count: list.length })}</span>` : "");
       const sharable = ip.status === "available" || (ip.status === "assigned" && list.every((h) => h.mode === "shared"));
       const actions = [
-        sharable ? `<button class="link" data-ip-share="${esc(ip.ip)}" data-ip-host="${esc(ip.host)}">${ip.status === "available" ? "Assign user" : "Add holder"}</button>` : "",
+        sharable ? `<button class="link" data-ip-share="${esc(ip.ip)}" data-ip-host="${esc(ip.host)}">${ip.status === "available" ? tr("Assign user") : tr("Add holder")}</button>` : "",
         ip.status === "banned" || ip.status === "cooldown" ?
-          `<button class="link" data-ip-available="${esc(ip.ip)}">${ip.status === "banned" ? "Unban" : "End cooldown"}</button>` : "",
-        ip.status !== "banned" ? `<button class="link danger" data-ip-ban="${esc(ip.ip)}">Ban</button>` : "",
-        !ip.users.length ? `<button class="link danger" data-ip-del="${esc(ip.ip)}">Delete</button>` : "",
+          `<button class="link" data-ip-available="${esc(ip.ip)}">${ip.status === "banned" ? tr("Unban") : tr("End cooldown")}</button>` : "",
+        ip.status !== "banned" ? `<button class="link danger" data-ip-ban="${esc(ip.ip)}">${trHTML("Ban")}</button>` : "",
+        !ip.users.length ? `<button class="link danger" data-ip-del="${esc(ip.ip)}">${trHTML("Delete")}</button>` : "",
       ].join("");
-      const cooldown = ip.status === "cooldown" && ip.cooldown_until ? `<div class="line">Until ${fmtTime(ip.cooldown_until)}</div>` : "";
+      const cooldown = ip.status === "cooldown" && ip.cooldown_until ? `<div class="line">${trHTML("Until {time}", { time: fmtTime(ip.cooldown_until) })}</div>` : "";
       return `<tr><td class="mono">${esc(ip.ip)}</td>
         ${withHost ? `<td><a href="#/hosts/${enc(ip.host)}">${esc(ip.host)}</a></td>` : ""}
         <td>${ipBadge(ip.status)}${cooldown}</td>
         <td>${health}</td>
         <td>${holders}</td><td class="small">${esc(ip.note)}</td><td class="actions">${actions}</td></tr>`;
     });
-    return `<div class="table-wrap"><table><thead><tr><th>IP address</th>${withHost ? "<th>Host</th>" : ""}
-      <th>Allocation</th><th>Probe health</th><th>Users / entry ports</th><th>Note</th><th scope="col">Actions</th>
-      </tr></thead><tbody>${rows.join("") || `<tr><td colspan="${withHost ? 7 : 6}" class="empty">No egress IPs match this view.</td></tr>`}
+    return `<div class="table-wrap"><table><thead><tr><th>${trHTML("IP address")}</th>${withHost ? `<th>${trHTML("Host")}</th>` : ""}
+      <th>${trHTML("Allocation")}</th><th>${trHTML("Probe health")}</th><th>${trHTML("Users / entry ports")}</th><th>${trHTML("Note")}</th><th scope="col">${trHTML("Actions")}</th>
+      </tr></thead><tbody>${rows.join("") || `<tr><td colspan="${withHost ? 7 : 6}" class="empty">${trHTML("No egress IPs match this view.")}</td></tr>`}
       </tbody></table></div>`;
   }
   // Assign another user to an IP: any user for an available IP, Shared users for a shared one. A user already
@@ -1243,42 +1371,45 @@
     const holding = new Set((row.holders || []).map((x) => x.user));
     const eligible = users.filter((u) => !holding.has(u.name) && (row.status === "available" || u.mode === "shared"));
     if (!eligible.length) {
-      toast(row.status === "available" ? "No users to assign." : "No eligible users: switch a user to Shared mode first.", true);
+      toast(row.status === "available" ? tr("No users to assign.") : tr("No eligible users: switch a user to Shared mode first."), true);
       return;
     }
-    const r = await form((row.status === "available" ? "Assign " : "Share ") + ip, [
-      { name: "user", label: "User", type: "select", value: eligible[0].name, options: eligible.map((u) => [u.name, u.name + " · " + (u.mode === "shared" ? "Shared" : "Exclusive") + (u.egress_ip ? " · moves from " + u.egress_ip + ":" + u.port : "")]),
-        hint: row.status === "available" ? "" : "Only Shared users can join a shared IP. Change a user's egress mode on the user page." },
-      { name: "port", label: "Entry port (optional)", type: "number", placeholder: "Automatic: lowest free port", hint: "Each user needs a distinct port in " + h.port_range[0] + "–" + h.port_range[1] + " on " + hostName + " (" + h.free_ports + " free)." },
+    const r = await form(tr(row.status === "available" ? "Assign {ip}" : "Share {ip}", { ip }), [
+      { name: "user", label: tr("User"), type: "select", value: eligible[0].name, options: eligible.map((u) => [
+        u.name, [u.name, tr(u.mode === "shared" ? "Shared" : "Exclusive"),
+          u.egress_ip ? tr("moves from {entry}", { entry: endpoint(u.egress_ip, u.port) }) : ""].filter(Boolean).join(" · "),
+      ]),
+        hint: row.status === "available" ? "" : tr("Only Shared users can join a shared IP. Change a user's egress mode on the user page.") },
+      { name: "port", label: tr("Entry port (optional)"), type: "number", placeholder: tr("Automatic: lowest free port"), hint: tr("Each user needs a distinct port in {min}–{max} on {host} ({free} free).", { min: h.port_range[0], max: h.port_range[1], host: hostName, free: h.free_ports }) },
     ], (v) => {
       const u = users.find((x) => x.name === v.user);
       const body = { ip };
       if (v.port) body.port = Number(v.port);
       return api("POST", "/admin/users/" + enc(v.user) + (u && u.egress_ip ? "/reassign" : "/assign"), body);
-    }, "Assign");
-    if (r) { toast("Assigned " + r.user + " to " + r.egress_ip + " on entry port " + r.port + "."); await onChange(); }
+    }, tr("Assign"));
+    if (r) { toast(tr("Assigned {user} to {ip} on entry port {port}.", { user: r.user, ip: r.egress_ip, port: r.port })); await onChange(); }
   }
   function bindIpActions(onChange = route) {
     $$("[data-ip-share]").forEach((b) => b.onclick = () => addHolder(b.dataset.ipShare, b.dataset.ipHost, onChange));
     $$("[data-ip-ban]").forEach((b) => b.onclick = async () => {
       const ip = b.dataset.ipBan;
-      const r = await form("Ban " + ip, [{ name: "note", label: "Reason (optional)", placeholder: "Example: target returned HTTP 403" }],
-        (v) => api("POST", "/admin/ips/" + enc(ip) + "/ban", { note: v.note }), "Ban");
-      if (r) { toast(r.released_users.length ? "Banned and released assignments for " + r.released_users.join(", ") + "." : "IP banned."); await onChange(); }
+      const r = await form(tr("Ban {ip}", { ip }), [{ name: "note", label: tr("Reason (optional)"), placeholder: tr("Example: target returned HTTP 403") }],
+        (v) => api("POST", "/admin/ips/" + enc(ip) + "/ban", { note: v.note }), tr("Ban"));
+      if (r) { toast(r.released_users.length ? tr("Banned and released assignments for {users}.", { users: r.released_users.join(", ") }) : tr("IP banned.")); await onChange(); }
     });
     $$("[data-ip-available]").forEach((b) => b.onclick = async () => {
-      if (await act(() => api("POST", "/admin/ips/" + enc(b.dataset.ipAvailable) + "/available"), "Marked available.")) await onChange();
+      if (await act(() => api("POST", "/admin/ips/" + enc(b.dataset.ipAvailable) + "/available"), tr("Marked available."))) await onChange();
     });
     $$("[data-ip-del]").forEach((b) => b.onclick = async () => {
       const ip = b.dataset.ipDel;
-      if (!(await confirmBox("Delete " + ip, "Remove this IP from the pool. It remains on the host network interface.", "Delete"))) return;
-      if (await act(() => api("DELETE", "/admin/ips/" + enc(ip)), "Deleted.")) await onChange();
+      if (!(await confirmBox(tr("Delete {ip}", { ip }), trHTML("Remove this IP from the pool. It remains on the host network interface."), tr("Delete")))) return;
+      if (await act(() => api("DELETE", "/admin/ips/" + enc(ip)), tr("Deleted."))) await onChange();
     });
   }
 
   // ---- IPs ------------------------------------------------------------------------------------------------
   PAGES.ips = async (_, token) => {
-    setTitle("Egress IPs");
+    setTitle(tr("Egress IPs"));
     const [initialIps, hosts, initialTopology] = await Promise.all([api("GET", "/admin/ips"), api("GET", "/admin/hosts"), api("GET", "/admin/topology")]);
     if (!current(token)) return;
     let ips = initialIps, topology = initialTopology;
@@ -1286,13 +1417,13 @@
     updateAlertCount(topology.alerts || []);
     const params = new URLSearchParams(location.hash.split("?")[1] || "");
     $("#view").innerHTML = `
-      <div id="pool-stats" class="summary pool-stats" aria-label="IP inventory summary"></div>
+      <div id="pool-stats" class="summary pool-stats" aria-label="${trHTML("IP inventory summary")}"></div>
       <div class="table-toolbar">
-        <input id="ip-search" type="search" placeholder="Find an IP or user" aria-label="Find an IP or user">
-        <select id="f-host" aria-label="Egress host"><option value="">All hosts</option>
+        <input id="ip-search" type="search" placeholder="${trHTML("Find an IP or user")}" aria-label="${trHTML("Find an IP or user")}">
+        <select id="f-host" aria-label="${trHTML("Egress host")}"><option value="">${trHTML("All hosts")}</option>
           ${hosts.map((host) => `<option>${esc(host.name)}</option>`).join("")}</select>
-        <select id="f-status" aria-label="Allocation state"><option value="">All states</option>
-          ${Object.entries(IP_STATUS).map(([key, [label]]) => `<option value="${key}">${label}</option>`).join("")}</select>
+        <select id="f-status" aria-label="${trHTML("Allocation state")}"><option value="">${trHTML("All states")}</option>
+          ${Object.entries(IP_STATUS).map(([key, [label]]) => `<option value="${key}">${trHTML(label)}</option>`).join("")}</select>
         <span class="muted small" id="ip-count"></span>
       </div><div id="ip-table"></div>`;
     const hostFilter = $("#f-host"), stateFilter = $("#f-status"), search = $("#ip-search");
@@ -1305,9 +1436,9 @@
         totals[ip.status] = (totals[ip.status] || 0) + 1;
         return totals;
       }, {});
-      $("#pool-stats").innerHTML = [metric("Total", scoped.length), ...Object.entries(IP_STATUS).map(([key, [label]]) =>
-        metric(label, counts[key] || 0, "", key === "banned" && counts[key] ? "metric-bad" : ""))].join("");
-      $("#ip-count").textContent = `${shown.length} of ${scoped.length} IPs`;
+      $("#pool-stats").innerHTML = [metric(tr("Total"), scoped.length), ...Object.entries(IP_STATUS).map(([key, [label]]) =>
+        metric(tr(label), counts[key] || 0, "", key === "banned" && counts[key] ? "metric-bad" : ""))].join("");
+      $("#ip-count").textContent = tr("{visible} of {total} IPs", { visible: shown.length, total: scoped.length });
       const probes = new Map(topology.ips.map((ip) => [ip.ip, ip.probes]));
       $("#ip-table").innerHTML = ipTable(shown, probes, topology.now, true);
       bindIpActions(async () => {
@@ -1333,33 +1464,33 @@
   // ---- users ----------------------------------------------------------------------------------------------
   PAGES.users = async (args, token) => {
     if (args[0]) return userDetail(args[0], token);
-    setTitle("Users");
+    setTitle(tr("Users"));
     const users = await api("GET", "/admin/users");
     if (!current(token)) return;
-    $("#view").innerHTML = '<div class="toolbar"><input id="q" placeholder="Search users, hosts, or IPs" type="search"><span class="muted small" id="u-count"></span><span class="spacer"></span><button class="primary" id="add-user">Add user</button></div><div id="u-table"></div>';
+    $("#view").innerHTML = `<div class="toolbar"><input id="q" placeholder="${trHTML("Search users, hosts, or IPs")}" type="search"><span class="muted small" id="u-count"></span><span class="spacer"></span><button class="primary" id="add-user">${trHTML("Add user")}</button></div><div id="u-table"></div>`;
     const draw = () => {
       const q = $("#q").value.trim().toLowerCase();
       const shown = users.filter((u) => !q || [u.name, u.host, u.egress_ip].some((x) => (x || "").toLowerCase().includes(q)));
       $("#u-count").textContent = shown.length + " / " + users.length;
-      $("#u-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>User</th><th>Mode</th><th>Egress host</th><th>Egress IP</th><th>Entry port</th><th>Devices</th><th>Last seen</th></tr></thead><tbody>' +
+      $("#u-table").innerHTML = `<div class="table-wrap"><table><thead><tr><th>${trHTML("User")}</th><th>${trHTML("Mode")}</th><th>${trHTML("Egress host")}</th><th>${trHTML("Egress IP")}</th><th>${trHTML("Entry port")}</th><th>${trHTML("Devices")}</th><th>${trHTML("Last seen")}</th></tr></thead><tbody>` +
         (shown.map((u) => {
           const live = u.devices.filter((d) => !d.revoked);
           const seen = Math.max(0, ...live.map((d) => d.last_seen || 0));
-          return '<tr><td><a href="#/users/' + enc(u.name) + '"><b>' + esc(u.name) + "</b></a></td><td>" + (u.mode === "shared" ? "Shared" : "Exclusive") + "</td><td>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">Unassigned</span>') +
+          return '<tr><td><a href="#/users/' + enc(u.name) + '"><b>' + esc(u.name) + "</b></a></td><td>" + (u.mode === "shared" ? tr("Shared") : tr("Exclusive")) + "</td><td>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : `<span class="badge warn">${trHTML("Unassigned")}</span>`) +
             '</td><td class="mono">' + esc(u.egress_ip || "—") + '</td><td class="mono">' + esc(u.port || "—") + "</td><td>" + live.length + " / " + u.max_devices + "</td><td>" + (seen ? ago(now() - seen) : "—") + "</td></tr>";
-        }).join("") || '<tr><td colspan="7" class="empty">No users.</td></tr>') + "</tbody></table></div>";
+        }).join("") || `<tr><td colspan="7" class="empty">${trHTML("No users.")}</td></tr>`) + "</tbody></table></div>";
     };
     $("#q").oninput = draw;
     draw();
     $("#add-user").onclick = async () => {
       const hosts = await act(() => api("GET", "/admin/hosts"));
       if (!hosts) return;
-      const r = await form("Add user", [
-        { name: "name", label: "Username", required: true, hint: "1–64 characters. Spaces and slashes are prohibited." },
-        { name: "password", label: "Password (optional)", type: "password", hint: "Leave blank to generate a password shown once. Use at least 8 characters." },
-        { name: "mode", label: "Egress mode", type: "select", value: "exclusive", options: [["exclusive", "Dedicated egress IP"], ["shared", "Share an egress IP with other shared-mode users"]] },
-        { name: "max_devices", label: "Device limit", type: "number", value: 5, required: true },
-        { name: "host", label: "Assign an egress IP now", type: "select", value: "", options: [["", "Assign later"]].concat(hosts.map((h) => [h.name, "Auto-assign · " + h.name])) },
+      const r = await form(tr("Add user"), [
+        { name: "name", label: tr("Username"), required: true, hint: tr("1–64 characters. Spaces and slashes are prohibited.") },
+        { name: "password", label: tr("Password (optional)"), type: "password", hint: tr("Leave blank to generate a password shown once. Use at least 8 characters.") },
+        { name: "mode", label: tr("Egress mode"), type: "select", value: "exclusive", options: [["exclusive", tr("Dedicated egress IP")], ["shared", tr("Share an egress IP with other shared-mode users")]] },
+        { name: "max_devices", label: tr("Device limit"), type: "number", value: 5, required: true },
+        { name: "host", label: tr("Assign an egress IP now"), type: "select", value: "", options: [["", tr("Assign later")]].concat(hosts.map((h) => [h.name, tr("Auto-assign · {host}", { host: h.name })])) },
       ], async (v) => {
         const body = { name: v.name, mode: v.mode, max_devices: Number(v.max_devices) };
         if (v.password) body.password = v.password;
@@ -1367,73 +1498,78 @@
         let assigned = null;
         if (v.host) assigned = await api("POST", "/admin/users/" + enc(v.name) + "/assign", { host: v.host });
         return { made, assigned };
-      }, "Add");
+      }, tr("Add"));
       if (!r) return;
-      const entry = r.assigned && r.assigned.entry ? "Egress " + r.assigned.egress_ip + ", entry " + r.assigned.entry.host + ":" + r.assigned.entry.port : "No egress IP assigned";
-      if (r.made.password) reveal("Created user " + r.made.name, "Initial password (" + entry + ")", r.made.password);
-      else toast("User created. " + entry);
+      const entry = r.assigned?.entry ? tr("Egress {ip}, entry {entry}", {
+        ip: r.assigned.egress_ip, entry: endpoint(r.assigned.entry.host, r.assigned.entry.port),
+      }) : tr("No egress IP assigned");
+      if (r.made.password) reveal(tr("Created user {user}", { user: r.made.name }), tr("Initial password ({entry})", { entry }), r.made.password);
+      else toast(tr("User created. {entry}", { entry }));
       location.hash = "#/users/" + enc(r.made.name);
     };
   };
 
   async function userDetail(name, token) {
-    setTitle("User · " + name);
+    setTitle(tr("User · {name}", { name }));
     const [users, hosts] = await Promise.all([api("GET", "/admin/users"), api("GET", "/admin/hosts")]);
     if (!current(token)) return;
     const u = users.find((x) => x.name === name);
-    if (!u) { $("#view").innerHTML = '<div class="empty">User not found. <a href="#/users">Back to list</a></div>'; return; }
+    if (!u) { $("#view").innerHTML = `<div class="empty">${trHTML("User not found.")} <a href="#/users">${trHTML("Back to list")}</a></div>`; return; }
     const live = u.devices.filter((d) => !d.revoked);
     const entry = u.host ? hosts.find((h) => h.name === u.host) : null;
     $("#view").innerHTML =
-      '<div class="toolbar"><a href="#/users">← All users</a><span class="spacer"></span><button id="pw">Reset password</button><button id="mode">Egress mode</button><button id="limit">Device limit</button><button class="danger" id="del">Delete user</button></div>' +
-      '<div class="grid2 section"><div class="card"><h2>Egress assignment</h2><dl class="kv">' +
-      "<dt>Egress host</dt><dd>" + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : '<span class="badge warn">Unassigned</span>') + "</dd>" +
-      '<dt>Egress IP</dt><dd class="mono">' + esc(u.egress_ip || "—") + "</dd>" +
-      '<dt>Client entry</dt><dd class="mono">' + (entry ? esc(publicEntryLabel(entry, u.port)) : "—") + "</dd>" +
-      "<dt>Mode</dt><dd>" + (u.mode === "shared" ? "Shared" : "Exclusive") + "</dd></dl>" +
-      '<div class="toolbar" style="margin:14px 0 0">' + (u.egress_ip ? '<button id="reassign">Change egress</button><button class="danger" id="release">Release egress</button>' : '<button class="primary" id="assign">Assign egress</button>') + "</div></div>" +
-      '<div class="card"><h2>Account</h2><dl class="kv"><dt>Username</dt><dd class="mono">' + esc(u.name) + "</dd><dt>Devices</dt><dd>" + live.length + " / " + u.max_devices + " active</dd></dl>" +
-      '<p class="small muted" style="margin:12px 0 0">The first sign-in on each computer registers a device for the account.</p></div></div>' +
-      '<div class="section"><h2>Devices <span class="spacer"></span><button id="add-dev">Add headless device</button></h2><div class="table-wrap"><table><thead><tr><th>Devices</th><th>Platform</th><th>Last seen</th><th>Status</th><th></th></tr></thead><tbody>' +
-      (u.devices.map((d) => '<tr><td class="mono">' + esc(d.name) + "</td><td>" + esc(d.platform || "—") + "</td><td>" + (d.last_seen ? ago(now() - d.last_seen) : "Never") + "</td><td>" + (d.revoked ? '<span class="badge">Revoked</span>' : '<span class="badge ok">Active</span>') + '</td><td class="actions">' +
-        (d.revoked ? "" : '<button class="link danger" data-revoke="' + esc(d.name) + '">Revoke</button>') + "</td></tr>").join("") ||
-        '<tr><td colspan="5" class="empty">No devices have signed in.</td></tr>') + "</tbody></table></div></div>";
+      `<div class="toolbar"><a href="#/users">${trHTML("← All users")}</a><span class="spacer"></span><button id="pw">${trHTML("Reset password")}</button><button id="mode">${trHTML("Egress mode")}</button><button id="limit">${trHTML("Device limit")}</button><button class="danger" id="del">${trHTML("Delete user")}</button></div>` +
+      `<div class="grid2 section"><div class="card"><h2>${trHTML("Egress assignment")}</h2><dl class="kv">` +
+      `<dt>${trHTML("Egress host")}</dt><dd>` + (u.host ? '<a href="#/hosts/' + enc(u.host) + '">' + esc(u.host) + "</a>" : `<span class="badge warn">${trHTML("Unassigned")}</span>`) + "</dd>" +
+      `<dt>${trHTML("Egress IP")}</dt><dd class="mono">` + esc(u.egress_ip || "—") + "</dd>" +
+      `<dt>${trHTML("Client entry")}</dt><dd class="mono">` + (entry ? esc(publicEntryLabel(entry, u.port)) : "—") + "</dd>" +
+      `<dt>${trHTML("Mode")}</dt><dd>` + (u.mode === "shared" ? tr("Shared") : tr("Exclusive")) + "</dd></dl>" +
+      '<div class="toolbar" style="margin:14px 0 0">' + (u.egress_ip ? `<button id="reassign">${trHTML("Change egress")}</button><button class="danger" id="release">${trHTML("Release egress")}</button>` : `<button class="primary" id="assign">${trHTML("Assign egress")}</button>`) + "</div></div>" +
+      `<div class="card"><h2>${trHTML("Account")}</h2><dl class="kv"><dt>${trHTML("Username")}</dt><dd class="mono">${esc(u.name)}</dd><dt>${trHTML("Devices")}</dt><dd>${trHTML("{current} / {limit} active", { current: live.length, limit: u.max_devices })}</dd></dl>` +
+      `<p class="small muted" style="margin:12px 0 0">${trHTML("The first sign-in on each computer registers a device for the account.")}</p></div></div>` +
+      `<div class="section"><h2>${trHTML("Devices")} <span class="spacer"></span><button id="add-dev">${trHTML("Add headless device")}</button></h2><div class="table-wrap"><table><thead><tr><th>${trHTML("Devices")}</th><th>${trHTML("Platform")}</th><th>${trHTML("Last seen")}</th><th>${trHTML("Status")}</th><th></th></tr></thead><tbody>` +
+      (u.devices.map((d) => '<tr><td class="mono">' + esc(d.name) + "</td><td>" + esc(d.platform || "—") + "</td><td>" + (d.last_seen ? ago(now() - d.last_seen) : tr("Never")) + "</td><td>" + (d.revoked ? `<span class="badge">${trHTML("Revoked")}</span>` : `<span class="badge ok">${trHTML("Active")}</span>`) + '</td><td class="actions">' +
+        (d.revoked ? "" : '<button class="link danger" data-revoke="' + esc(d.name) + `">${trHTML("Revoke")}</button>`) + "</td></tr>").join("") ||
+        `<tr><td colspan="5" class="empty">${trHTML("No devices have signed in.")}</td></tr>`) + "</tbody></table></div></div>";
 
     const assignForm = async (title) => {
       const ips = await act(() => api("GET", "/admin/ips"));
       if (!ips) return;
       const usable = ips.filter((e) => e.status === "available" || (e.status === "assigned" && u.mode === "shared" && e.users.every((x) => (users.find((y) => y.name === x) || {}).mode === "shared")));
       return form(title, [
-        { name: "host", label: "Egress host", type: "select", value: u.host || (hosts[0] || {}).name, options: hosts.map((h) => [h.name, h.name + " · " + publicEntryLabel(h)]) },
-        { name: "ip", label: "Egress IP", type: "select", value: "", options: [["", "Automatic: lowest available IP on the selected host"]].concat(usable.filter((e) => e.ip !== u.egress_ip).map((e) => [e.ip, e.ip + " · " + e.host + (e.users.filter((x) => x !== name).length ? " (shared with " + e.users.filter((x) => x !== name).join(", ") + ")" : "")])) },
-        { name: "port", label: "Entry port (optional)", type: "number", placeholder: "Leave blank for automatic assignment", hint: "Choose an unused port within the host range." },
+        { name: "host", label: tr("Egress host"), type: "select", value: u.host || (hosts[0] || {}).name, options: hosts.map((h) => [h.name, h.name + " · " + publicEntryLabel(h)]) },
+        { name: "ip", label: tr("Egress IP"), type: "select", value: "", options: [["", tr("Automatic: lowest available IP on the selected host")]].concat(usable.filter((e) => e.ip !== u.egress_ip).map((e) => {
+          const holders = e.users.filter((x) => x !== name);
+          return [e.ip, e.ip + " · " + e.host + (holders.length ? " " + tr("(shared with {users})", { users: holders.join(", ") }) : "")];
+        })) },
+        { name: "port", label: tr("Entry port (optional)"), type: "number", placeholder: tr("Leave blank for automatic assignment"), hint: tr("Choose an unused port within the host range.") },
       ], async (v) => {
         const body = { host: v.host };
         if (v.ip) { body.ip = v.ip; delete body.host; }
         if (v.port) body.port = Number(v.port);
         // A bound user moves in one step, so the client never sees "unassigned" and stays connected.
         return api("POST", "/admin/users/" + enc(name) + (u.egress_ip ? "/reassign" : "/assign"), body);
-      }, "Assign");
+      }, tr("Assign"));
     };
     const afterAssign = (r) => {
       if (!r) return;
-      const entry = r.entry ? endpoint(r.entry.host, r.entry.port) : "waiting for Agent IPv4";
-      toast("Assigned " + r.egress_ip + " · " + entry);
+      const entry = r.entry ? endpoint(r.entry.host, r.entry.port) : tr("Waiting for Agent IPv4");
+      toast(tr("Assigned {ip} · {entry}", { ip: r.egress_ip, entry }));
       route();
     };
-    if ($("#assign")) $("#assign").onclick = async () => afterAssign(await assignForm("Assign egress for " + name));
-    if ($("#reassign")) $("#reassign").onclick = async () => afterAssign(await assignForm("Change egress for " + name));
+    if ($("#assign")) $("#assign").onclick = async () => afterAssign(await assignForm(tr("Assign egress for {name}", { name })));
+    if ($("#reassign")) $("#reassign").onclick = async () => afterAssign(await assignForm(tr("Change egress for {name}", { name })));
     if ($("#release")) $("#release").onclick = async () => {
-      if (!(await confirmBox("Release egress for " + name, "The client will disconnect. The IP enters cooldown and is unavailable for new assignments.", "Release"))) return;
-      if (await act(() => api("POST", "/admin/users/" + enc(name) + "/release"), "Released.")) route();
+      if (!(await confirmBox(tr("Release egress for {name}", { name }), trHTML("The client will disconnect. The IP enters cooldown and is unavailable for new assignments."), tr("Release")))) return;
+      if (await act(() => api("POST", "/admin/users/" + enc(name) + "/release"), tr("Released."))) route();
     };
     $("#pw").onclick = async () => {
-      const r = await form("Reset password for " + name, [
-        { name: "password", label: "New password (optional)", type: "password", hint: "Leave blank to generate a password. Use at least 8 characters." },
-        { name: "revoke", label: "Revoke all devices", type: "checkbox", value: true, hint: "Devices must sign in again with the new password." },
-      ], (v) => api("POST", "/admin/users/" + enc(name) + "/password", Object.assign({ revoke_devices: v.revoke }, v.password ? { password: v.password } : {})), "Reset");
+      const r = await form(tr("Reset password for {name}", { name }), [
+        { name: "password", label: tr("New password (optional)"), type: "password", hint: tr("Leave blank to generate a password. Use at least 8 characters.") },
+        { name: "revoke", label: tr("Revoke all devices"), type: "checkbox", value: true, hint: tr("Devices must sign in again with the new password.") },
+      ], (v) => api("POST", "/admin/users/" + enc(name) + "/password", Object.assign({ revoke_devices: v.revoke }, v.password ? { password: v.password } : {})), tr("Reset"));
       if (!r) return;
-      if (r.password) reveal("New password", "New password for " + name, r.password); else toast("Password updated.");
+      if (r.password) reveal(tr("New password"), tr("New password for {name}", { name }), r.password); else toast(tr("Password updated."));
       route();
     };
     $("#mode").onclick = async () => {
@@ -1445,52 +1581,54 @@
         (row ? row.holders || [] : []).forEach((h) => { if (h.user !== name) others.push(h.user + ":" + h.port); });
       }
       const hint = u.mode === "shared"
-        ? (others.length ? "Exclusive is unavailable while " + others.join(", ") + " share " + u.egress_ip + ". Move or release them first." : "Exclusive keeps the current IP, entry port, and devices.")
-        : "Shared keeps the current IP, entry port, and devices, and lets other Shared users join " + (u.egress_ip || "the IP this user gets") + " on their own entry ports.";
-      const r = await form("Egress mode for " + name, [
-        { name: "mode", label: "Egress mode", type: "select", value: u.mode, options: [["exclusive", "Exclusive: dedicated egress IP"], ["shared", "Shared: other Shared users may use the same egress IP"]], hint },
+        ? (others.length ? tr("Exclusive is unavailable while {users} share {ip}. Move or release them first.", { users: others.join(", "), ip: u.egress_ip }) : tr("Exclusive keeps the current IP, entry port, and devices."))
+        : tr("Shared keeps the current IP, entry port, and devices, and lets other Shared users join {ip} on their own entry ports.", { ip: u.egress_ip || tr("the IP this user gets") });
+      const r = await form(tr("Egress mode for {name}", { name }), [
+        { name: "mode", label: tr("Egress mode"), type: "select", value: u.mode, options: [["exclusive", tr("Exclusive: dedicated egress IP")], ["shared", tr("Shared: other Shared users may use the same egress IP")]], hint },
       ], (v) => v.mode === u.mode ? true : api("PUT", "/admin/users/" + enc(name), { mode: v.mode }));
-      if (r) { toast("Saved."); route(); }
+      if (r) { toast(tr("Saved.")); route(); }
     };
     $("#limit").onclick = async () => {
-      if (await form("Device limit", [{ name: "max", label: "Maximum active devices", type: "number", value: u.max_devices, required: true }],
-        (v) => api("PUT", "/admin/users/" + enc(name), { max_devices: Number(v.max) }))) { toast("Saved."); route(); }
+      if (await form(tr("Device limit"), [{ name: "max", label: tr("Maximum active devices"), type: "number", value: u.max_devices, required: true }],
+        (v) => api("PUT", "/admin/users/" + enc(name), { max_devices: Number(v.max) }))) { toast(tr("Saved.")); route(); }
     };
     $("#del").onclick = async () => {
-      if (!(await confirmBox("Delete user " + name, "This permanently removes the user and all devices, revokes client access immediately, and puts the egress IP into cooldown.", "Delete"))) return;
-      if (await act(() => api("DELETE", "/admin/users/" + enc(name)), "Deleted.")) location.hash = "#/users";
+      if (!(await confirmBox(tr("Delete user {name}", { name }), trHTML("This permanently removes the user and all devices, revokes client access immediately, and puts the egress IP into cooldown."), tr("Delete")))) return;
+      if (await act(() => api("DELETE", "/admin/users/" + enc(name)), tr("Deleted."))) location.hash = "#/users";
     };
     $("#add-dev").onclick = async () => {
-      const r = await form("Add headless device", [{ name: "name", label: "Device name", required: true, hint: "For scripts and servers. The token authenticates config requests." }],
-        (v) => api("POST", "/admin/users/" + enc(name) + "/devices", { name: v.name }), "Add");
-      if (r) { reveal("Token for " + r.device, "Send this token as Authorization: Bearer when calling GET /v1/config.", r.token); route(); }
+      const r = await form(tr("Add headless device"), [{ name: "name", label: tr("Device name"), required: true, hint: tr("For scripts and servers. The token authenticates config requests.") }],
+        (v) => api("POST", "/admin/users/" + enc(name) + "/devices", { name: v.name }), tr("Add"));
+      if (r) { reveal(tr("Token for {device}", { device: r.device }), tr("Send this token as Authorization: Bearer when calling GET /v1/config."), r.token); route(); }
     };
     $$("[data-revoke]").forEach((b) => b.onclick = async () => {
-      if (!(await confirmBox("Revoke " + b.dataset.revoke, "The device credential expires immediately and the client disconnects and signs out.", "Revoke"))) return;
-      if (await act(() => api("POST", "/admin/users/" + enc(name) + "/devices/" + enc(b.dataset.revoke) + "/revoke"), "Revoked")) route();
+      if (!(await confirmBox(tr("Revoke {device}", { device: b.dataset.revoke }), trHTML("The device credential expires immediately and the client disconnects and signs out."), tr("Revoke")))) return;
+      if (await act(() => api("POST", "/admin/users/" + enc(name) + "/devices/" + enc(b.dataset.revoke) + "/revoke"), tr("Revoked"))) route();
     });
   }
 
   // ---- alerts ---------------------------------------------------------------------------------------------
-  const RULES = { egress_probe_failing: "Egress probe failed", entry_unreachable: "Entry unreachable", agent_stale: "Egress host offline", singbox_down: "sing-box stopped", agent_out_of_sync: "Config out of sync" };
+  const RULES = { egress_probe_failing: "Egress probe failed", entry_unreachable: "Entry unreachable", agent_stale: "Egress host offline", singbox_down: "sing-box stopped", agent_out_of_sync: "Config out of sync", subscription_waiting_ip: "Paid customer waiting for an IP" };
   PAGES.alerts = async (_, token) => {
-    setTitle("Alerts");
+    setTitle(tr("Alerts"));
     const all = await api("GET", "/admin/alerts?all=1");
     if (!current(token)) return;
     updateAlertCount(all);
     const firing = all.filter((a) => a.state === "firing");
-    const row = (a) => "<tr><td>" + (a.severity === "critical" ? '<span class="badge bad">Critical</span>' : '<span class="badge warn">Warning</span>') + "</td><td>" + esc(RULES[a.rule] || a.rule) + '</td><td class="mono">' + esc(a.subject) + "</td><td>" + esc(a.summary) +
-      (a.notify_error ? '<div class="line" style="color:var(--bad)">Notification failed: ' + esc(a.notify_error) + "</div>" : "") + "</td><td>" + fmtTime(a.fired_at || a.started_at) + "</td><td>" + (a.state === "resolved" ? fmtTime(a.resolved_at) : a.state === "pending" ? '<span class="badge">Pending</span>' : '<span class="badge bad">Active</span>') + "</td></tr>";
-    const head = "<thead><tr><th>Severity</th><th>Rule</th><th>Subject</th><th>Details</th><th>Started</th><th>Resolved</th></tr></thead>";
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + firing.length + ' active alerts</span><span class="spacer"></span><a href="#/settings">Alert settings</a><button id="test">Send test notification</button></div>' +
-      '<div class="section"><h2>Active</h2><div class="table-wrap"><table>' + head + "<tbody>" + (firing.map(row).join("") || '<tr><td colspan="6" class="empty">No active alerts.</td></tr>') + "</tbody></table></div></div>" +
-      '<div class="section"><h2>History (30 days)</h2><div class="table-wrap"><table>' + head + "<tbody>" + (all.filter((a) => a.state !== "firing").map(row).join("") || '<tr><td colspan="6" class="empty">No records.</td></tr>') + "</tbody></table></div></div>";
+    const row = (a) => "<tr><td>" + (a.severity === "critical" ? `<span class="badge bad">${trHTML("Critical")}</span>` : `<span class="badge warn">${trHTML("Warning")}</span>`) + "</td><td>" + trHTML(RULES[a.rule] || a.rule) + '</td><td class="mono">' + esc(a.subject) + "</td><td>" + esc(consoleMessage(a.summary)) +
+      (a.notify_error ? `<div class="line" style="color:var(--bad)">${trHTML("Notification failed: {detail}", { detail: consoleMessage(a.notify_error) })}</div>` : "") + "</td><td>" + fmtTime(a.fired_at || a.started_at) + "</td><td>" + (a.state === "resolved" ? fmtTime(a.resolved_at) : a.state === "pending" ? `<span class="badge">${trHTML("Pending")}</span>` : `<span class="badge bad">${trHTML("Firing")}</span>`) + "</td></tr>";
+    const head = `<thead><tr><th>${trHTML("Severity")}</th><th>${trHTML("Rule")}</th><th>${trHTML("Subject")}</th><th>${trHTML("Details")}</th><th>${trHTML("Started")}</th><th>${trHTML("Resolved")}</th></tr></thead>`;
+    $("#view").innerHTML = `<div class="toolbar"><span class="muted">${trHTML("{count} active alerts", { count: firing.length })}</span><span class="spacer"></span><a href="#/settings">${trHTML("Alert settings")}</a><button id="test">${trHTML("Send test notification")}</button></div>` +
+      `<div class="section"><h2>${trHTML("Active alerts")}</h2><div class="table-wrap"><table>` + head + "<tbody>" + (firing.map(row).join("") || `<tr><td colspan="6" class="empty">${trHTML("No active alerts.")}</td></tr>`) + "</tbody></table></div></div>" +
+      `<div class="section"><h2>${trHTML("History (30 days)")}</h2><div class="table-wrap"><table>` + head + "<tbody>" + (all.filter((a) => a.state !== "firing").map(row).join("") || `<tr><td colspan="6" class="empty">${trHTML("No records.")}</td></tr>`) + "</tbody></table></div></div>";
     $("#test").onclick = async () => {
       const r = await act(() => api("POST", "/admin/alerts/test"));
       if (!r) return;
-      if (!r.webhooks.length) return toast("No webhooks configured.", true);
+      if (!r.webhooks.length) return toast(tr("No webhooks configured."), true);
       const bad = r.webhooks.filter((w) => !w.ok);
-      toast(bad.length ? bad.length + " webhooks failed: " + bad.map((w) => w.error).join("；") : "Sent to " + r.webhooks.length + " webhooks", !!bad.length);
+      toast(bad.length ? tr("{count} webhooks failed: {details}", {
+        count: bad.length, details: bad.map((w) => consoleMessage(w.error)).join(", "),
+      }) : tr("Sent to {count} webhooks", { count: r.webhooks.length }), !!bad.length);
     };
     refreshEvery(15, () => { if (current(token)) api("GET", "/admin/alerts?all=1").then(updateAlertCount).catch(() => {}); }, token);
   };
@@ -1498,40 +1636,40 @@
   // ---- settings -------------------------------------------------------------------------------------------
   const lines = (t) => t.split("\n").map((s) => s.trim()).filter(Boolean);
   PAGES.settings = async (_, token) => {
-    setTitle("Settings");
+    setTitle(tr("Settings"));
     const s = await api("GET", "/admin/settings");
     if (!current(token)) return;
     const cp = s.client_policy || {}, mon = s.monitor || {}, al = s.alerts || {};
-    const field = (id, label, value, opts = {}) => '<div class="form-row"><label for="' + id + '">' + label + "</label>" +
+    const field = (id, label, value, opts = {}) => '<div class="form-row"><label for="' + id + '">' + esc(label) + "</label>" +
       (opts.area ? '<textarea id="' + id + '" placeholder="' + esc(opts.ph || "") + '">' + esc(value) + "</textarea>" : '<input id="' + id + '" type="' + (opts.type || "text") + '" value="' + esc(value) + '" placeholder="' + esc(opts.ph || "") + '">') +
-      (opts.hint ? '<div class="hint">' + opts.hint + "</div>" : "") + "</div>";
+      (opts.hint ? '<div class="hint">' + esc(opts.hint) + "</div>" : "") + "</div>";
     $("#view").innerHTML = '<div class="grid2">' +
-      '<form class="card" id="s-policy"><h2>Client routing policy</h2>' +
-      field("domains", "Proxied domains", (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: "Enter one domain or web URL per line. A URL adds its hostname and subdomains." }) +
-      field("direct_dns", "DNS for other domains", cp.direct_dns || "dhcp", { hint: "Use dhcp for the DNS assigned by the local network, or enter an IP such as 223.5.5.5." }) +
-      '<div class="form-row check"><label><input type="checkbox" id="block_quic"' + (cp.block_quic === false ? "" : " checked") + "> Block QUIC (UDP 443) for proxied domains so apps use TCP.</label></div>" +
-      '<button class="primary" type="submit">Save routing policy</button><p class="small muted">Clients check for and apply updates every 30 seconds.</p></form>' +
-      '<form class="card" id="s-ip"><h2>Egress IPs</h2>' + field("cooldown", "Cooldown after release (days)", Math.round((s.cooldown_seconds || 0) / 86400 * 10) / 10, { type: "number", hint: "Released IPs stay out of the available pool during cooldown." }) +
-      '<button class="primary" type="submit">Save</button></form>' +
-      '<form class="card" id="s-monitor"><h2>Health probes</h2>' +
-      field("targets", "Egress probe targets", (mon.egress_targets || []).join("\n"), { area: true, ph: "https://www.example.com/", hint: "One URL per line. The agent probes each URL from every egress IP on its configured interval. HTTP 403 and 429 count as failures." }) +
-      field("entries", "Additional entries", (mon.entries || []).map((e) => e.name + " " + e.host + ":" + e.port).join("\n"), { area: true, ph: "hk-relay 192.0.2.1:443", hint: "Enter one name and address:port per line. Egress hosts are included automatically." }) +
-      '<button class="primary" type="submit">Save probe settings</button></form>' +
-      '<form class="card" id="s-alerts"><h2>Alerts</h2>' +
-      field("hooks", "Webhook", (al.webhooks || []).map((w) => (w.format || "generic") + " " + w.url).join("\n"), { area: true, ph: "feishu https://open.feishu.cn/open-apis/bot/v2/hook/...", hint: "Enter one format and URL per line. Formats: generic, feishu, dingtalk, wecom, slack. Alerts include IPs and usernames." }) +
-      field("fails", "Alert after consecutive failures", al.consecutive_failures ?? 3, { type: "number" }) +
-      field("stale", "Host offline threshold (seconds)", al.agent_stale_seconds ?? 120, { type: "number" }) +
-      field("sync", "Config sync threshold (seconds)", al.out_of_sync_seconds ?? 300, { type: "number" }) +
-      field("repeat", "Alert repeat interval (seconds, 0 disables repeats)", al.repeat_seconds ?? 0, { type: "number" }) +
-      '<button class="primary" type="submit">Save alert settings</button></form></div>';
+      `<form class="card" id="s-policy"><h2>${trHTML("Client routing policy")}</h2>` +
+      field("domains", tr("Proxied domains"), (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: tr("Enter one domain or web URL per line. A URL adds its hostname and subdomains.") }) +
+      field("direct_dns", tr("DNS for other domains"), cp.direct_dns || "dhcp", { hint: tr("Use dhcp for the DNS assigned by the local network, or enter an IP such as 223.5.5.5.") }) +
+      '<div class="form-row check"><label><input type="checkbox" id="block_quic"' + (cp.block_quic === false ? "" : " checked") + `> ${trHTML("Block QUIC (UDP 443) for proxied domains so apps use TCP.")}</label></div>` +
+      `<button class="primary" type="submit">${trHTML("Save routing policy")}</button><p class="small muted">${trHTML("Clients check for and apply updates every 30 seconds.")}</p></form>` +
+      `<form class="card" id="s-ip"><h2>${trHTML("Egress IPs")}</h2>` + field("cooldown", tr("Cooldown after release (days)"), Math.round((s.cooldown_seconds || 0) / 86400 * 10) / 10, { type: "number", hint: tr("Released IPs stay out of the available pool during cooldown.") }) +
+      `<button class="primary" type="submit">${trHTML("Save")}</button></form>` +
+      `<form class="card" id="s-monitor"><h2>${trHTML("Health probes")}</h2>` +
+      field("targets", tr("Egress probe targets"), (mon.egress_targets || []).join("\n"), { area: true, ph: "https://www.example.com/", hint: tr("One URL per line. The agent probes each URL from every egress IP on its configured interval. HTTP 403 and 429 count as failures.") }) +
+      field("entries", tr("Additional entries"), (mon.entries || []).map((e) => e.name + " " + e.host + ":" + e.port).join("\n"), { area: true, ph: "hk-relay 192.0.2.1:443", hint: tr("Enter one name and address:port per line. Egress hosts are included automatically.") }) +
+      `<button class="primary" type="submit">${trHTML("Save probe settings")}</button></form>` +
+      `<form class="card" id="s-alerts"><h2>${trHTML("Alerts")}</h2>` +
+      field("hooks", tr("Webhook"), (al.webhooks || []).map((w) => (w.format || "generic") + " " + w.url).join("\n"), { area: true, ph: "feishu https://open.feishu.cn/open-apis/bot/v2/hook/...", hint: tr("Enter one format and URL per line. Formats: generic, feishu, dingtalk, wecom, slack. Alerts include IPs and usernames.") }) +
+      field("fails", tr("Alert after consecutive failures"), al.consecutive_failures ?? 3, { type: "number" }) +
+      field("stale", tr("Host offline threshold (seconds)"), al.agent_stale_seconds ?? 120, { type: "number" }) +
+      field("sync", tr("Config sync threshold (seconds)"), al.out_of_sync_seconds ?? 300, { type: "number" }) +
+      field("repeat", tr("Alert repeat interval (seconds, 0 disables repeats)"), al.repeat_seconds ?? 0, { type: "number" }) +
+      `<button class="primary" type="submit">${trHTML("Save alert settings")}</button></form></div>`;
     const save = (id, build, text) => { $(id).onsubmit = async (e) => { e.preventDefault(); let body; try { body = build(); } catch (err) { return toast(err.message, true); } if (await act(() => api("PUT", "/admin/settings", body), text)) route(); }; };
-    save("#s-policy", () => ({ client_policy: Object.assign({}, cp, { domain_suffix: lines($("#domains").value).map((d) => d.replace(/^\./, "").toLowerCase()), direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked }) }), "Routing policy saved.");
-    save("#s-ip", () => ({ cooldown_seconds: Math.round(Number($("#cooldown").value) * 86400) }), "Saved.");
+    save("#s-policy", () => ({ client_policy: Object.assign({}, cp, { domain_suffix: lines($("#domains").value).map((d) => d.replace(/^\./, "").toLowerCase()), direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked }) }), tr("Routing policy saved."));
+    save("#s-ip", () => ({ cooldown_seconds: Math.round(Number($("#cooldown").value) * 86400) }), tr("Saved."));
     save("#s-monitor", () => ({ monitor: { egress_targets: lines($("#targets").value), entries: lines($("#entries").value).map((l) => {
-      const m = l.match(/^(\S+)\s+(\S+):(\d+)$/); if (!m) throw new Error("Invalid additional entry: " + l); return { name: m[1], host: m[2], port: Number(m[3]) }; }) } }), "Probe settings saved.");
+      const m = l.match(/^(\S+)\s+(\S+):(\d+)$/); if (!m) throw new Error(tr("Invalid additional entry: {entry}", { entry: l })); return { name: m[1], host: m[2], port: Number(m[3]) }; }) } }), tr("Probe settings saved."));
     save("#s-alerts", () => ({ alerts: Object.assign({}, al, {
       webhooks: lines($("#hooks").value).map((l) => { const [f, ...rest] = l.split(/\s+/); const url = rest.join(" "); if (!url) return { url: f, format: "generic" }; return { format: f, url }; }),
-      consecutive_failures: Number($("#fails").value), agent_stale_seconds: Number($("#stale").value), out_of_sync_seconds: Number($("#sync").value), repeat_seconds: Number($("#repeat").value) }) }), "Alert settings saved.");
+      consecutive_failures: Number($("#fails").value), agent_stale_seconds: Number($("#stale").value), out_of_sync_seconds: Number($("#sync").value), repeat_seconds: Number($("#repeat").value) }) }), tr("Alert settings saved."));
   };
 
   // ---- usage ----------------------------------------------------------------------------------------------
@@ -1541,19 +1679,27 @@
     while (v >= 1024 && i < UNITS.length - 1) { v /= 1024; i++; }
     return (i === 0 ? String(v) : v.toFixed(v < 10 ? 2 : v < 100 ? 1 : 0)) + " " + UNITS[i];
   }
-  const exact = (n) => Number(n || 0).toLocaleString() + " bytes";
+  const exact = (n) => tr("{count} bytes", { count: Number(n || 0).toLocaleString(language) });
   const USAGE_STATUS = { complete: ["Measured", "ok"], incomplete: ["Incomplete", "warn"], unavailable: ["Not measured", ""] };
   const COLLECTOR_STATUS = { collecting: ["Collecting", "ok"], starting: ["Starting", "warn"], error: ["Error", "bad"], stale: ["Stale", "bad"], unavailable: ["Unavailable", ""] };
-  const usageLabel = (r) => {
-    const start = new Date(r.start + "T00:00:00Z"), last = new Date(Date.parse(r.end + "T00:00:00Z") - 86400000);
-    const day = (d, opts) => d.toLocaleDateString(undefined, Object.assign({ timeZone: "UTC" }, opts));
-    if (r.period === "month") return day(start, { year: "numeric", month: "long" });
-    if (r.period === "week") return day(start, { month: "short", day: "numeric" }) + " – " + day(last, { year: "numeric", month: "short", day: "numeric" });
-    return day(start, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
-  };
+  // The API returns calendar dates in the reporting zone. Format the dates
+  // as written so the browser's time zone never moves a period boundary.
+  const formatUsageDate = (date, options) => date.toLocaleDateString(language, { timeZone: "UTC", ...options });
+  function usageLabel(period, startDate, endDate) {
+    const start = new Date(startDate + "T00:00:00Z");
+    if (period === "month") return formatUsageDate(start, { year: "numeric", month: "long" });
+    const shortDate = { month: "short", day: "numeric" };
+    if (period === "week") {
+      const first = formatUsageDate(start, shortDate);
+      if (!endDate) return tr("Week of {date}", { date: first });
+      const last = new Date(Date.parse(endDate + "T00:00:00Z") - 86400000);
+      return tr("{start} – {end}", { start: first, end: formatUsageDate(last, { year: "numeric", ...shortDate }) });
+    }
+    return formatUsageDate(start, { weekday: "short", year: "numeric", ...shortDate });
+  }
 
   PAGES.usage = async (_, token) => {
-    setTitle("Usage");
+    setTitle(tr("Usage"));
     const params = new URLSearchParams(location.hash.split("?")[1] || "");
     const query = new URLSearchParams();
     for (const key of ["period", "date", "user", "device"]) if (params.get(key)) query.set(key, params.get(key));
@@ -1572,46 +1718,46 @@
     const row = (u) => {
       const [label, tone] = USAGE_STATUS[u.status] || [u.status, ""];
       const off = u.status === "unavailable";
-      const state = u.device_state !== "active" ? ' <span class="badge ' + (u.device_state === "deleted" ? "bad" : "warn") + '">' + esc(u.device_state === "deleted" ? "Deleted" : "Revoked") + "</span>" : "";
-      const bytes = (n) => off ? '<td class="num muted" title="No collector measured this device in this period">—</td>' : `<td class="num" title="${exact(n)}">${fmtBytes(n)}</td>`;
+      const state = u.device_state !== "active" ? ' <span class="badge ' + (u.device_state === "deleted" ? "bad" : "warn") + '">' + esc(u.device_state === "deleted" ? tr("Deleted") : tr("Revoked")) + "</span>" : "";
+      const bytes = (n) => off ? `<td class="num muted" title="${trHTML("No collector measured this device in this period")}">—</td>` : `<td class="num" title="${esc(exact(n))}">${fmtBytes(n)}</td>`;
       return `<tr><td>${esc(u.user)}</td><td>${esc(u.device)}${state}</td>${bytes(u.upload)}${bytes(u.download)}${bytes(u.total)}` +
-        `<td><span class="badge ${tone}">${esc(label)}</span>${u.reasons.length ? '<div class="usage-why">' + u.reasons.map(esc).join("<br>") + "</div>" : ""}</td>` +
+        `<td><span class="badge ${tone}">${trHTML(label)}</span>${u.reasons.length ? '<div class="usage-why">' + u.reasons.map((reason) => esc(consoleMessage(reason))).join("<br>") + "</div>" : ""}</td>` +
         `<td class="mono small nowrap">${u.hosts.map(esc).join(", ") || "—"}</td></tr>`;
     };
     const collector = (c) => {
       const [label, tone] = COLLECTOR_STATUS[c.status] || [c.status, ""];
-      return `<tr><td class="nowrap"><a href="#/hosts/${enc(c.host)}">${esc(c.host)}</a></td><td><span class="badge ${tone}">${esc(label)}</span></td>` +
-        `<td class="small">${esc(c.note || "")}</td><td class="mono small">${esc(c.agent_version || "—")}</td>` +
+      return `<tr><td class="nowrap"><a href="#/hosts/${enc(c.host)}">${esc(c.host)}</a></td><td><span class="badge ${tone}">${trHTML(label)}</span></td>` +
+        `<td class="small">${esc(consoleMessage(c.note))}</td><td class="mono small">${esc(c.agent_version || "—")}</td>` +
         `<td class="mono small">${esc(c.singbox_version || "—")}</td><td>${c.last_report ? ago(now() - c.last_report) : "—"}</td></tr>`;
     };
-    const lost = r.hosts.map((h) => `<tr><td class="nowrap">${esc(h.host)}</td><td class="num" title="${exact(h.unattributed_upload)}">${fmtBytes(h.unattributed_upload)}</td>` +
-      `<td class="num" title="${exact(h.unattributed_download)}">${fmtBytes(h.unattributed_download)}</td>` +
-      `<td class="num" title="${exact(h.rejected_upload)}">${fmtBytes(h.rejected_upload)}</td><td class="num" title="${exact(h.rejected_download)}">${fmtBytes(h.rejected_download)}</td>` +
-      `<td class="num" title="${exact(h.unresolved_upload)}">${fmtBytes(h.unresolved_upload)}</td><td class="num" title="${exact(h.unresolved_download)}">${fmtBytes(h.unresolved_download)}</td></tr>`).join("");
+    const lost = r.hosts.map((h) => `<tr><td class="nowrap">${esc(h.host)}</td><td class="num" title="${esc(exact(h.unattributed_upload))}">${fmtBytes(h.unattributed_upload)}</td>` +
+      `<td class="num" title="${esc(exact(h.unattributed_download))}">${fmtBytes(h.unattributed_download)}</td>` +
+      `<td class="num" title="${esc(exact(h.rejected_upload))}">${fmtBytes(h.rejected_upload)}</td><td class="num" title="${esc(exact(h.rejected_download))}">${fmtBytes(h.rejected_download)}</td>` +
+      `<td class="num" title="${esc(exact(h.unresolved_upload))}">${fmtBytes(h.unresolved_upload)}</td><td class="num" title="${esc(exact(h.unresolved_download))}">${fmtBytes(h.unresolved_download)}</td></tr>`).join("");
     const recorded = r.recorded_periods.includes(r.start) ? r.recorded_periods : [r.start].concat(r.recorded_periods);
     $("#view").innerHTML = `
       <div class="table-toolbar">
-        <select id="u-period" aria-label="Period">${option("day", "Day", r.period === "day")}${option("week", "Week", r.period === "week")}${option("month", "Month", r.period === "month")}</select>
-        <span class="usage-nav"><button id="u-prev" type="button" aria-label="Previous period">‹</button><b id="u-label">${esc(usageLabel(r))}</b>
-          <button id="u-next" type="button" aria-label="Next period"${r.next ? "" : " disabled"}>›</button></span>
-        <select id="u-recorded" aria-label="Recorded periods">${recorded.map((d) => option(d, (r.period === "week" ? "Week of " : "") + usageLabel({ period: r.period, start: d, end: d }).replace(/ – .*/, ""), d === r.start)).join("")}</select>
-        <select id="u-user" aria-label="User">${option("", "All users", !r.user)}${r.users.map((u) => option(u, u, u === r.user)).join("")}</select>
-        <select id="u-device" aria-label="Device">${option("", "All devices", !r.device)}${r.devices.map((d) => option(d, d, d === r.device)).join("")}</select>
-        <span class="spacer"></span><button id="u-refresh" type="button">${icon("refresh")} Refresh</button>
+        <select id="u-period" aria-label="${trHTML("Period")}">${option("day", tr("Day"), r.period === "day")}${option("week", tr("Week"), r.period === "week")}${option("month", tr("Month"), r.period === "month")}</select>
+        <span class="usage-nav"><button id="u-prev" type="button" aria-label="${trHTML("Previous period")}">‹</button><b id="u-label">${esc(usageLabel(r.period, r.start, r.end))}</b>
+          <button id="u-next" type="button" aria-label="${trHTML("Next period")}"${r.next ? "" : " disabled"}>›</button></span>
+        <select id="u-recorded" aria-label="${trHTML("Recorded periods")}">${recorded.map((d) => option(d, usageLabel(r.period, d), d === r.start)).join("")}</select>
+        <select id="u-user" aria-label="${trHTML("User")}">${option("", tr("All users"), !r.user)}${r.users.map((u) => option(u, u, u === r.user)).join("")}</select>
+        <select id="u-device" aria-label="${trHTML("Device")}">${option("", tr("All devices"), !r.device)}${r.devices.map((d) => option(d, d, d === r.device)).join("")}</select>
+        <span class="spacer"></span><button id="u-refresh" type="button">${icon("refresh")} ${trHTML("Refresh")}</button>
       </div>
-      <div class="summary" aria-label="Usage summary">
-        ${metric("Upload", fmtBytes(r.totals.upload), exact(r.totals.upload))}
-        ${metric("Download", fmtBytes(r.totals.download), exact(r.totals.download))}
-        ${metric("Total", fmtBytes(r.totals.total), r.in_progress ? "This period so far" : exact(r.totals.total))}
-        ${metric("Devices measured", measured + " / " + r.rows.length, incomplete ? incomplete + " incomplete" : "")}
+      <div class="summary" aria-label="${trHTML("Usage summary")}">
+        ${metric(tr("Upload"), fmtBytes(r.totals.upload), exact(r.totals.upload))}
+        ${metric(tr("Download"), fmtBytes(r.totals.download), exact(r.totals.download))}
+        ${metric(tr("Total"), fmtBytes(r.totals.total), r.in_progress ? tr("This period so far") : exact(r.totals.total))}
+        ${metric(tr("Devices measured"), measured + " / " + r.rows.length, incomplete ? tr("{count} incomplete", { count: incomplete }) : "")}
       </div>
-      <p class="small muted">Calendar periods in Asia/Singapore (UTC+8); weeks start on Monday. Each exit assigns traffic to the hour in which it observed it, so a boundary moves at most a fraction of a second of traffic. “Not measured” means no collector covered the device; a measured device with no traffic shows 0 B.</p>
-      <div class="table-wrap"><table><thead><tr><th>User</th><th>Device</th><th class="num">Upload</th><th class="num">Download</th><th class="num">Total</th><th>Status</th><th>Exits</th></tr></thead><tbody>
-        ${r.rows.map(row).join("") || '<tr><td colspan="7" class="empty">No devices match these filters.</td></tr>'}</tbody></table></div>
-      ${lost ? `<section class="section"><h2>Traffic not attributed to a device</h2><div class="table-wrap"><table><thead><tr><th>Exit</th><th class="num">Unattributed upload</th><th class="num">Unattributed download</th><th class="num">Rejected upload</th><th class="num">Rejected download</th><th class="num">Unresolved upload</th><th class="num">Unresolved download</th></tr></thead><tbody>${lost}</tbody></table></div>
-        <p class="small muted">Rejected bytes were reported for names the exit was never configured with. Unresolved bytes were reported under names that two devices had during the same hour (an account deleted and recreated); they are not assigned to either device.</p></section>` : ""}
-      <section class="section"><h2>Usage collection by exit</h2><div class="table-wrap"><table><thead><tr><th>Exit</th><th>Collection</th><th>Details</th><th>Agent</th><th>sing-box</th><th>Last report</th></tr></thead><tbody>
-        ${r.collectors.map(collector).join("") || '<tr><td colspan="6" class="empty">No exits.</td></tr>'}</tbody></table></div></section>`;
+      <p class="small muted">${trHTML("Calendar periods in Asia/Singapore (UTC+8); weeks start on Monday. Each exit assigns traffic to the hour in which it observed it, so a boundary moves at most a fraction of a second of traffic. “Not measured” means no collector covered the device; a measured device with no traffic shows 0 B.")}</p>
+      <div class="table-wrap"><table><thead><tr><th>${trHTML("User")}</th><th>${trHTML("Device")}</th><th class="num">${trHTML("Upload")}</th><th class="num">${trHTML("Download")}</th><th class="num">${trHTML("Total")}</th><th>${trHTML("Status")}</th><th>${trHTML("Exits")}</th></tr></thead><tbody>
+        ${r.rows.map(row).join("") || `<tr><td colspan="7" class="empty">${trHTML("No devices match these filters.")}</td></tr>`}</tbody></table></div>
+      ${lost ? `<section class="section"><h2>${trHTML("Traffic not attributed to a device")}</h2><div class="table-wrap"><table><thead><tr><th>${trHTML("Exit")}</th><th class="num">${trHTML("Unattributed upload")}</th><th class="num">${trHTML("Unattributed download")}</th><th class="num">${trHTML("Rejected upload")}</th><th class="num">${trHTML("Rejected download")}</th><th class="num">${trHTML("Unresolved upload")}</th><th class="num">${trHTML("Unresolved download")}</th></tr></thead><tbody>${lost}</tbody></table></div>
+        <p class="small muted">${trHTML("Rejected bytes were reported for names the exit was never configured with. Unresolved bytes were reported under names that two devices had during the same hour (an account deleted and recreated); they are not assigned to either device.")}</p></section>` : ""}
+      <section class="section"><h2>${trHTML("Usage collection by exit")}</h2><div class="table-wrap"><table><thead><tr><th>${trHTML("Exit")}</th><th>${trHTML("Collection")}</th><th>${trHTML("Details")}</th><th>${trHTML("Agent")}</th><th>sing-box</th><th>${trHTML("Last report")}</th></tr></thead><tbody>
+        ${r.collectors.map(collector).join("") || `<tr><td colspan="6" class="empty">${trHTML("No exits.")}</td></tr>`}</tbody></table></div></section>`;
     $("#u-period").onchange = (e) => go({ period: e.target.value });
     $("#u-prev").onclick = () => go({ date: r.previous });
     $("#u-next").onclick = () => r.next && go({ date: r.next });
@@ -1622,41 +1768,44 @@
   };
 
   // ---- billing --------------------------------------------------------------------------------------------
-  const money = (amount, currency = "cny") => new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase(), minimumFractionDigits: 2 }).format((amount || 0) / 100);
-  const billingBadge = (status) => '<span class="badge ' + ({ active: "ok", paid: "ok", past_due: "warn", pending: "warn", failed: "bad", cancelled: "bad", expired: "bad", refunded: "bad" }[status] || "") + '">' + esc(status.replaceAll("_", " ")) + "</span>";
+  const money = (amount, currency = "cny") => new Intl.NumberFormat(language, { style: "currency", currency: currency.toUpperCase(), minimumFractionDigits: 2 }).format((amount || 0) / 100);
+  function billingBadge(status) {
+    const tone = { active: "ok", paid: "ok", past_due: "warn", pending: "warn", failed: "bad", cancelled: "bad", expired: "bad", refunded: "bad" }[status] || "";
+    return statusBadge({ label: tr(status.replaceAll("_", " ")), tone });
+  }
 
   function mailboxBadge(mailbox) {
     if (mailbox.setup_pending && !["deleting", "deleted"].includes(mailbox.status)) {
-      return '<span class="badge warn">Setup pending</span>';
+      return `<span class="badge warn">${trHTML("Setup pending")}</span>`;
     }
     return billingBadge(mailbox.status);
   }
 
   async function openMailboxForm(customerID, email, mailbox) {
-    const result = await form("Set up mailbox for " + email, [{
-      name: "local_part", label: "Mailbox name", required: true,
-      value: mailbox?.address.split("@")[0], hint: "The address will end in @aifree.sg.",
-    }], (values) => api("POST", "/admin/customers/" + enc(customerID) + "/mailbox", values), "Set up");
+    const result = await form(tr("Set up mailbox for {email}", { email }), [{
+      name: "local_part", label: tr("Mailbox name"), required: true,
+      value: mailbox?.address.split("@")[0], hint: tr("The address will end in @aifree.sg."),
+    }], (values) => api("POST", "/admin/customers/" + enc(customerID) + "/mailbox", values), tr("Set up"));
     if (!result) return;
-    reveal("Mailbox created", "Initial password for " + result.mailbox.address, result.initial_password);
+    reveal(tr("Mailbox created"), tr("Initial password for {email}", { email: result.mailbox.address }), result.initial_password);
     route();
   }
 
   PAGES.customers = async (_, token) => {
-    setTitle("Customers");
+    setTitle(tr("Customers"));
     const customers = await api("GET", "/admin/customers");
     if (!current(token)) return;
     const rows = customers.map((c) => {
       const mailbox = c.mailbox;
       const setup = c.mailbox_entitled && (!mailbox || (mailbox.setup_pending && mailbox.status !== "deleting"));
       const next = c.status === "active" ? "suspended" : "active";
-      return `<tr><td class="mono">${c.id}</td><td>${esc(c.email)}</td><td>${c.email_verified ? "Verified" : "Unverified"}</td>
+      return `<tr><td class="mono">${c.id}</td><td>${esc(c.email)}</td><td>${c.email_verified ? tr("Verified") : tr("Unverified")}</td>
         <td>${billingBadge(c.status)}</td><td class="mono">${esc(c.user_name || "—")}</td>
         <td>${mailbox ? '<span class="mono">' + esc(mailbox.address) + "</span> " + mailboxBadge(mailbox) : "—"}</td>
-        <td class="actions">${setup ? '<button class="link" data-mailbox-create="' + c.id + '">' + (mailbox ? "Finish mailbox setup" : "Create mailbox") + "</button>" : ""}
-        <button class="link" data-customer-status="${next}" data-customer-id="${c.id}">${next === "suspended" ? "Suspend" : "Restore"}</button></td></tr>`;
+        <td class="actions">${setup ? '<button class="link" data-mailbox-create="' + c.id + '">' + (mailbox ? tr("Finish mailbox setup") : tr("Create mailbox")) + "</button>" : ""}
+        <button class="link" data-customer-status="${next}" data-customer-id="${c.id}">${next === "suspended" ? tr("Suspend") : tr("Restore")}</button></td></tr>`;
     }).join("");
-    $("#view").innerHTML = '<p class="small muted">Suspending revokes customer and device sessions and disables mailbox access. For billing changes, use Stripe.</p><div class="toolbar"><span class="muted">' + customers.length + ' customers</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Email</th><th>Verification</th><th>Status</th><th>Proxy user</th><th>Mailbox</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">No customers.</td></tr>') + "</tbody></table></div>";
+    $("#view").innerHTML = `<p class="small muted">${trHTML("Suspending revokes customer and device sessions and disables mailbox access. For billing changes, use Stripe.")}</p><div class="toolbar"><span class="muted">${trHTML("{count} customers", { count: customers.length })}</span><span class="spacer"></span><button id="refresh">${trHTML("Refresh")}</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>${trHTML("Email")}</th><th>${trHTML("Verification")}</th><th>${trHTML("Status")}</th><th>${trHTML("Proxy user")}</th><th>${trHTML("Mailbox")}</th><th></th></tr></thead><tbody>` + (rows || `<tr><td colspan="7" class="empty">${trHTML("No customers.")}</td></tr>`) + "</tbody></table></div>";
     $("#refresh").onclick = route;
     $$("[data-mailbox-create]").forEach((button) => button.onclick = () => {
       const customer = customers.find((c) => String(c.id) === button.dataset.mailboxCreate);
@@ -1664,61 +1813,61 @@
     });
     $$('[data-customer-id]').forEach((button) => button.onclick = async () => {
       const status = button.dataset.customerStatus;
-      if (await act(() => api("PUT", "/admin/customers/" + button.dataset.customerId, { status }), status === "suspended" ? "Customer suspended." : "Customer restored.")) route();
+      if (await act(() => api("PUT", "/admin/customers/" + button.dataset.customerId, { status }), status === "suspended" ? tr("Customer suspended.") : tr("Customer restored."))) route();
     });
   };
   PAGES.mailboxes = async (_, token) => {
-    setTitle("Mailboxes");
+    setTitle(tr("Mailboxes"));
     const mailboxes = await api("GET", "/admin/mailboxes");
     if (!current(token)) return;
     const rows = mailboxes.map((m) => `<tr><td class="mono">${esc(m.address)}</td><td>${esc(m.customer_email)}</td>
       <td>${mailboxBadge(m)}</td><td>${fmtTime(m.reclaim_at)}</td><td class="actions">
-        ${m.status === "active" ? '<button class="link" data-mailbox-action="disable" data-mailbox-id="' + m.id + '">Disable</button>' : ""}
-        ${m.status === "disabled" && m.entitled ? '<button class="link" data-mailbox-action="enable" data-mailbox-id="' + m.id + '">Enable</button>' : ""}
-        ${m.status !== "deleted" ? '<button class="link danger" data-mailbox-action="delete" data-mailbox-id="' + m.id + '">Delete</button>' : ""}
+        ${m.status === "active" ? '<button class="link" data-mailbox-action="disable" data-mailbox-id="' + m.id + `">${trHTML("Disable")}</button>` : ""}
+        ${m.status === "disabled" && m.entitled ? '<button class="link" data-mailbox-action="enable" data-mailbox-id="' + m.id + `">${trHTML("Enable")}</button>` : ""}
+        ${m.status !== "deleted" ? '<button class="link danger" data-mailbox-action="delete" data-mailbox-id="' + m.id + `">${trHTML("Delete")}</button>` : ""}
       </td></tr>`).join("");
-    $("#view").innerHTML = '<div class="toolbar"><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>Mailbox</th><th>Customer</th><th>Status</th><th>Scheduled deletion</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="empty">No mailboxes.</td></tr>') + "</tbody></table></div>";
+    $("#view").innerHTML = `<div class="toolbar"><span class="spacer"></span><button id="refresh">${trHTML("Refresh")}</button></div><div class="table-wrap"><table><thead><tr><th>${trHTML("Mailbox")}</th><th>${trHTML("Customer")}</th><th>${trHTML("Status")}</th><th>${trHTML("Scheduled deletion")}</th><th></th></tr></thead><tbody>` + (rows || `<tr><td colspan="5" class="empty">${trHTML("No mailboxes.")}</td></tr>`) + "</tbody></table></div>";
     $("#refresh").onclick = route;
     $$("[data-mailbox-action]").forEach((button) => button.onclick = async () => {
       const m = mailboxes.find((entry) => String(entry.id) === button.dataset.mailboxId);
       const path = "/admin/mailboxes/" + enc(m.id);
       const action = button.dataset.mailboxAction;
       if (action === "delete") {
-        const saved = await form("Permanently delete mailbox", [{
-          name: "confirm", label: "Mailbox address", required: true,
-          hint: "Enter " + m.address + " to delete this mailbox and its messages.",
+        const saved = await form(tr("Permanently delete mailbox"), [{
+          name: "confirm", label: tr("Mailbox address"), required: true,
+          hint: tr("Enter {email} to delete this mailbox and its messages.", { email: m.address }),
         }], async (values) => {
           await api("DELETE", path, values);
           return true;
-        }, "Delete mailbox");
+        }, tr("Delete mailbox"));
         if (saved) route();
         return;
       }
       if (await act(async () => {
         await api("POST", path + "/" + action);
         return true;
-      }, action === "disable" ? "Mailbox disabled." : "Mailbox enabled.")) route();
+      }, action === "disable" ? tr("Mailbox disabled.") : tr("Mailbox enabled."))) route();
     });
   };
   PAGES.plans = async (_, token) => {
-    setTitle("Plans");
+    setTitle(tr("Plans"));
     const plans = await api("GET", "/admin/plans");
     if (!current(token)) return;
     const rows = plans.map((plan) => '<tr><td>' + esc(plan.name) + '</td><td>' + money(plan.amount, plan.currency) +
-      '</td><td class="mono">' + esc(plan.stripe_price_id || "—") + '</td><td>' + (plan.active ? "Active" : "Hidden") +
-      '</td><td class="actions"><button class="link" data-edit-plan="' + esc(plan.code) + '">Edit</button></td></tr>').join("");
-    $("#view").innerHTML = '<div class="table-wrap"><table><thead><tr><th>Plan</th><th>Monthly price</th><th>Stripe Price ID</th><th>Availability</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+      '</td><td class="mono">' + esc(plan.stripe_price_id || "—") + '</td><td>' + (plan.active ? tr("Active") : tr("Hidden")) +
+      '</td><td class="actions"><button class="link" data-edit-plan="' + esc(plan.code) + `">${trHTML("Edit")}</button></td></tr>`).join("");
+    $("#view").innerHTML = `<div class="table-wrap"><table><thead><tr><th>${trHTML("Plan")}</th><th>${trHTML("Monthly price")}</th><th>${trHTML("Stripe Price ID")}</th><th>${trHTML("Availability")}</th><th></th></tr></thead><tbody>` + rows + '</tbody></table></div>';
     $$('[data-edit-plan]').forEach((button) => button.onclick = async () => {
       const plan = plans.find((entry) => entry.code === button.dataset.editPlan);
-      const saved = await form("Edit " + plan.name, [
-        { name: "name", label: "Display name", value: plan.name, required: true },
-        { name: "price", label: "Monthly price (CNY)", value: (plan.amount / 100).toFixed(2), required: true },
-        { name: "stripe_price_id", label: "Stripe Price ID", value: plan.stripe_price_id, hint: "Use a monthly CNY Price with the same amount." },
-        { name: "active", label: "Available for new subscriptions", type: "checkbox", value: plan.active },
+      const saved = await form(tr("Edit {plan}", { plan: plan.name }), [
+        { name: "name", label: tr("Display name"), value: plan.name, required: true },
+        { name: "price", label: tr("Monthly price (CNY)"), value: (plan.amount / 100).toFixed(2), required: true },
+        { name: "stripe_price_id", label: tr("Stripe Price ID"), value: plan.stripe_price_id, hint: tr("Use a monthly CNY Price with the same amount.") },
+        { name: "active", label: tr("Available for new subscriptions"), type: "checkbox", value: plan.active },
       ], (values) => {
         const amount = Math.round(Number(values.price) * 100);
         if (!/^\d+(\.\d{1,2})?$/.test(values.price) || amount < 1 || amount > 2147483647) {
-          throw new Error("Enter a valid CNY amount with up to two decimal places.");
+          throw new Error(tr("Enter a valid CNY amount with up to two decimal places."));
         }
         return api("PUT", "/admin/plans", { plans: [{ ...plan, name: values.name, amount, stripe_price_id: values.stripe_price_id, active: values.active }] });
       });
@@ -1726,44 +1875,44 @@
     });
   };
   PAGES.subscriptions = async (_, token) => {
-    setTitle("Subscriptions");
+    setTitle(tr("Subscriptions"));
     const subscriptions = await api("GET", "/admin/subscriptions");
     if (!current(token)) return;
-    const rows = subscriptions.map((s) => '<tr><td class="mono">' + s.id + "</td><td>" + esc(s.email) + "</td><td>" + esc(s.plan) + "</td><td>" + billingBadge(s.status) + "</td><td>" + fmtTime(s.current_period_end) + "</td><td>" + (s.cancel_at_period_end ? '<span class="badge warn">Cancels at renewal</span>' : "—") + "</td></tr>").join("");
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + subscriptions.length + ' subscriptions</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Customer</th><th>Plan</th><th>Status</th><th>Period end</th><th>Renewal</th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">No subscriptions.</td></tr>') + "</tbody></table></div>";
+    const rows = subscriptions.map((s) => '<tr><td class="mono">' + s.id + "</td><td>" + esc(s.email) + "</td><td>" + esc(s.plan) + "</td><td>" + billingBadge(s.status) + "</td><td>" + fmtTime(s.current_period_end) + "</td><td>" + (s.cancel_at_period_end ? `<span class="badge warn">${trHTML("Cancels at renewal")}</span>` : "—") + "</td></tr>").join("");
+    $("#view").innerHTML = `<div class="toolbar"><span class="muted">${trHTML("{count} subscriptions", { count: subscriptions.length })}</span><span class="spacer"></span><button id="refresh">${trHTML("Refresh")}</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>${trHTML("Customer")}</th><th>${trHTML("Plan")}</th><th>${trHTML("Status")}</th><th>${trHTML("Period end")}</th><th>${trHTML("Renewal")}</th></tr></thead><tbody>` + (rows || `<tr><td colspan="6" class="empty">${trHTML("No subscriptions.")}</td></tr>`) + "</tbody></table></div>";
     $("#refresh").onclick = route;
   };
   PAGES.orders = async (_, token) => {
-    setTitle("Orders");
+    setTitle(tr("Orders"));
     const orders = await api("GET", "/admin/orders");
     if (!current(token)) return;
-    const rows = orders.map((o) => '<tr><td class="mono">' + o.id + '</td><td>' + esc(o.email) + "</td><td class=\"mono\">" + (o.subscription_id || "—") + "</td><td>" + money(o.amount, o.currency) + "</td><td>" + billingBadge(o.status) + "</td><td>" + fmtTime(o.paid_at) + "</td><td>" + (o.receipt_url ? '<a href="' + esc(o.receipt_url) + '" target="_blank" rel="noreferrer">Receipt</a>' : "—") + "</td></tr>").join("");
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + orders.length + ' orders</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Customer</th><th>Subscription</th><th>Amount</th><th>Status</th><th>Paid</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="7" class="empty">No orders.</td></tr>') + "</tbody></table></div>";
+    const rows = orders.map((o) => '<tr><td class="mono">' + o.id + '</td><td>' + esc(o.email) + "</td><td class=\"mono\">" + (o.subscription_id || "—") + "</td><td>" + money(o.amount, o.currency) + "</td><td>" + billingBadge(o.status) + "</td><td>" + fmtTime(o.paid_at) + "</td><td>" + (o.receipt_url ? '<a href="' + esc(o.receipt_url) + `" target="_blank" rel="noreferrer">${trHTML("Receipt")}</a>` : "—") + "</td></tr>").join("");
+    $("#view").innerHTML = `<div class="toolbar"><span class="muted">${trHTML("{count} orders", { count: orders.length })}</span><span class="spacer"></span><button id="refresh">${trHTML("Refresh")}</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>${trHTML("Customer")}</th><th>${trHTML("Subscription")}</th><th>${trHTML("Amount")}</th><th>${trHTML("Status")}</th><th>${trHTML("Paid")}</th><th></th></tr></thead><tbody>` + (rows || `<tr><td colspan="7" class="empty">${trHTML("No orders.")}</td></tr>`) + "</tbody></table></div>";
     $("#refresh").onclick = route;
   };
   PAGES.provisioning = async (_, token) => {
-    setTitle("Provisioning queue");
+    setTitle(tr("Provisioning queue"));
     const items = await api("GET", "/admin/provisioning");
     if (!current(token)) return;
-    const rows = items.map((item) => '<tr><td class="mono">' + item.id + "</td><td>" + esc(item.kind.replaceAll("_", " ")) + "</td><td>" + esc(item.email) + "</td><td class=\"mono\">" + item.subscription_id + "</td><td>" + fmtTime(item.created_at) + '</td><td class="actions"><button class="link" data-done="' + item.id + '">Mark done</button></td></tr>').join("");
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">' + items.length + ' items need action</span><span class="spacer"></span><button id="refresh">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Type</th><th>Customer</th><th>Subscription</th><th>Queued</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="empty">No provisioning tasks.</td></tr>') + "</tbody></table></div>";
+    const rows = items.map((item) => '<tr><td class="mono">' + item.id + "</td><td>" + trHTML(item.kind.replaceAll("_", " ")) + "</td><td>" + esc(item.email) + "</td><td class=\"mono\">" + item.subscription_id + "</td><td>" + fmtTime(item.created_at) + '</td><td class="actions"><button class="link" data-done="' + item.id + `">${trHTML("Mark done")}</button></td></tr>`).join("");
+    $("#view").innerHTML = `<div class="toolbar"><span class="muted">${trHTML("{count} items need action", { count: items.length })}</span><span class="spacer"></span><button id="refresh">${trHTML("Refresh")}</button></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>${trHTML("Type")}</th><th>${trHTML("Customer")}</th><th>${trHTML("Subscription")}</th><th>${trHTML("Queued")}</th><th></th></tr></thead><tbody>` + (rows || `<tr><td colspan="6" class="empty">${trHTML("No provisioning tasks.")}</td></tr>`) + "</tbody></table></div>";
     $("#refresh").onclick = route;
     $$('[data-done]').forEach((button) => button.onclick = async () => {
-      const note = prompt("Completion note (optional):") ?? null;
+      const note = prompt(tr("Completion note (optional):")) ?? null;
       if (note === null) return;
-      if (await act(() => api("POST", "/admin/provisioning/" + button.dataset.done + "/done", { note }), "Marked done.")) route();
+      if (await act(() => api("POST", "/admin/provisioning/" + button.dataset.done + "/done", { note }), tr("Marked done."))) route();
     });
   };
 
   // ---- audit ----------------------------------------------------------------------------------------------
   PAGES.audit = async (_, token) => {
-    setTitle("Audit log");
+    setTitle(tr("Audit log"));
     let rows = [], done = false;
-    $("#view").innerHTML = '<div class="toolbar"><input id="actor" placeholder="Filter by actor" type="search"><button id="apply">Filter</button><span class="spacer"></span><span class="muted small">Retained for 180 days. Sensitive values are omitted.</span></div><div id="a-table"></div><div class="toolbar" style="margin-top:12px"><button id="more">Load more</button></div>';
+    $("#view").innerHTML = `<div class="toolbar"><input id="actor" placeholder="${trHTML("Filter by actor")}" type="search"><button id="apply">${trHTML("Filter")}</button><span class="spacer"></span><span class="muted small">${trHTML("Retained for 180 days. Sensitive values are omitted.")}</span></div><div id="a-table"></div><div class="toolbar" style="margin-top:12px"><button id="more">${trHTML("Load more")}</button></div>`;
     const draw = () => {
-      $("#a-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Subject</th><th>Details</th><th>Source</th></tr></thead><tbody>' +
-        (rows.map((r) => "<tr><td>" + fmtTime(r.at) + "</td><td>" + esc(r.actor) + '</td><td class="mono small">' + esc(r.action) + '</td><td class="mono small">' + esc(r.target) + '</td><td class="mono small" style="max-width:360px;overflow-wrap:anywhere">' + esc(r.detail) + '</td><td class="mono small">' + esc(r.address) + "</td></tr>").join("") ||
-          '<tr><td colspan="6" class="empty">No records.</td></tr>') + "</tbody></table></div>";
+      $("#a-table").innerHTML = `<div class="table-wrap"><table><thead><tr><th>${trHTML("Time")}</th><th>${trHTML("Actor")}</th><th>${trHTML("Action")}</th><th>${trHTML("Subject")}</th><th>${trHTML("Details")}</th><th>${trHTML("Source")}</th></tr></thead><tbody>` +
+        (rows.map((r) => "<tr><td>" + fmtTime(r.at) + "</td><td>" + esc(r.actor) + '</td><td class="mono small">' + trHTML(r.action) + '</td><td class="mono small">' + esc(r.target) + '</td><td class="mono small" style="max-width:360px;overflow-wrap:anywhere">' + esc(r.detail) + '</td><td class="mono small">' + esc(r.address) + "</td></tr>").join("") ||
+          `<tr><td colspan="6" class="empty">${trHTML("No records.")}</td></tr>`) + "</tbody></table></div>";
       $("#more").hidden = done;
     };
     const load = async (reset) => {
@@ -1783,37 +1932,38 @@
 
   // ---- admins ---------------------------------------------------------------------------------------------
   PAGES.admins = async (_, token) => {
-    setTitle("Administrators");
+    setTitle(tr("Administrators"));
     const admins = await api("GET", "/admin/admins");
     if (!current(token)) return;
-    $("#view").innerHTML = '<div class="toolbar"><span class="muted">Signed in as ' + esc(me) + '</span><span class="spacer"></span><button id="mypw">Change my password</button><button class="primary" id="add">Add administrator</button></div>' +
-      '<div class="table-wrap"><table><thead><tr><th>Administrator</th><th>Created</th><th>Last sign-in</th><th>Active sessions</th><th></th></tr></thead><tbody>' +
-      admins.map((a) => "<tr><td><b>" + esc(a.name) + "</b>" + (a.name === me ? ' <span class="badge info">You</span>' : "") + "</td><td>" + fmtTime(a.created_at) + "</td><td>" + fmtTime(a.last_login) + "</td><td>" + a.sessions + '</td><td class="actions">' +
-        (a.name !== me ? '<button class="link" data-reset="' + esc(a.name) + '">Reset password</button><button class="link danger" data-del="' + esc(a.name) + '">Delete</button>' : "") + "</td></tr>").join("") + "</tbody></table></div>" +
-      '<p class="small muted">CLI tools and scripts can authenticate with CP_ADMIN_TOKEN. The audit log records them as api-token.</p>';
+    $("#view").innerHTML = `<div class="toolbar"><span class="muted">${trHTML("Signed in as {name}", { name: me })}</span><span class="spacer"></span><button id="mypw">${trHTML("Change my password")}</button><button class="primary" id="add">${trHTML("Add administrator")}</button></div>` +
+      `<div class="table-wrap"><table><thead><tr><th>${trHTML("Administrator")}</th><th>${trHTML("Created")}</th><th>${trHTML("Last sign-in")}</th><th>${trHTML("Active sessions")}</th><th></th></tr></thead><tbody>` +
+      admins.map((a) => "<tr><td><b>" + esc(a.name) + "</b>" + (a.name === me ? ` <span class="badge info">${trHTML("You")}</span>` : "") + "</td><td>" + fmtTime(a.created_at) + "</td><td>" + fmtTime(a.last_login) + "</td><td>" + a.sessions + '</td><td class="actions">' +
+        (a.name !== me ? '<button class="link" data-reset="' + esc(a.name) + `">${trHTML("Reset password")}</button><button class="link danger" data-del="` + esc(a.name) + `">${trHTML("Delete")}</button>` : "") + "</td></tr>").join("") + "</tbody></table></div>" +
+      `<p class="small muted">${trHTML("CLI tools and scripts can authenticate with CP_ADMIN_TOKEN. The audit log records them as api-token.")}</p>`;
     $("#add").onclick = async () => {
-      const r = await form("Add administrator", [{ name: "name", label: "Username", required: true }, { name: "password", label: "Password (optional)", type: "password", hint: "Leave blank to generate a password. Use at least 8 characters." }],
-        (v) => api("POST", "/admin/admins", Object.assign({ name: v.name }, v.password ? { password: v.password } : {})), "Add");
+      const r = await form(tr("Add administrator"), [{ name: "name", label: tr("Username"), required: true }, { name: "password", label: tr("Password (optional)"), type: "password", hint: tr("Leave blank to generate a password. Use at least 8 characters.") }],
+        (v) => api("POST", "/admin/admins", Object.assign({ name: v.name }, v.password ? { password: v.password } : {})), tr("Add"));
       if (!r) return;
-      if (r.password) reveal("Created administrator " + r.name, "Initial password", r.password); else toast("Added.");
+      if (r.password) reveal(tr("Created administrator {name}", { name: r.name }), tr("Initial password"), r.password); else toast(tr("Added."));
       route();
     };
     $("#mypw").onclick = async () => {
-      const r = await form("Change my password", [{ name: "password", label: "New password", type: "password", required: true, hint: "Use at least 8 characters. Sign in again after changing it." }],
+      const r = await form(tr("Change my password"), [{ name: "password", label: tr("New password"), type: "password", required: true, hint: tr("Use at least 8 characters. Sign in again after changing it.") }],
         (v) => api("POST", "/admin/admins/" + enc(me) + "/password", { password: v.password }));
       if (r) showLogin("Password changed. Sign in again.");
     };
     $$("[data-reset]").forEach((b) => b.onclick = async () => {
-      if (!(await confirmBox("Reset " + b.dataset.reset + " password", "Generate a new password and immediately revoke all of the administrator's sessions.", "Reset"))) return;
+      if (!(await confirmBox(tr("Reset {name} password", { name: b.dataset.reset }), trHTML("Generate a new password and immediately revoke all of the administrator's sessions."), tr("Reset")))) return;
       const r = await act(() => api("POST", "/admin/admins/" + enc(b.dataset.reset) + "/password"));
-      if (r) reveal("New password", "New password for " + b.dataset.reset, r.password);
+      if (r) reveal(tr("New password"), tr("New password for {name}", { name: b.dataset.reset }), r.password);
     });
     $$("[data-del]").forEach((b) => b.onclick = async () => {
-      if (!(await confirmBox("Delete administrator " + b.dataset.del, "This administrator loses access immediately.", "Delete"))) return;
-      if (await act(() => api("DELETE", "/admin/admins/" + enc(b.dataset.del)), "Deleted.")) route();
+      if (!(await confirmBox(tr("Delete administrator {name}", { name: b.dataset.del }), trHTML("This administrator loses access immediately."), tr("Delete")))) return;
+      if (await act(() => api("DELETE", "/admin/admins/" + enc(b.dataset.del)), tr("Deleted."))) route();
     });
   };
 
+  bindLanguage();
   boot();
 })();
 </script>
