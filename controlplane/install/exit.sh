@@ -37,6 +37,13 @@
 # Both start at boot without anyone logging in. sing-box starts from the last confirmed config even when the
 # control plane is unreachable; the agent keeps it in step once it can reach the control plane.
 #
+# Automatic updates (docs/exit-agent-updates.md): an agent installed by this version updates itself when the
+# operator includes the host in a rollout. It verifies the signed release, keeps the running binary as
+# /opt/ccproxy-exit/bin/ccproxy-exit-agent.previous, swaps in the new one and exits with status 75; systemd
+# (Restart=always) or launchd (KeepAlive) starts the new binary, which rolls itself back to .previous unless it
+# reports healthy. Only the agent binary changes: the token, install.conf, sing-box, frpc and their configuration
+# and services stay as they are. An older agent has no updater: run this installer once to move it to this path.
+#
 # Options:
 #   --cp URL           control plane base URL (https). Remembered for reruns.
 #   --iface IFACE      Linux only: add the host's routed egress IPs to IFACE. Remembered; --no-iface drops it.

@@ -12,9 +12,13 @@
 #
 # Checks: XTCP registration; the agent's XTCP sync under systemd (installed file confirmed without reload, a second
 # shared port hot-reloaded and confirmed without rerunning the installer, release removes the proxy, ready after a
-# reboot); the proxied request leaves from the exit host's egress IPv4; a 20 MB transfer does not pass through frps; a
-# blocked hole punch closes the connection with no relay; services come back after a reboot without login; uninstall
-# removes them. Needs Docker (with systemd containers) and internet access (GitHub, STUN).
+# reboot); the proxied request leaves from the exit host's egress IPv4; a 20 MB transfer does not pass through frps;
+# managed agent updates (issue #67) with two user ports: a host outside the rollout and a paused rollout keep the
+# release, a tampered release is refused, the agent then moves to the signed release by itself through systemd while
+# Direct and XTCP traffic of both users keeps flowing (sing-box and frpc untouched), and a release whose agent fails
+# to start is rolled back; a blocked hole punch closes the connection with no relay; services come back after a
+# reboot without login; uninstall removes them. Needs Docker (with systemd containers) and internet access (GitHub,
+# STUN). The agents in this test trust a throwaway release key (AGENT_EXTRA_RELEASE_KEYS), never a production one.
 #   controlplane/test/xtcp/run-e2e.sh            KEEP=1 leaves the containers running
 set -euo pipefail
 
@@ -32,12 +36,14 @@ ADMIN_TOKEN="admin-$(rnd)" FRPS_TOKEN="frps-$(rnd)" XTCP_KEY="xtcp-$(rnd)" PG_PA
 CONTAINERS="ccx-pg ccx-cp ccx-frps ccx-exit ccx-visitor ccx-echo"
 
 cleanup() {
+  docker exec ccx-exit journalctl -u ccproxy-exit-agent --no-pager > "$OUT/exit-agent.journal" 2>/dev/null || true
   docker cp ccx-visitor:/tmp/visitor.log "$OUT/" >/dev/null 2>&1 || true
   docker cp ccx-visitor:/tmp/visitor-blocked.log "$OUT/" >/dev/null 2>&1 || true
   if [[ "${KEEP:-0}" != 1 ]]; then
     docker rm -f $CONTAINERS >/dev/null 2>&1 || true
     docker network rm $NET >/dev/null 2>&1 || true
-    rm -rf "$OUT/tls" "$OUT/frps.toml" "$OUT/visitor.toml" "$OUT/client.json"   # test credentials
+    rm -rf "$OUT/tls" "$OUT/frps.toml" "$OUT/visitor.toml" "$OUT/client.json" "$OUT/release.key" \
+      "$OUT/bob-visitor.toml" "$OUT/bob-client.json" "$OUT/direct-client.json"   # test credentials
   fi
 }
 trap cleanup EXIT
@@ -56,9 +62,29 @@ docker network rm $NET >/dev/null 2>&1 || true
 rm -rf "$OUT" && mkdir -p "$OUT/tls" "$OUT/frp" "$OUT/dist"
 chmod 700 "$OUT"
 
-echo "== build: agent dist, control-plane image, test images"
-(cd "$REPO/egress/agent" && ./build.sh >/dev/null)
-cp "$REPO/egress/agent/dist/"* "$OUT/dist/"
+echo "== build: agent dist and signed test releases, control-plane image, test images"
+V1=agent-e2e-v1 V2=agent-e2e-v2 V3=agent-e2e-v3-broken
+(
+  cd "$REPO/egress/agent"
+  go run ./cmd/agent-release keygen "$OUT/release.key" > "$OUT/release-keys.txt"
+  export AGENT_EXTRA_RELEASE_KEYS; AGENT_EXTRA_RELEASE_KEYS=$(cat "$OUT/release-keys.txt")
+  ./build.sh "$V1" >/dev/null 2>&1                     # what the installer serves (CP_AGENT_DIST)
+  cp dist/* "$OUT/dist/"
+  publish() { # publish DIST_DIR VERSION SEQUENCE: a signed release in $OUT/releases/VERSION, as the workflow makes it
+    mkdir -p "$OUT/releases/$2" && cp "$1"/* "$OUT/releases/$2/"
+    go run ./cmd/agent-release record -dist "$OUT/releases/$2" -sequence "$3" -commit "$(git rev-parse HEAD)" >/dev/null
+    go run ./cmd/agent-release sign -dist "$OUT/releases/$2" -key-file "$OUT/release.key" >/dev/null
+    go run ./cmd/agent-release verify -dist "$OUT/releases/$2" -keys "$OUT/release-keys.txt"
+  }
+  ./build.sh "$V2" >/dev/null 2>&1
+  publish dist "$V2" 2
+  # A broken release: its agent exits right after starting (the rollback rehearsal).
+  rm -rf "$OUT/broken-src" && mkdir "$OUT/broken-src" && cp -R ./*.go go.mod build.sh release_keys.txt release cmd "$OUT/broken-src/"
+  perl -0pi -e 's/^\tagent\.attachUpdater\(upd\)\n/\tagent.attachUpdater(upd)\n\tlogf("broken test release: exiting at start")\n\treturn 3\n/m' "$OUT/broken-src/main.go"
+  grep -q 'broken test release' "$OUT/broken-src/main.go"
+  (cd "$OUT/broken-src" && ./build.sh "$V3" >/dev/null 2>&1)
+  publish "$OUT/broken-src/dist" "$V3" 3
+)
 docker build -q -t ccx-cp "$REPO/controlplane" >/dev/null
 docker build -q -t ccx-systemd - >/dev/null <<'EOF'
 FROM debian:12
@@ -107,7 +133,8 @@ waitfor 60 "postgres" "docker exec ccx-pg pg_isready -q -U postgres 2>/dev/null"
 DB="postgresql://postgres:$PG_PASSWORD@ccx-pg:5432/cp?sslmode=disable"
 docker run --rm --network $NET -e DATABASE_URL="$DB" ccx-cp init >/dev/null
 docker run -d --name ccx-cp --network $NET --ip $IP_CP --network-alias cp -e DATABASE_URL="$DB" -e CP_ADMIN_TOKEN="$ADMIN_TOKEN" \
-  -e CP_AGENT_DIST=/agent-dist -v "$OUT/dist:/agent-dist:ro" -v "$OUT/tls:/tls:ro" \
+  -e CP_AGENT_DIST=/agent-dist -v "$OUT/dist:/agent-dist:ro" -e CP_AGENT_RELEASES=/agent-releases -v "$OUT/releases:/agent-releases:ro" \
+  -v "$OUT/tls:/tls:ro" \
   ccx-cp serve --listen 0.0.0.0 --tls-cert /tls/cp.pem --tls-key /tls/cp.key >/dev/null
 cat > "$OUT/frps.toml" <<EOF
 bindPort = 7003
@@ -245,6 +272,104 @@ got=$(proxied -o /dev/null -w '%{size_download}' "http://$IP_ECHO:8080/big")
 after=$(frps_bytes)
 echo "20 MB transfer: downloaded $got bytes; frps interface counters $before -> $after ($((after - before)) bytes)"
 check "20 MB through the tunnel, frps carried under 1 MB" "[ '$got' = $((20 << 20)) ] && [ $((after - before)) -lt 1048576 ]"
+
+echo "== automatic agent update (issue #67): two user ports, Direct and XTCP, normal service execution"
+host_field() { # host_field KEY: this host's field in GET /admin/agent-rollout
+  api GET /admin/agent-rollout | python3 -c "import json,sys; print([h for h in json.load(sys.stdin)['hosts'] if h['host']=='macmini-sg-208'][0]['$1'])"
+}
+running_version() { host_field agent_version; }
+launcher_version() { docker exec ccx-exit /opt/ccproxy-exit/bin/ccproxy-exit-agent version | awk '{print $2}'; }
+staged_version() { docker exec ccx-exit "/opt/ccproxy-exit/bin/releases/$1/ccproxy-exit-agent-linux-$ARCH" version | awk '{print $2}'; }
+unit_pid() { docker exec ccx-exit systemctl show -p MainPID --value "$1"; }
+agent_restarts() { docker exec ccx-exit systemctl show -p NRestarts --value ccproxy-exit-agent; }
+# agent_logged PATTERN: the agent's journal has a matching line. Saved to a file first: with pipefail, journalctl piped
+# into grep -q fails (SIGPIPE) when the match comes early in a long journal.
+agent_logged() { docker exec ccx-exit journalctl -u ccproxy-exit-agent --no-pager > "$OUT/agent-journal.txt"; grep -q -- "$1" "$OUT/agent-journal.txt"; }
+# bob back on the second port, with his own visitor (user key) and client; a Direct client that reaches alice's
+# sing-box listener on the exit host without frp.
+api POST /admin/users/bob/assign "{\"ip\":\"$IP_EXIT\",\"port\":20444}" >/dev/null
+waitfor 120 "both ports ready" "[ \"\$(port_status)\" = '20443=ready 20444=ready' ]"
+BOB_TOKEN=$(printf '{"username":"bob","password":"bob-password-0123","device":"laptop"}' |
+  docker exec -i ccx-visitor-api curl -q -sS --cacert /tls/ca.pem -H 'Content-Type: application/json' -d @- https://cp:8443/v1/login | json '["token"]')
+printf 'header = "Authorization: Bearer %s"\n' "$BOB_TOKEN" |
+  docker exec -i ccx-visitor-api curl -q -sS --config - --cacert /tls/ca.pem "https://cp:8443/v1/config?mode=proxy" |
+  python3 -c "import json,sys; c=json.load(sys.stdin); c['inbounds'][0]['listen_port']=2081; json.dump(c, sys.stdout)" > "$OUT/bob-client.json"
+api GET "/admin/users/bob/xtcp-visitor?ca_file=/tls/ca.pem" | json '["frpc_toml"]' > "$OUT/bob-visitor.toml"
+python3 -c "import json,sys; c=json.load(open(sys.argv[1])); c['inbounds'][0]['listen_port']=2082; c['outbounds'][0]['server']=sys.argv[2]; json.dump(c, sys.stdout)" \
+  "$OUT/client.json" "$IP_EXIT" > "$OUT/direct-client.json"
+docker cp "$OUT/bob-client.json" ccx-visitor:/etc/bob-client.json >/dev/null
+docker cp "$OUT/bob-visitor.toml" ccx-visitor:/etc/bob-visitor.toml >/dev/null
+docker cp "$OUT/direct-client.json" ccx-visitor:/etc/direct-client.json >/dev/null
+docker exec -e FRP_AUTH_TOKEN="$FRPS_TOKEN" ccx-visitor sh -c '(frpc -c /etc/bob-visitor.toml > /tmp/bob-visitor.log 2>&1 &); (sing-box run -c /etc/bob-client.json > /tmp/bob-client.log 2>&1 &); (sing-box run -c /etc/direct-client.json > /tmp/direct-client.log 2>&1 &)'
+via() { docker exec ccx-visitor curl -q -sS --max-time 20 -x "socks5h://127.0.0.1:$1" "http://$IP_ECHO:8080/" 2>/dev/null; }
+if waitfor 90 "bob through XTCP" "[ \"\$(via 2081)\" = $IP_EXIT ]"; then echo "PASS bob (second port, own visitor key) leaves from $IP_EXIT"
+else echo "FAIL bob through XTCP"; status=1; fi
+if waitfor 30 "alice Direct" "[ \"\$(via 2082)\" = $IP_EXIT ]"; then echo "PASS alice's Direct entry (sing-box listener, no frp) leaves from $IP_EXIT"
+else echo "FAIL alice Direct"; status=1; fi
+check "the installed agent runs and reports $V1 (heartbeat agent_version)" "[ \"\$(running_version)\" = $V1 ] && [ \"\$(host_field agent_version)\" = $V1 ]"
+check "it reports its updater idle (no rollout)" "[ \"\$(host_field state)\" = idle ]"
+check "the control plane lists the signed releases $V2 and $V3" "api GET /admin/agent-releases | grep -q '\"$V2\"' && api GET /admin/agent-releases | grep -q '\"$V3\"'"
+
+api POST /admin/hosts '{"name":"other-host","public_host":"192.0.2.99","server_name":"www.cloudflare.com","port_min":21000,"port_max":21099}' >/dev/null
+api PUT /admin/agent-rollout "{\"version\":\"$V2\",\"hosts\":[\"other-host\"]}" >/dev/null
+docker exec ccx-exit systemctl restart ccproxy-exit-agent   # an immediate rollout check, instead of the next one in 2 minutes
+sleep 20
+check "a host outside the rollout keeps $V1" "[ \"\$(running_version)\" = $V1 ] && [ \"\$(host_field outcome)\" = not_targeted ]"
+api PUT /admin/agent-rollout "{\"version\":\"$V2\",\"hosts\":[\"macmini-sg-208\"],\"paused\":true}" >/dev/null
+docker exec ccx-exit systemctl restart ccproxy-exit-agent
+sleep 20
+check "a paused rollout does not upgrade the targeted host" "[ \"\$(running_version)\" = $V1 ] && [ \"\$(host_field outcome)\" = waiting ]"
+
+BIN="$OUT/releases/$V2/ccproxy-exit-agent-linux-$ARCH"
+cp "$BIN" "$OUT/good-binary" && printf 'tampered' >> "$BIN"
+api POST /admin/agent-rollout/resume >/dev/null
+docker exec ccx-exit systemctl restart ccproxy-exit-agent
+if waitfor 60 "the refused download is reported" "[ \"\$(host_field state)\" = failed ]"; then echo "PASS a tampered release binary is refused: $(host_field error)"
+else echo "FAIL tampered binary: state $(host_field state)"; status=1; fi
+check "and the host keeps running $V1 with both ports ready" "[ \"\$(running_version)\" = $V1 ] && [ \"\$(port_status)\" = '20443=ready 20444=ready' ]"
+cp "$OUT/good-binary" "$BIN"
+
+# From here on the agent works alone: its next periodic check (at most --update-interval, 120 s) finds the release.
+SB_PID=$(unit_pid ccproxy-exit-singbox) FRPC_PID=$(unit_pid ccproxy-exit-frpc) RESTARTS=$(agent_restarts)
+docker exec -d ccx-visitor sh -c 'rm -f /tmp/upd-*.out /tmp/upd.stop; for p in 2080 2081 2082; do (while [ ! -f /tmp/upd.stop ]; do if curl -q -sS --max-time 5 -x socks5h://127.0.0.1:$p http://'"$IP_ECHO"':8080/ >/dev/null 2>&1; then echo ok; else echo fail; fi >> /tmp/upd-$p.out; sleep 0.5; done) & done; wait'
+started=$SECONDS
+if waitfor 240 "the automatic update" "[ \"\$(host_field outcome)\" = on_target ] && [ \"\$(host_field state)\" = updated ]"; then
+  echo "PASS the host moved to $V2 by itself ($((SECONDS - started))s after the release became available to it)"
+else echo "FAIL automatic update: outcome $(host_field outcome), state $(host_field state), error $(host_field error)"; status=1; fi
+check "the heartbeat reports agent_version $V2, previous $V1" "[ \"\$(host_field agent_version)\" = $V2 ] && [ \"\$(host_field previous_version)\" = $V1 ]"
+check "$V2 runs from its release directory and the $V1 launcher is unchanged" \
+  "[ \"\$(running_version)\" = $V2 ] && [ \"\$(launcher_version)\" = $V1 ] && [ \"\$(staged_version $V2)\" = $V2 ]"
+check "systemd restarted the agent once (exit 75, Restart=always)" "[ \"\$(agent_restarts)\" = $((RESTARTS + 1)) ]"
+check "the new agent confirmed itself healthy and adopted sing-box's config without a reload" \
+  "agent_logged 'update: agent-e2e-v2 (sequence 2) confirmed healthy' && agent_logged 'adopted it without a reload'"
+check "sing-box and frpc were not restarted (MainPIDs unchanged)" "[ \"\$(unit_pid ccproxy-exit-singbox)\" = '$SB_PID' ] && [ \"\$(unit_pid ccproxy-exit-frpc)\" = '$FRPC_PID' ]"
+check "both XTCP ports are still ready" "[ \"\$(port_status)\" = '20443=ready 20444=ready' ] && [ \"\$(sync_state)\" = ready ]"
+check "enrollment and configuration are untouched (token, install.conf, frpc.toml)" \
+  "docker exec ccx-exit sh -c 'test -s /etc/ccproxy-exit/agent.token && grep -q \"AGENT_VERSION=.$V1.\" /etc/ccproxy-exit/install.conf && grep -q ccproxy-208-direct-20444 /etc/ccproxy-exit/frpc.toml'"
+docker exec ccx-visitor touch /tmp/upd.stop
+sleep 2
+for p in 2080 2081 2082; do
+  docker exec ccx-visitor cat /tmp/upd-$p.out > "$OUT/update-probe-$p.txt"
+  echo "during the update, port $p: $(grep -c ok "$OUT/update-probe-$p.txt") ok, $(grep -c fail "$OUT/update-probe-$p.txt") failed"
+done
+check "alice (XTCP), bob (XTCP, second port) and alice (Direct) were never interrupted by the update" \
+  "! grep -q fail '$OUT/update-probe-2080.txt' '$OUT/update-probe-2081.txt' '$OUT/update-probe-2082.txt' && grep -q ok '$OUT/update-probe-2080.txt' && grep -q ok '$OUT/update-probe-2081.txt' && grep -q ok '$OUT/update-probe-2082.txt'"
+
+echo "== rollback rehearsal: $V3's agent exits right after starting"
+api PUT /admin/agent-rollout "{\"version\":\"$V3\",\"hosts\":[\"macmini-sg-208\"]}" >/dev/null
+started=$SECONDS
+if waitfor 300 "the rollback" "[ \"\$(host_field state)\" = rolled_back ] && [ \"\$(host_field target_version)\" = $V3 ]"; then
+  echo "PASS $V3 was rolled back to $V2 ($((SECONDS - started))s): $(host_field error)"
+else echo "FAIL rollback: state $(host_field state), target $(host_field target_version)"; status=1; fi
+check "the console shows the rollout failed for this host, running $V2" "[ \"\$(host_field outcome)\" = failed ] && [ \"\$(host_field agent_version)\" = $V2 ] && [ \"\$(running_version)\" = $V2 ]"
+check "$V3 did start (and exited) before the rollback" "agent_logged 'broken test release: exiting at start' && agent_logged 'update: rolling back agent-e2e-v3-broken to agent-e2e-v2'"
+check "after the rollback both ports are ready and sing-box and frpc kept running" \
+  "[ \"\$(port_status)\" = '20443=ready 20444=ready' ] && [ \"\$(unit_pid ccproxy-exit-singbox)\" = '$SB_PID' ] && [ \"\$(unit_pid ccproxy-exit-frpc)\" = '$FRPC_PID' ]"
+check "alice and bob (XTCP) and alice (Direct) still leave from $IP_EXIT" "[ \"\$(via 2080)\" = $IP_EXIT ] && [ \"\$(via 2081)\" = $IP_EXIT ] && [ \"\$(via 2082)\" = $IP_EXIT ]"
+sleep 15
+check "$V2 stays: the rolled-back release is not retried for the same rollout" "[ \"\$(running_version)\" = $V2 ] && [ \"\$(host_field state)\" = rolled_back ]"
+api DELETE /admin/agent-rollout >/dev/null
+docker exec ccx-visitor sh -c 'pkill -f bob-visitor.toml; pkill -f bob-client.json; pkill -f direct-client.json' || true
 
 echo "== failed hole punching closes the connection (no relay)"
 docker exec ccx-exit sh -c "iptables -I INPUT -p udp -s $IP_VISITOR -j DROP && iptables -I OUTPUT -p udp -d $IP_VISITOR -j DROP"

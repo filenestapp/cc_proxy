@@ -94,6 +94,9 @@ func (s *store) initializeSchema(ctx context.Context) error {
 		if err := ensureXTCPTable(ctx, tx); err != nil {
 			return err
 		}
+		if err := ensureAgentUpdateTables(ctx, tx); err != nil {
+			return err
+		}
 		if err := ensureCustomerTables(ctx, tx); err != nil {
 			return err
 		}

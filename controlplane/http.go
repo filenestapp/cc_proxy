@@ -166,6 +166,7 @@ func newAPIWithMailAndPublicURL(s *store, adminToken, probeToken string, proxies
 	a.accountRoutes()
 	a.accountPageRoutes()
 	a.installRoutes()
+	a.agentUpdateRoutes()
 	a.xtcpRoutes()
 	a.mux.HandleFunc("/", noRoute)
 	return routeByHost(a.mux)
