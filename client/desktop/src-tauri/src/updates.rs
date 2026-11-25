@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
@@ -23,6 +23,8 @@ struct Gate {
     installing: bool,
     deferred: bool,
     presented: bool,
+    offered_at: Option<Instant>,
+    activation_claimed: bool,
 }
 
 /// A pending update belongs only to this process. The frontend marks a queued offer as presented
@@ -63,6 +65,11 @@ enum InstallResult {
     Failed,
 }
 
+enum CheckResult {
+    Offer(Option<UpdateInfo>),
+    Busy,
+}
+
 fn info(update: &Update) -> UpdateInfo {
     UpdateInfo {
         version: update.version.clone(),
@@ -81,7 +88,7 @@ impl PendingUpdate {
 
     fn begin_check(&self) -> bool {
         let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
-        if gate.checking || gate.installing || gate.deferred {
+        if gate.checking || gate.installing || gate.deferred || gate.activation_claimed {
             return false;
         }
         gate.checking = true;
@@ -93,6 +100,7 @@ impl PendingUpdate {
         gate.checking = false;
         if !gate.deferred {
             gate.presented = false;
+            gate.offered_at = update.as_ref().map(|_| Instant::now());
             *self
                 .update
                 .lock()
@@ -123,7 +131,7 @@ impl PendingUpdate {
         if require_presentation && !gate.presented {
             return Err(InstallResult::WaitingForPresentation);
         }
-        if gate.checking || gate.installing {
+        if gate.checking || gate.installing || gate.activation_claimed {
             return Err(InstallResult::WaitingForPresentation);
         }
         let Some(update) = self
@@ -139,16 +147,17 @@ impl PendingUpdate {
     }
 
     fn finish_install(&self) {
-        self.gate
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .installing = false;
+        let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+        gate.installing = false;
+        gate.activation_claimed = false;
     }
 
     fn fail_offer(&self) {
         let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
         gate.installing = false;
+        gate.activation_claimed = false;
         gate.presented = false;
+        gate.offered_at = None;
         if !gate.deferred {
             *self
                 .update
@@ -161,11 +170,13 @@ impl PendingUpdate {
         }
     }
 
-    fn defer(&self) {
-        self.gate
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .deferred = true;
+    fn defer(&self) -> bool {
+        let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+        if gate.activation_claimed {
+            return false;
+        }
+        gate.deferred = true;
+        true
     }
 
     fn deferred(&self) -> bool {
@@ -173,6 +184,31 @@ impl PendingUpdate {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .deferred
+    }
+
+    fn checking(&self) -> bool {
+        self.gate
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .checking
+    }
+
+    fn activation_delay(&self) -> Option<Duration> {
+        let gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+        if !gate.presented || gate.deferred || gate.activation_claimed {
+            return None;
+        }
+        gate.offered_at
+            .map(|time| INSTALL_GRACE.saturating_sub(time.elapsed()))
+    }
+
+    fn claim_activation(&self) -> bool {
+        let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+        if gate.deferred || gate.activation_claimed {
+            return false;
+        }
+        gate.activation_claimed = true;
+        true
     }
 
     fn state_for_frontend(&self) -> UpdateState {
@@ -196,15 +232,19 @@ impl PendingUpdate {
     }
 }
 
-async fn check(app: &AppHandle, pending: &PendingUpdate) -> Result<Option<UpdateInfo>, String> {
+async fn check(app: &AppHandle, pending: &PendingUpdate) -> Result<CheckResult, String> {
     if !CONFIGURED || pending.deferred() {
-        return Ok(None);
+        return Ok(CheckResult::Offer(None));
     }
     if let Some(update) = pending.cached() {
-        return Ok(Some(update));
+        return Ok(CheckResult::Offer(Some(update)));
     }
     if !pending.begin_check() {
-        return Ok(pending.cached());
+        return if pending.checking() {
+            Ok(CheckResult::Busy)
+        } else {
+            Ok(CheckResult::Offer(pending.cached()))
+        };
     }
     let result = match app.updater() {
         Ok(updater) => updater.check().await.map_err(|error| error.to_string()),
@@ -214,7 +254,7 @@ async fn check(app: &AppHandle, pending: &PendingUpdate) -> Result<Option<Update
         Ok(update) => {
             let info = update.as_ref().map(info);
             pending.finish_check(update);
-            Ok(info)
+            Ok(CheckResult::Offer(info))
         }
         Err(error) => {
             pending.finish_failed_check();
@@ -244,13 +284,13 @@ async fn install(
         }
     };
     let _session = ccproxy_core::session::lock();
-    if pending.deferred() {
-        pending.finish_install();
-        return Err(InstallResult::Deferred);
-    }
     if app.tunnel.wants_connection() {
         pending.finish_install();
         return Err(InstallResult::Connected);
+    }
+    if !pending.claim_activation() {
+        pending.finish_install();
+        return Err(InstallResult::Deferred);
     }
     if update.install(&package).is_err() {
         pending.fail_offer();
@@ -276,8 +316,12 @@ pub(crate) fn start_automatic_updates(app_handle: AppHandle) {
             let pending = app_handle.state::<PendingUpdate>();
             let app = app_handle.state::<std::sync::Arc<App>>();
             match check(&app_handle, &pending).await {
-                Ok(Some(_)) => {
-                    tokio::time::sleep(INSTALL_GRACE).await;
+                Ok(CheckResult::Offer(Some(_))) => {
+                    let Some(delay) = pending.activation_delay() else {
+                        tokio::time::sleep(PRESENTATION_RETRY).await;
+                        continue;
+                    };
+                    tokio::time::sleep(delay).await;
                     match install(&app_handle, &app, &pending, true).await {
                         Ok(()) => unreachable!("restart exits the process"),
                         Err(InstallResult::WaitingForPresentation) => {
@@ -291,7 +335,8 @@ pub(crate) fn start_automatic_updates(app_handle: AppHandle) {
                         }
                     }
                 }
-                Ok(None) => tokio::time::sleep(CHECK_EVERY).await,
+                Ok(CheckResult::Offer(None)) => tokio::time::sleep(CHECK_EVERY).await,
+                Ok(CheckResult::Busy) => tokio::time::sleep(PRESENTATION_RETRY).await,
                 Err(error) => {
                     eprintln!("Update check failed: {error}");
                     tokio::time::sleep(backoff).await;
@@ -307,7 +352,10 @@ pub(crate) async fn check_for_update(
     app: AppHandle,
     pending: State<'_, PendingUpdate>,
 ) -> Result<Option<UpdateInfo>, String> {
-    check(&app, &pending).await
+    match check(&app, &pending).await? {
+        CheckResult::Offer(update) => Ok(update),
+        CheckResult::Busy => Ok(None),
+    }
 }
 
 #[tauri::command]
@@ -327,14 +375,20 @@ pub(crate) async fn install_update(
 }
 
 #[tauri::command]
-pub(crate) fn defer_update(pending: State<'_, PendingUpdate>) {
-    pending.defer();
+pub(crate) fn defer_update(pending: State<'_, PendingUpdate>) -> Result<(), String> {
+    pending
+        .defer()
+        .then_some(())
+        .ok_or_else(|| "The update is already being activated.".into())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{next_backoff, Gate, InstallResult, PendingUpdate, RETRY_MAX, RETRY_MIN};
-    use std::time::Duration;
+    use super::{
+        next_backoff, Gate, InstallResult, PendingUpdate, INSTALL_GRACE, PRESENTATION_RETRY,
+        RETRY_MAX, RETRY_MIN,
+    };
+    use std::time::{Duration, Instant};
 
     #[test]
     fn gate_serializes_check_and_install() {
@@ -369,7 +423,7 @@ mod tests {
     #[test]
     fn later_blocks_manual_and_automatic_activation() {
         let pending = PendingUpdate::default();
-        pending.defer();
+        assert!(pending.defer());
         assert!(matches!(
             pending.begin_install(false),
             Err(InstallResult::Deferred)
@@ -378,5 +432,33 @@ mod tests {
             pending.begin_install(true),
             Err(InstallResult::Deferred)
         ));
+    }
+
+    #[test]
+    fn busy_check_keeps_the_scheduler_in_the_short_retry_window() {
+        let pending = PendingUpdate::default();
+        assert!(pending.begin_check());
+        assert!(pending.checking());
+        assert_eq!(PRESENTATION_RETRY, Duration::from_secs(5));
+        pending.finish_failed_check();
+        assert!(!pending.checking());
+    }
+
+    #[test]
+    fn activation_claim_rejects_a_late_deferral() {
+        let pending = PendingUpdate::default();
+        assert!(pending.claim_activation());
+        assert!(!pending.defer());
+    }
+
+    #[test]
+    fn presentation_grace_is_anchored_to_the_first_offer() {
+        let pending = PendingUpdate::default();
+        {
+            let mut gate = pending.gate.lock().unwrap();
+            gate.presented = true;
+            gate.offered_at = Some(Instant::now() - INSTALL_GRACE);
+        }
+        assert_eq!(pending.activation_delay(), Some(Duration::ZERO));
     }
 }

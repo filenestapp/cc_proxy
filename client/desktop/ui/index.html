@@ -547,9 +547,13 @@ import { createPreferenceMenu } from "./preferences.mjs";
   }
 
   function deferUpdate() {
-    updateDismissed = true;
-    invoke("defer_update").catch(() => {});
-    render();
+    invoke("defer_update").then(() => {
+      updateDismissed = true;
+      render();
+    }).catch((error) => {
+      updateError = String(error);
+      render();
+    });
   }
 
   function showPassword(show) {

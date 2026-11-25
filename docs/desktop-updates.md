@@ -37,13 +37,18 @@ and Debian packages on Linux, NSIS on Windows, and a macOS application-bundle ar
 artifact also includes the `.dmg` and `.deb` first-install packages. Windows uses Tauri's passive
 installer mode and may show installer progress while it applies the update.
 
+On Linux, Tauri selects the updater payload that matches the installed bundle type. An AppImage
+replaces the AppImage. A Debian installation uses `pkexec` to run `dpkg`, so the desktop user may
+receive an administrator-credential prompt before the package update completes.
+
 ## Client behavior
 
 The app checks for a signed update at launch and when the window opens. It queues a valid update,
 waits for the window to show the offer, then automatically installs after the proxy tunnel
 disconnects. The install command checks the tunnel state and the Later choice again immediately
-before activation. A failed download, signature verification failure, or installation error leaves
-the current app in place, clears the stale offer, reports the failure in the window, and retries the
+before activation. Once activation is claimed, a late Later request is rejected rather than racing
+the installer. A failed download, signature verification failure, or installation error leaves the
+current app in place, clears the stale offer, reports the failure in the window, and retries the
 signed manifest with bounded backoff. The user can dismiss an update and receive it again on the
 next launch.
 
