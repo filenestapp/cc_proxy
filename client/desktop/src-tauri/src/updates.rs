@@ -22,9 +22,22 @@ struct Gate {
     checking: bool,
     installing: bool,
     deferred: bool,
-    presented: bool,
-    offered_at: Option<Instant>,
+    presented_at: Option<Instant>,
     activation_claimed: bool,
+}
+
+impl Gate {
+    fn mark_presented(&mut self, now: Instant) {
+        self.presented_at.get_or_insert(now);
+    }
+
+    fn activation_delay(&self, now: Instant) -> Option<Duration> {
+        if self.deferred || self.activation_claimed {
+            return None;
+        }
+        self.presented_at
+            .map(|time| INSTALL_GRACE.saturating_sub(now.saturating_duration_since(time)))
+    }
 }
 
 /// A pending update belongs only to this process. The frontend marks a queued offer as presented
@@ -99,8 +112,7 @@ impl PendingUpdate {
         let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
         gate.checking = false;
         if !gate.deferred {
-            gate.presented = false;
-            gate.offered_at = update.as_ref().map(|_| Instant::now());
+            gate.presented_at = None;
             *self
                 .update
                 .lock()
@@ -128,7 +140,7 @@ impl PendingUpdate {
         if gate.deferred {
             return Err(InstallResult::Deferred);
         }
-        if require_presentation && !gate.presented {
+        if require_presentation && gate.presented_at.is_none() {
             return Err(InstallResult::WaitingForPresentation);
         }
         if gate.checking || gate.installing || gate.activation_claimed {
@@ -156,8 +168,7 @@ impl PendingUpdate {
         let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
         gate.installing = false;
         gate.activation_claimed = false;
-        gate.presented = false;
-        gate.offered_at = None;
+        gate.presented_at = None;
         if !gate.deferred {
             *self
                 .update
@@ -194,12 +205,10 @@ impl PendingUpdate {
     }
 
     fn activation_delay(&self) -> Option<Duration> {
-        let gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
-        if !gate.presented || gate.deferred || gate.activation_claimed {
-            return None;
-        }
-        gate.offered_at
-            .map(|time| INSTALL_GRACE.saturating_sub(time.elapsed()))
+        self.gate
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .activation_delay(Instant::now())
     }
 
     fn claim_activation(&self) -> bool {
@@ -220,7 +229,7 @@ impl PendingUpdate {
             .as_ref()
             .map(info);
         if update.is_some() {
-            gate.presented = true;
+            gate.mark_presented(Instant::now());
         }
         UpdateState {
             update,
@@ -392,13 +401,15 @@ mod tests {
 
     #[test]
     fn gate_serializes_check_and_install() {
-        let mut gate = Gate::default();
-        gate.checking = true;
-        assert!(gate.checking);
-        assert!(!gate.installing);
-        gate.checking = false;
-        gate.installing = true;
-        assert!(gate.installing);
+        let pending = PendingUpdate::default();
+        assert!(pending.begin_check());
+        assert!(!pending.begin_check());
+        assert!(matches!(
+            pending.begin_install(false),
+            Err(InstallResult::WaitingForPresentation)
+        ));
+        pending.finish_check(None);
+        assert!(pending.begin_check());
     }
 
     #[test]
@@ -452,13 +463,26 @@ mod tests {
     }
 
     #[test]
-    fn presentation_grace_is_anchored_to_the_first_offer() {
-        let pending = PendingUpdate::default();
-        {
-            let mut gate = pending.gate.lock().unwrap();
-            gate.presented = true;
-            gate.offered_at = Some(Instant::now() - INSTALL_GRACE);
-        }
-        assert_eq!(pending.activation_delay(), Some(Duration::ZERO));
+    fn presentation_grace_waits_for_the_frontend_and_is_not_reset_by_polling() {
+        let mut gate = Gate::default();
+        let started = Instant::now();
+        let presented = started + INSTALL_GRACE + Duration::from_secs(10);
+
+        assert_eq!(gate.activation_delay(started), None);
+        assert_eq!(gate.activation_delay(presented), None);
+
+        gate.mark_presented(presented);
+        assert_eq!(gate.activation_delay(presented), Some(INSTALL_GRACE));
+
+        let next_poll = presented + Duration::from_secs(5);
+        gate.mark_presented(next_poll);
+        assert_eq!(
+            gate.activation_delay(next_poll),
+            Some(INSTALL_GRACE - Duration::from_secs(5))
+        );
+        assert_eq!(
+            gate.activation_delay(presented + INSTALL_GRACE),
+            Some(Duration::ZERO)
+        );
     }
 }
