@@ -151,6 +151,7 @@ func newAPIWithMailAndPublicURL(s *store, adminToken, probeToken string, proxies
 	a.bind("POST /v1/login", "", "", a.login)
 	a.bind("GET /v1/me", "device", "", a.me)
 	a.bind("GET /v1/config", "device", "", a.deviceConfig)
+	a.bind("GET /v1/xtcp-visitor", "device", "", a.deviceXTCPVisitor)
 	a.bind("POST /v1/logout", "device", "", a.deviceLogout)
 	a.bind("GET /agent/ips", "agent", "", a.agentIPs)
 	a.bind("GET /agent/server-config", "agent", "", a.agentConfig)

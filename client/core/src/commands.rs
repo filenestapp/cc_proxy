@@ -81,6 +81,8 @@ pub enum ConnectError {
     Unassigned(String),
     Configuration(String),
     Authorization(String),
+    /// The exit host uses XTCP and no working visitor can be set up for this device.
+    Xtcp(String),
 }
 
 impl fmt::Display for ConnectError {
@@ -91,6 +93,7 @@ impl fmt::Display for ConnectError {
             Self::Unassigned(detail) => write!(f, "No egress IP is assigned: {detail}"),
             Self::Configuration(detail) => write!(f, "Could not load the configuration: {detail}"),
             Self::Authorization(detail) => write!(f, "Administrator authorization was unavailable: {detail}"),
+            Self::Xtcp(detail) => write!(f, "The XTCP visitor is unavailable: {detail}"),
         }
     }
 }
@@ -103,6 +106,7 @@ pub fn connect(paths: &Paths, tunnel: &Tunnel, fx: &dyn Effects) -> Result<Conne
     match fx.sync(paths, &session).map_err(|error| ConnectError::Configuration(format!("{error:#}")))? {
         SyncOutcome::SignedOut => return Err(ConnectError::SessionExpired),
         SyncOutcome::Unassigned(detail) => return Err(ConnectError::Unassigned(detail)),
+        SyncOutcome::XtcpUnavailable(detail) => return Err(ConnectError::Xtcp(detail)),
         SyncOutcome::Superseded => return Ok(Connected::Superseded),
         SyncOutcome::Updated | SyncOutcome::Unchanged => {}
     }

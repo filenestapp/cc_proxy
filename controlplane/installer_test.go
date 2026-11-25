@@ -135,6 +135,37 @@ func TestSingBoxPinMatchesTheDesktopBuild(t *testing.T) {
 	}
 }
 
+// The desktop app bundles the same frpc the exit installer pins (issue #61): same version, and the build script
+// verifies each asset against frpc.json itself rather than a copy of the digests.
+func TestFrpcPinMatchesTheDesktopBuild(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join("..", "client", "desktop", "scripts", "fetch-binaries.sh"))
+	if err != nil {
+		t.Skip("desktop build script not present:", err)
+	}
+	m := regexp.MustCompile(`(?m)^FRP_VERSION="([^"]+)"`).FindSubmatch(script)
+	pins, err := loadFrpcPins()
+	if err != nil || m == nil || pins.Version != string(m[1]) {
+		t.Fatalf("pinned %s, desktop %s, %v", pins.Version, m, err)
+	}
+	if !bytes.Contains(script, []byte(`FRP_PINS="$CLIENT/../controlplane/install/frpc.json"`)) {
+		t.Fatal("fetch-binaries.sh must verify frpc against controlplane/install/frpc.json")
+	}
+	if _, err := os.Stat(filepath.Join("install", "frpc.json")); err != nil {
+		t.Fatal(err)
+	}
+	// Every desktop target the script builds has a pinned frpc asset.
+	for _, asset := range regexp.MustCompile(`asset="([a-z0-9-]+)"`).FindAllSubmatch(script, -1) {
+		a, ok := pins.Assets[string(asset[1])]
+		if !ok || len(a.SHA256) != 64 || !strings.Contains(a.File, pins.Version) {
+			t.Fatalf("no frpc pin for desktop asset %s: %+v", asset[1], a)
+		}
+	}
+	conf, err := os.ReadFile(filepath.Join("..", "client", "desktop", "src-tauri", "tauri.conf.json"))
+	if err != nil || !bytes.Contains(conf, []byte(`"binaries/frpc"`)) {
+		t.Fatalf("tauri.conf.json must bundle binaries/frpc: %v", err)
+	}
+}
+
 func get(t *testing.T, h http.Handler, path, token string) (int, []byte) {
 	return getHTTP(t, h, path, token, "")
 }

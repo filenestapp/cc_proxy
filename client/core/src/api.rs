@@ -44,6 +44,21 @@ pub enum ConfigFetch {
     Unassigned(String),
 }
 
+/// Result of polling the XTCP visitor settings.
+#[derive(Debug)]
+pub enum VisitorFetch {
+    Changed { etag: String, body: Vec<u8> },
+    NotModified,
+    /// 204: the exit host uses the public entry, no visitor is needed.
+    NotNeeded,
+    Unauthorized,
+    /// 409: no visitor can be given (no exit, no mapping, or the host is misconfigured). Carries the reason.
+    Unavailable(String),
+    /// 404: a control plane from before issue #61, without the endpoint. It cannot hand out a visitor, so the client
+    /// keeps the previous behaviour: a public-entry host works as before, an XTCP host needs a hand-run visitor.
+    Unsupported,
+}
+
 #[derive(Debug)]
 pub enum LoginError {
     WrongCredentials,
@@ -137,6 +152,30 @@ impl Api {
             Err(ureq::Error::Status(304, _)) => Ok(ConfigFetch::NotModified),
             Err(ureq::Error::Status(401, _)) => Ok(ConfigFetch::Unauthorized),
             Err(ureq::Error::Status(409, resp)) => Ok(ConfigFetch::Unassigned(error_message(resp))),
+            Err(ureq::Error::Status(_, resp)) => Err(anyhow!(error_message(resp))),
+            Err(e) => Err(anyhow!(e)).context("contacting control plane"),
+        }
+    }
+
+    /// `GET /v1/xtcp-visitor`: this device's XTCP visitor settings. The body holds the frps token: never log it.
+    pub fn xtcp_visitor(&self, token: &str, etag: Option<&str>) -> Result<VisitorFetch> {
+        let mut req = self.agent.get(&format!("{}/v1/xtcp-visitor", self.base)).set("Authorization", &format!("Bearer {token}"));
+        if let Some(tag) = etag {
+            req = req.set("If-None-Match", tag);
+        }
+        match req.call() {
+            Ok(resp) if resp.status() == 304 => Ok(VisitorFetch::NotModified),
+            Ok(resp) if resp.status() == 204 => Ok(VisitorFetch::NotNeeded),
+            Ok(resp) => {
+                let etag = resp.header("ETag").unwrap_or_default().to_string();
+                let mut body = Vec::new();
+                std::io::Read::read_to_end(&mut std::io::Read::take(resp.into_reader(), 1 << 20), &mut body)?;
+                Ok(VisitorFetch::Changed { etag, body })
+            }
+            Err(ureq::Error::Status(304, _)) => Ok(VisitorFetch::NotModified),
+            Err(ureq::Error::Status(401, _)) => Ok(VisitorFetch::Unauthorized),
+            Err(ureq::Error::Status(409, resp)) => Ok(VisitorFetch::Unavailable(error_message(resp))),
+            Err(ureq::Error::Status(404, _)) => Ok(VisitorFetch::Unsupported),
             Err(ureq::Error::Status(_, resp)) => Err(anyhow!(error_message(resp))),
             Err(e) => Err(anyhow!(e)).context("contacting control plane"),
         }

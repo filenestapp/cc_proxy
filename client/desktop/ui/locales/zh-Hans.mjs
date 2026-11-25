@@ -58,6 +58,7 @@ export default {
   egress_revoked: "出口 IP 的分配已撤销，隧道已断开。",
   configuration_unavailable: "无法加载连接配置，请重试。",
   authorization_unavailable: "未获得管理员授权，请重新连接。",
+  xtcp_unavailable: "无法为你的出口主机启动 XTCP 访问端。请查看技术详情或联系管理员。",
   signed_out: "已退出登录。",
   update_available: "有可用更新",
   update_ready: "aifree {version} 已准备就绪。更新已签名，将同时替换应用和随附的辅助程序。",

@@ -2,6 +2,7 @@
 
 use crate::api::{Api, ConfigFetch};
 use crate::session::{self, read_etag, write_atomic, Paths, Session};
+use crate::visitor::{self, VisitorSync};
 use anyhow::Result;
 use std::fs;
 
@@ -16,6 +17,9 @@ pub enum SyncOutcome {
     Unassigned(String),
     /// The session this poll was made for was signed out or replaced meanwhile; the reply was dropped.
     Superseded,
+    /// The exit host uses XTCP, but this device cannot get a working visitor: carries the reason. The visitor files
+    /// were removed (or never written); the tunnel must stop, since sing-box dials the visitor.
+    XtcpUnavailable(String),
 }
 
 /// One poll. `mode` is the sing-box client mode to request (see [`crate::DEFAULT_MODE`]).
@@ -45,7 +49,32 @@ pub fn sync_once(paths: &Paths, session: &Session, mode: &str) -> Result<SyncOut
         ConfigFetch::Unassigned(msg) => {
             let _ = fs::remove_file(paths.config());
             let _ = fs::remove_file(paths.etag());
+            visitor::remove_config_files(paths);
             Ok(SyncOutcome::Unassigned(msg))
         }
     }
+}
+
+/// [`sync_once`] and then the XTCP visitor ([`visitor::sync_visitor`]): what the desktop app (and `ccproxy up
+/// --visitor`) polls. Updated when either changed. A visitor whose settings do not match the tunnel config (sing-box
+/// must dial the visitor's local port) is reported as [`SyncOutcome::XtcpUnavailable`].
+pub fn sync_with_visitor(paths: &Paths, session: &Session, mode: &str) -> Result<SyncOutcome> {
+    let config = sync_once(paths, session, mode)?;
+    if !matches!(config, SyncOutcome::Updated | SyncOutcome::Unchanged) {
+        return Ok(config);
+    }
+    let changed = match visitor::sync_visitor(paths, session)? {
+        VisitorSync::SignedOut => return Ok(SyncOutcome::SignedOut),
+        VisitorSync::Superseded => return Ok(SyncOutcome::Superseded),
+        VisitorSync::Unavailable(msg) => return Ok(SyncOutcome::XtcpUnavailable(msg)),
+        VisitorSync::Updated => true,
+        // An older control plane without the endpoint: connect exactly as before this feature.
+        VisitorSync::NotNeeded | VisitorSync::Unchanged | VisitorSync::Unsupported => false,
+    };
+    if let Err(e) = visitor::check_entry(paths) {
+        let _g = session::lock();
+        visitor::remove_config_files(paths);
+        return Ok(SyncOutcome::XtcpUnavailable(format!("{e:#}")));
+    }
+    Ok(if changed { SyncOutcome::Updated } else { config })
 }

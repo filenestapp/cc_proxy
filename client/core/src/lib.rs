@@ -7,6 +7,7 @@
 //! * [`commands`]: the desktop app's connect / disconnect / logout logic, applied only for the session that asked.
 //! * [`elevate`]: start the supervisor with the privileges a TUN interface needs, per OS.
 //! * [`sysdns`]: route rule domains' lookups to the TUN (macOS) and flush OS DNS caches.
+//! * [`visitor`]: the unprivileged XTCP visitor (frpc) for exit hosts behind NAT, started after the TUN is up.
 //!
 //! The unprivileged side (GUI or `ccproxy up`'s poller) only ever writes files: the config, a stop file and
 //! a heartbeat. The privileged supervisor only reads them. No socket or IPC protocol sits between the two.
@@ -20,6 +21,7 @@ pub mod session;
 pub mod supervisor;
 pub mod sync;
 pub mod sysdns;
+pub mod visitor;
 
 /// Mode the desktop client asks for: full TUN, DNS hijacked, domain rules from the control plane sent through
 /// the tunnel, everything else direct. Works the same on macOS, Windows and Linux.

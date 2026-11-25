@@ -1,5 +1,5 @@
 use crate::{sidecar, App};
-use ccproxy_core::{runtime, session::Session, supervisor::Status};
+use ccproxy_core::{runtime, session::Session, supervisor::Status, visitor};
 use serde::Serialize;
 use std::io::Read;
 use std::net::Ipv4Addr;
@@ -24,19 +24,33 @@ pub(super) enum PublicExit {
 struct Target {
     session_id: String,
     connected_at: u64,
-    pid: u32,
+    route: (u32, u64),
+    visitor_guard: Option<u32>,
     fingerprint: String,
 }
 
 impl Target {
-    fn new(session: &Session, status: &Status, connected_at: u64) -> Option<Self> {
-        if status.state != "running" || status.updated < connected_at {
+    fn new(app: &App, session: &Session, status: &Status) -> Option<Self> {
+        let connected_at = app.tunnel.connected_at();
+        if status.updated < connected_at {
             return None;
         }
+        let route = status.running_route()?;
+        let visitor_guard = if visitor::required(&app.paths) {
+            let guard = app.visitor.lock().unwrap().guard_pid(Some(status))?;
+            let (state, _) = visitor::tunnel_view(&app.paths, Some(guard))?;
+            if state != "running" {
+                return None;
+            }
+            Some(guard)
+        } else {
+            None
+        };
         Some(Self {
             session_id: session.id.clone(),
             connected_at,
-            pid: status.pid?,
+            route,
+            visitor_guard,
             fingerprint: status.egress_fingerprint.clone()?,
         })
     }
@@ -46,7 +60,7 @@ impl Target {
             return None;
         }
         let session = Session::load(&app.paths)?;
-        Self::new(&session, &Status::current()?, app.tunnel.connected_at())
+        Self::new(app, &session, &Status::current()?)
     }
 }
 
@@ -57,7 +71,7 @@ pub(super) struct Observation {
 }
 
 pub(super) fn display(app: &App, session: &Session, status: &Status) -> PublicExit {
-    let Some(target) = Target::new(session, status, app.tunnel.connected_at()) else {
+    let Some(target) = Target::new(app, session, status) else {
         return PublicExit::Unavailable;
     };
     match app

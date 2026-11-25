@@ -60,12 +60,23 @@ pub struct Status {
     pub pid: Option<u32>,
     pub message: String,
     pub updated: u64,
+    /// Advances only when the TUN starts or its routes are reloaded.
+    #[serde(default)]
+    pub route_generation: u64,
     /// Identifies the loaded exit without exposing its connection credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress_fingerprint: Option<String>,
 }
 
 impl Status {
+    /// A visitor must establish its UDP path after this specific TUN route generation is ready.
+    pub fn running_route(&self) -> Option<(u32, u64)> {
+        if self.state != "running" {
+            return None;
+        }
+        Some((self.pid?, self.route_generation))
+    }
+
     pub fn read(path: &Path) -> Option<Status> {
         serde_json::from_slice(&fs::read(path).ok()?).ok()
     }
@@ -81,6 +92,11 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 #[cfg(unix)]
 extern "C" fn on_signal(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::SeqCst);
+}
+
+/// Whether Ctrl-C / SIGTERM arrived since [`install_signal_handlers`].
+pub fn interrupted() -> bool {
+    INTERRUPTED.load(Ordering::SeqCst)
 }
 
 /// Stop cleanly on Ctrl-C / SIGTERM (Unix). Windows ends the child with the console session.
@@ -106,6 +122,7 @@ struct Supervisor {
     o: Options,
     child: Option<Child>,
     restarts: Vec<Instant>,
+    route_generation: u64,
     /// The protected config sing-box is running (the accepted rendering).
     running: Option<Value>,
 }
@@ -121,6 +138,7 @@ impl Supervisor {
             pid: self.child.as_ref().map(|c| c.id()),
             message: message.into(),
             updated: now(),
+            route_generation: self.route_generation,
             egress_fingerprint,
         };
         if self.guard().is_err() {
@@ -129,6 +147,12 @@ impl Supervisor {
         if let Ok(data) = serde_json::to_vec_pretty(&s) {
             let _ = write_protected(&self.o.status(), &data, false);
         }
+    }
+
+    fn publish_ready_routes(&mut self, message: &str) {
+        settle_then_apply_dns(&self.o.config());
+        self.route_generation += 1;
+        self.status("running", message);
     }
 
     /// Re-verify the runtime directory before writing into it with privileges.
@@ -255,7 +279,7 @@ fn settle_then_apply_dns(config: &Path) {
 /// Run until told to stop. Returns Err only when sing-box cannot be kept running.
 pub fn run(o: Options) -> Result<()> {
     runtime::prepare_protected_dir(&o.runtime_dir, o.require_privileged)?;
-    let mut s = Supervisor { o, child: None, restarts: Vec::new(), running: None };
+    let mut s = Supervisor { o, child: None, restarts: Vec::new(), route_generation: 0, running: None };
     s.status("starting", "");
     // The version being loaded; anything written after this point is picked up by the loop, including changes
     // made while the DNS settle below is still waiting.
@@ -264,8 +288,7 @@ pub fn run(o: Options) -> Result<()> {
         s.status("failed", &format!("{e:#}"));
         return Err(e);
     }
-    s.status("running", "");
-    settle_then_apply_dns(&s.o.config());
+    s.publish_ready_routes("");
 
     loop {
         std::thread::sleep(s.o.poll);
@@ -280,9 +303,9 @@ pub fn run(o: Options) -> Result<()> {
             seen = current;
             match s.load() {
                 Ok(true) => {
+                    s.status("starting", "reloading the tunnel configuration");
                     s.reload()?;
-                    settle_then_apply_dns(&s.o.config());
-                    s.status("running", "config reloaded");
+                    s.publish_ready_routes("config reloaded");
                 }
                 Ok(false) => {}
                 Err(e) => s.status("running", &format!("new config rejected, still on the previous one: {e:#}")),
@@ -304,8 +327,9 @@ pub fn run(o: Options) -> Result<()> {
                 return Err(anyhow!(msg));
             }
             s.restarts.push(Instant::now());
+            s.status("starting", "restarting the tunnel");
             s.start()?;
-            s.status("running", &format!("sing-box exited ({code}) and was restarted"));
+            s.publish_ready_routes(&format!("sing-box exited ({code}) and was restarted"));
         }
     }
 }
