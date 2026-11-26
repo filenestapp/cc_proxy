@@ -12,6 +12,7 @@ import threading
 
 BLOCKED = {ip for ip in os.environ.get("BLOCK_IPS", "").split(",") if ip}
 STUN_COOKIE = bytes.fromhex("2112a442")
+STUN_ALTERNATE = os.environ.get("STUN_ALTERNATE")
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -41,6 +42,9 @@ def udp_echo(host, port):
             mapped = bytes(a ^ b for a, b in zip(ip, mask))
             address = struct.pack("!BBH", 0, 2 if family == socket.AF_INET6 else 1, addr[1] ^ 0x2112)
             attribute = struct.pack("!HH", 0x0020, len(address) + len(mapped)) + address + mapped
+            if port == 3478 and family == socket.AF_INET and STUN_ALTERNATE:
+                # frpc discovers the mapping twice using RFC 5780's OTHER-ADDRESS.
+                attribute += struct.pack("!HHBBH4s", 0x802C, 8, 0, 1, 3479, socket.inet_aton(STUN_ALTERNATE))
             reply = struct.pack("!HH", 0x0101, len(attribute)) + mask + attribute
         else:
             print("udp", port, addr[0], flush=True)
@@ -51,5 +55,8 @@ def udp_echo(host, port):
 # 443 also stands in for QUIC in the plain UDP checks.
 for host in filter(None, ("0.0.0.0", os.environ.get("ECHO_IPV6"))):
     for port in (9090, 3478, 443):
-        threading.Thread(target=udp_echo, args=(host, port), daemon=True).start()
+        address = STUN_ALTERNATE if STUN_ALTERNATE and host == "0.0.0.0" and port == 3478 else host
+        threading.Thread(target=udp_echo, args=(address, port), daemon=True).start()
+if STUN_ALTERNATE:
+    threading.Thread(target=udp_echo, args=(STUN_ALTERNATE, 3479), daemon=True).start()
 http.server.ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()

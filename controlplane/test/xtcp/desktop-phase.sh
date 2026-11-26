@@ -18,8 +18,9 @@ else echo "FAIL carol's mapping: $(port_status)"; status=1; fi
 # Like a real OS: the resolver is an off-link address the TUN hijacks (Docker's 127.0.0.11 is loopback).
 # Let privileged sing-box resolve the unprivileged frpc's executable via /proc.
 docker run -d --name ccx-desktop --network $NET --ip $IP_DESKTOP --cap-add NET_ADMIN --cap-add SYS_PTRACE --device /dev/net/tun --init \
-  --add-host other.test:$IP_ECHO -v "$FRP_DIR/frpc:/opt/aifree/frpc:ro" -v "$SB_BIN:/opt/aifree/sing-box:ro" \
-  ccx-desktop sh -c "echo 'nameserver 192.0.2.53' > /etc/resolv.conf && exec sleep infinity" >/dev/null
+  --add-host other.test:$IP_ECHO --add-host "stun.easyvoip.com:$STUN_ADDRESS" \
+  -v "$FRP_DIR/frpc:/opt/aifree/frpc:ro" -v "$SB_BIN:/opt/aifree/sing-box:ro" \
+  ccx-desktop sh -c "ip route replace default via $IP_STUN && echo 'nameserver 192.0.2.53' > /etc/resolv.conf && exec sleep infinity" >/dev/null
 docker exec ccx-desktop useradd -m -s /bin/sh cust
 STATE=/home/cust/.config/cc-proxy
 dx() { docker exec ccx-desktop "$@"; }          # root: the privileged supervisor, and inspection
@@ -60,6 +61,8 @@ echo "-- connect: the TUN first, then frpc; connected only when a direct path is
 up
 if waitfor 90 "visitor ready" "logged 'tunnel: running'"; then echo "PASS the client reports connected once the visitor is ready"
 else echo "FAIL visitor not ready: $(dx tail -n 20 /tmp/up.log)"; status=1; fi
+check "bundled frpc reached the off-link STUN responder directly" \
+  "docker logs ccx-stun 2>&1 | grep -Fx 'stun ipv4 3478 $IP_DESKTOP' >/dev/null"
 check "frpc started after sing-box (the TUN was up first)" "[ \"\$(start_jiffies frpc)\" -ge \"\$(start_jiffies sing-box)\" ]"
 check "frpc is the pinned $FRP_VERSION, run from next to aifree with the visitor file" \
   "dx /opt/aifree/frpc -v | grep -qx $FRP_VERSION && dx pgrep -f '^/opt/aifree/frpc -c $STATE/frpc-visitor.toml\$' >/dev/null"
