@@ -23,7 +23,7 @@
 
 use crate::api::{Api, VisitorFetch};
 use crate::session::{self, write_atomic, Paths, Session};
-use crate::supervisor::Status;
+use crate::supervisor::{process_exists, Status};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -257,7 +257,7 @@ pub fn sync_visitor(paths: &Paths, session: &Session) -> Result<VisitorSync> {
     let api = Api::new(&session.server)?;
     let etag = if paths.visitor_toml().exists() { session::read_file_trimmed(&paths.visitor_etag()) } else { None };
     let reply = api.xtcp_visitor(&session.token, etag.as_deref())?;
-    let _g = session::lock();
+    let _g = session::lock(paths)?;
     if !Session::is_current(paths, &session.id) {
         return Ok(VisitorSync::Superseded);
     }
@@ -349,10 +349,25 @@ pub struct VisitorStatus {
     /// previous connection or app run left behind.
     #[serde(default)]
     pub guard: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    route_key: Option<String>,
 }
 
 pub fn read_status(paths: &Paths) -> Option<VisitorStatus> {
     serde_json::from_slice(&fs::read(paths.visitor_status()).ok()?).ok()
+}
+
+fn route_key(status: &Status) -> Option<String> {
+    let (pid, generation) = status.running_route()?;
+    Some(format!("{}:{pid}:{generation}", status.connection_id.as_ref()?))
+}
+
+/// The guard for the active TUN route, including when a different frontend launched the guard.
+pub fn guard_for_route(paths: &Paths, status: &Status) -> Option<u32> {
+    let key = route_key(status)?;
+    let visitor = read_status(paths)?;
+    (visitor.route_key.as_ref() == Some(&key) &&
+        (visitor.state == "failed" || process_exists(visitor.guard))).then_some(visitor.guard)
 }
 
 fn now() -> u64 {
@@ -462,12 +477,13 @@ struct Guard<'a> {
     paths: &'a Paths,
     fingerprint: String,
     secrets: Vec<String>,
+    route_key: Option<String>,
 }
 
 impl Guard<'_> {
     fn status(&self, state: &str, reason: Option<Reason>, message: &str) {
         let s = VisitorStatus { state: state.into(), reason, message: self.redact(message), updated: now(),
-                                fingerprint: self.fingerprint.clone(), guard: std::process::id() };
+                                fingerprint: self.fingerprint.clone(), guard: std::process::id(), route_key: self.route_key.clone() };
         if let Ok(data) = serde_json::to_vec_pretty(&s) {
             let _ = write_atomic(&self.paths.visitor_status(), &data, true);
         }
@@ -536,15 +552,15 @@ fn terminate(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// `ccproxy visitor`: run frpc for the visitor files in `paths` until stdin closes, the configuration is removed or
+/// `aifree visitor`: run frpc for the visitor files in `paths` until stdin closes, the configuration is removed or
 /// frpc fails. Never retries by itself; the app decides (see [`VisitorProcess`]).
-pub fn run_guard(paths: &Paths, frpc: &Path, stdin_eof: Arc<AtomicBool>) -> Result<()> {
+pub fn run_guard(paths: &Paths, frpc: &Path, stdin_eof: Arc<AtomicBool>, route_key: Option<String>) -> Result<()> {
     ensure_unprivileged()?;
     let fingerprint = fingerprint(paths).ok_or_else(|| anyhow!("no XTCP visitor is configured"))?;
     let token = fs::read_to_string(paths.visitor_token())?.trim().to_string();
     let toml = fs::read_to_string(paths.visitor_toml())?;
     let port = read_info(paths).map(|i| i.bind_port).unwrap_or_default();
-    let g = Guard { paths, fingerprint, secrets: vec![token.clone(), secret_key_of(&toml).unwrap_or_default()] };
+    let g = Guard { paths, fingerprint, secrets: vec![token.clone(), secret_key_of(&toml).unwrap_or_default()], route_key };
     g.status("starting", None, "");
 
     let mut log = fs::OpenOptions::new().create(true).write(true).truncate(true).open(paths.visitor_log())?;
@@ -656,8 +672,8 @@ pub fn watch_stdin(flag: Arc<AtomicBool>) {
 /// Where the two sidecars are.
 #[derive(Debug, Clone)]
 pub struct Launcher {
-    /// `ccproxy` (runs the guard).
-    pub ccproxy: PathBuf,
+    /// The `aifree` binary that runs the guard.
+    pub cli: PathBuf,
     pub frpc: PathBuf,
 }
 
@@ -665,6 +681,7 @@ pub struct Launcher {
 struct VisitorTarget {
     fingerprint: String,
     route: (u32, u64),
+    route_key: Option<String>,
 }
 
 /// The app's handle on the guard. Dropping it stops the visitor.
@@ -679,8 +696,12 @@ impl VisitorProcess {
     /// Run exactly one visitor for the current configuration and live TUN routes. A prior UDP path
     /// can stop working when macOS installs new TUN routes, even if the visitor configuration is unchanged.
     pub fn ensure(&mut self, paths: &Paths, launcher: &Launcher, status: Option<&Status>) -> Result<()> {
-        let target = status.and_then(Status::running_route).and_then(|route| {
-            fingerprint(paths).map(|fingerprint| VisitorTarget { fingerprint, route })
+        let target = status.and_then(|status| {
+            Some(VisitorTarget {
+                fingerprint: fingerprint(paths)?,
+                route: status.running_route()?,
+                route_key: route_key(status),
+            })
         });
         let Some(target) = target else {
             self.stop();
@@ -732,15 +753,18 @@ impl VisitorProcess {
     fn start(&mut self, paths: &Paths, launcher: &Launcher, target: VisitorTarget) -> Result<()> {
         kill_stale(paths);
         let _ = fs::remove_file(paths.visitor_status());
-        let mut cmd = Command::new(&launcher.ccproxy);
+        let mut cmd = Command::new(&launcher.cli);
         cmd.arg("--state-dir").arg(&paths.dir).arg("visitor").arg("--frpc").arg(&launcher.frpc)
             .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+        if let Some(key) = &target.route_key {
+            cmd.arg("--route-key").arg(key);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(windows_job::CREATE_NO_WINDOW);
         }
-        let mut child = cmd.spawn().with_context(|| format!("starting {}", launcher.ccproxy.display()))?;
+        let mut child = cmd.spawn().with_context(|| format!("starting {}", launcher.cli.display()))?;
         let stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin for the visitor guard"))?;
         self.exited = None;
         self.guard = Some((child, stdin, target));
@@ -832,25 +856,13 @@ pub fn process_identity(pid: u32) -> Option<String> {
     }
 }
 
-fn process_exists(pid: u32) -> bool {
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(pid as libc::pid_t, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        true // unknown: treat as present, so nothing is removed or signalled
-    }
-}
-
 /// Kill an frpc that a killed guard left behind (on macOS frpc cannot be tied to the guard's lifetime). It fails closed:
 /// a process is signalled only when all of these hold, else it is left alone.
 ///
 /// * The pid file names frpc, its guard and frpc's identity (start time and command line).
 /// * The process now at that pid has exactly that identity, so a pid reused by an unrelated process, even one named
 ///   frpc, does not match. An identity that cannot be read means no signal.
-/// * Its guard is gone: no `ccproxy` process at the guard's pid, and frpc is no longer its child. A visitor whose guard
+/// * Its guard is gone: neither an `aifree` nor a legacy `ccproxy` process has the guard's pid, and frpc is no longer its child. A visitor whose guard
 ///   still runs, such as the one of an app instance that is already connected, is not an orphan.
 ///
 /// Call it only from the process that owns the session (the primary app instance).
@@ -869,7 +881,8 @@ pub fn kill_stale(paths: &Paths) {
         }
         None => return, // cannot establish ownership
     }
-    if !is_named(record.frpc, "frpc") || is_named(record.guard, "ccproxy") || parent_of(record.frpc) == Some(record.guard) {
+    if !is_named(record.frpc, "frpc") || is_named(record.guard, "aifree") || is_named(record.guard, "ccproxy")
+        || parent_of(record.frpc) == Some(record.guard) {
         return; // not frpc, or a live visitor
     }
     #[cfg(unix)]

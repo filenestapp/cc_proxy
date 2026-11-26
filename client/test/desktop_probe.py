@@ -1,4 +1,4 @@
-"""Checks run inside the Linux client container while `ccproxy up` runs (app mode TUN).
+"""Checks run inside the Linux client container while `aifree up` runs (app mode TUN).
 
 Usage: desktop_probe.py EXPECTED_EGRESS_IP SELF_IP
 """

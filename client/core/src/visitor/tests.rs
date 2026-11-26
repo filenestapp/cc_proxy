@@ -150,7 +150,7 @@ fn the_tunnel_counts_as_connected_only_when_the_visitor_is_ready() {
     assert!(msg.contains("Starting") && msg.contains("(pending)"), "{msg}");
 
     let put = |st: &str, reason: Option<Reason>, message: &str, fp: &str, guard: u32| {
-        let v = VisitorStatus { state: st.into(), reason, message: message.into(), updated: 1, fingerprint: fp.into(), guard };
+        let v = VisitorStatus { state: st.into(), reason, message: message.into(), updated: 1, fingerprint: fp.into(), guard, route_key: None };
         fs::write(paths.visitor_status(), serde_json::to_vec(&v).unwrap()).unwrap();
     };
     put("listening", None, "", &fp, GUARD);
@@ -174,7 +174,7 @@ fn a_stale_ready_status_does_not_count_for_a_fresh_connection() {
     let paths = state("stale-ready");
     write_files(&paths, &spec()).unwrap();
     let stale = VisitorStatus { state: "ready".into(), reason: None, message: String::new(), updated: 1,
-                                fingerprint: fingerprint(&paths).unwrap(), guard: 1111 };
+                                fingerprint: fingerprint(&paths).unwrap(), guard: 1111, route_key: None };
     fs::write(paths.visitor_status(), serde_json::to_vec(&stale).unwrap()).unwrap();
     // No guard of its own yet (the TUN is not up, or the guard has not started).
     assert_eq!(tunnel_view(&paths, None).unwrap().0, "connecting");
@@ -215,7 +215,7 @@ fn visitor_files_are_private_and_the_info_file_holds_no_credentials() {
     // Removing them with the session.
     Session::new("http://x".into(), "u".into(), "d".into(), "t".into()).save(&paths).unwrap();
     write_files(&paths, &spec()).unwrap();
-    Session::clear(&paths);
+    Session::clear(&paths).unwrap();
     for p in files(&paths) {
         assert!(!p.exists(), "{} survived sign-out", p.display());
     }

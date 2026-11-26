@@ -1,11 +1,11 @@
 // aifree desktop app: sign in, connect, see where your traffic exits.
 //
 // This process never runs privileged. On connect it asks the OS (one password / UAC prompt) to start the bundled
-// `ccproxy tunnel` supervisor, then only writes files the supervisor reads: the sing-box config (kept current by
+// `aifree tunnel` supervisor, then only writes files the supervisor reads: the sing-box config (kept current by
 // polling the control plane), a heartbeat every few seconds, and a stop file on disconnect or exit.
 //
 // When the exit host uses XTCP, the app also runs the bundled frpc as the visitor, unprivileged, through the
-// `ccproxy visitor` guard (ccproxy_core::visitor): started once the supervisor reports the TUN running, and the tunnel
+// `aifree visitor` guard (ccproxy_core::visitor): started once the supervisor reports the TUN running, and the tunnel
 // counts as connected only when the visitor listens and the first direct path is open. It stops on disconnect,
 // sign-out, exit and when the app dies (the guard sees its stdin close).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -17,12 +17,12 @@ mod updates;
 
 use anyhow::Result;
 use ccproxy_core::api::{Api, LoginError};
-use ccproxy_core::commands::{self, touch, ConnectError, Connected, Effects, LoggedOut, Tunnel};
+use ccproxy_core::commands::{self, touch, ConnectError, Connected, Effects, LoggedOut, Tunnel, HEARTBEAT_TIMEOUT_SECS};
 use ccproxy_core::session::{Paths, Session};
 use ccproxy_core::supervisor::Status;
 use ccproxy_core::sync::{sync_with_visitor, SyncOutcome};
 use ccproxy_core::visitor::{self, Launcher, VisitorProcess};
-use ccproxy_core::{default_device_name, elevate, platform, DEFAULT_MODE};
+use ccproxy_core::{control_plane_url, default_device_name, elevate, platform, DEFAULT_MODE};
 use exit_probe::{Observation, PublicExit};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -31,15 +31,12 @@ use std::time::{Duration, Instant};
 use tauri::Manager;
 
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
-const HEARTBEAT_TIMEOUT_SECS: u64 = 30;
 const SYNC_EVERY: Duration = Duration::from_secs(30);
-const DEFAULT_CONTROL_PLANE: &str = "https://cp.aifree.sg";
 
 struct App {
     paths: Paths,
     sign_in_server: String,
-    /// Whether the user wants the tunnel, and when they last connected (older supervisor status belongs to an
-    /// earlier run).
+    /// Whether this process owns the shared client connection.
     tunnel: Tunnel,
     message: Mutex<Option<AppMessage>>,
     /// Last assignment check from the control plane, keyed by session id.
@@ -58,9 +55,9 @@ impl Effects for DesktopEffects {
         sync_with_visitor(paths, session, DEFAULT_MODE)
     }
 
-    fn launch_supervisor(&self, paths: &Paths) -> Result<()> {
-        let args = elevate::tunnel_args(paths, &sidecar("sing-box"), HEARTBEAT_TIMEOUT_SECS);
-        elevate::launch(&sidecar("ccproxy"), &args)
+    fn launch_supervisor(&self, paths: &Paths, connection_id: &str) -> Result<()> {
+        let args = elevate::tunnel_args(paths, &sidecar("sing-box"), HEARTBEAT_TIMEOUT_SECS, connection_id);
+        elevate::launch(&sidecar("aifree"), &args)
     }
 
     fn remote_logout(&self, session: &Session) -> Result<()> {
@@ -111,6 +108,7 @@ impl From<ConnectError> for AppMessage {
             ConnectError::Configuration(detail) => Self::ConfigurationUnavailable(detail),
             ConnectError::Authorization(detail) => Self::AuthorizationUnavailable(detail),
             ConnectError::Xtcp(detail) => Self::XtcpUnavailable(detail),
+            ConnectError::Busy | ConnectError::Canceled => Self::OperationFailed(error.to_string()),
         }
     }
 }
@@ -130,7 +128,7 @@ struct View {
 }
 
 fn launcher() -> Launcher {
-    Launcher { ccproxy: sidecar("ccproxy"), frpc: sidecar("frpc") }
+    Launcher { cli: sidecar("aifree"), frpc: sidecar("frpc") }
 }
 
 fn sidecar(name: &str) -> PathBuf {
@@ -144,15 +142,15 @@ impl App {
         *self.message.lock().unwrap() = message;
     }
 
-    fn request_stop(&self) {
-        self.tunnel.request_stop(&self.paths);
+    fn request_stop(&self) -> Result<()> {
+        self.tunnel.request_stop(&self.paths)?;
         self.visitor.lock().unwrap().stop();
         *self.exit_observation.lock().unwrap() = None;
+        Ok(())
     }
 
     fn current_status(&self) -> Option<Status> {
-        // An older status file may still exist in the protected runtime directory.
-        Status::current().filter(|status| status.updated >= self.tunnel.connected_at())
+        Status::for_paths(&self.paths)
     }
 
     fn view(&self, online: bool) -> View {
@@ -165,7 +163,7 @@ impl App {
             public_exit: PublicExit::NotConnected,
             tunnel: "idle".into(),
             tunnel_message: String::new(),
-            want_connected: self.tunnel.wants_connection(),
+            want_connected: false,
             message: self.message.lock().unwrap().clone(),
         };
         if !v.signed_in {
@@ -176,7 +174,10 @@ impl App {
             if let Ok(api) = Api::new(&session.server) {
                 let reply = api.me(&session.token);
                 // Apply the reply only if this session is still the signed-in one (review finding CC-07).
-                let _g = ccproxy_core::session::lock();
+                let Ok(_g) = ccproxy_core::session::lock(&self.paths) else {
+                    v.message = Some(AppMessage::OperationFailed("Could not lock the device session.".into()));
+                    return v;
+                };
                 if Session::is_current(&self.paths, &session.id) {
                     match reply {
                         Ok(Some(me)) => {
@@ -202,13 +203,14 @@ impl App {
         }
         v.has_assignment = self.assignment.lock().unwrap().as_ref()
             .is_some_and(|(id, assigned)| id == &session.id && *assigned);
-        v.want_connected = self.tunnel.wants_connection();
-        if let Some(status) = self.current_status() {
+        let status = self.current_status();
+        v.want_connected = commands::connection_requested(&self.paths, status.as_ref());
+        if let Some(status) = status {
             v.tunnel = status.state.clone();
             v.tunnel_message = status.message.clone();
             // On an XTCP exit the tunnel is connected only once the visitor is ready.
             if v.want_connected && status.state == "running" {
-                if let Some((state, message)) = visitor::tunnel_view(&self.paths, self.visitor.lock().unwrap().guard_pid(Some(&status))) {
+                if let Some((state, message)) = visitor::tunnel_view(&self.paths, visitor::guard_for_route(&self.paths, &status)) {
                     v.tunnel = state;
                     v.tunnel_message = message;
                 }
@@ -267,7 +269,8 @@ async fn login(app: tauri::State<'_, Arc<App>>, username: String, password: Stri
 async fn logout(app: tauri::State<'_, Arc<App>>) -> Result<View, AppMessage> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let outcome = commands::logout(&app.paths, &app.tunnel, &DesktopEffects);
+        let outcome = commands::logout(&app.paths, &app.tunnel, &DesktopEffects)
+            .map_err(|error| AppMessage::OperationFailed(error.to_string()))?;
         app.visitor.lock().unwrap().stop();
         match outcome {
             LoggedOut::SignedOut | LoggedOut::NotSignedIn => app.set_message(Some(AppMessage::SignedOut)),
@@ -275,10 +278,10 @@ async fn logout(app: tauri::State<'_, Arc<App>>) -> Result<View, AppMessage> {
             // its message stays as it is.
             LoggedOut::Superseded => {}
         }
-        app.view(false)
+        Ok(app.view(false))
     })
     .await
-    .map_err(|error| AppMessage::OperationFailed(error.to_string()))
+    .map_err(|error| AppMessage::OperationFailed(error.to_string()))?
 }
 
 #[tauri::command]
@@ -300,10 +303,10 @@ async fn connect(app: tauri::State<'_, Arc<App>>) -> Result<View, AppMessage> {
 }
 
 #[tauri::command]
-fn disconnect(app: tauri::State<Arc<App>>) -> View {
-    app.request_stop();
+fn disconnect(app: tauri::State<Arc<App>>) -> Result<View, AppMessage> {
+    app.request_stop().map_err(|error| AppMessage::OperationFailed(error.to_string()))?;
     app.set_message(None);
-    app.view(false)
+    Ok(app.view(false))
 }
 
 /// While connected: keep the heartbeat fresh, the config current and, on an XTCP exit, the visitor running.
@@ -313,15 +316,17 @@ fn background(app: Arc<App>) {
     let launcher = launcher();
     loop {
         std::thread::sleep(Duration::from_millis(500));
+        let status = app.tunnel.poll(&app.paths);
         {
             let mut visitor = app.visitor.lock().unwrap();
             // Re-read the requested connection under the visitor lock so Disconnect cannot leave a new guard behind.
-            let status = app.tunnel.wants_connection().then(|| app.current_status()).flatten();
-            if let Err(error) = visitor.ensure(&app.paths, &launcher, status.as_ref()) {
+            let status = status.as_ref().filter(|_| app.tunnel.wants_connection());
+            if let Err(error) = visitor.ensure(&app.paths, &launcher, status) {
                 eprintln!("Could not start the XTCP visitor: {error:#}");
             }
         }
         if !app.tunnel.wants_connection() {
+            app.tunnel.release_if_stopped(&app.paths);
             continue;
         }
         if last_beat.elapsed() >= HEARTBEAT_EVERY {
@@ -330,18 +335,18 @@ fn background(app: Arc<App>) {
         }
         if last_sync.elapsed() >= SYNC_EVERY {
             last_sync = Instant::now();
-            if let Some(s) = Session::load(&app.paths) {
+            if let Some(s) = app.tunnel.session(&app.paths) {
                 match sync_with_visitor(&app.paths, &s, DEFAULT_MODE) {
                     Ok(SyncOutcome::SignedOut) => {
-                        app.request_stop();
+                        let _ = app.request_stop();
                         app.set_message(Some(AppMessage::SessionExpiredDisconnected));
                     }
                     Ok(SyncOutcome::Unassigned(m)) => {
-                        app.request_stop();
+                        let _ = app.request_stop();
                         app.set_message(Some(AppMessage::EgressRevoked(m)));
                     }
                     Ok(SyncOutcome::XtcpUnavailable(m)) => {
-                        app.request_stop();
+                        let _ = app.request_stop();
                         app.set_message(Some(AppMessage::XtcpUnavailable(m)));
                     }
                     Ok(_) => {}
@@ -353,11 +358,15 @@ fn background(app: Arc<App>) {
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("cli")) {
+        use std::os::unix::process::CommandExt;
+        let error = std::process::Command::new(sidecar("aifree")).args(std::env::args_os().skip(2)).exec();
+        eprintln!("Could not start the aifree CLI: {error}");
+        std::process::exit(1);
+    }
     let paths = Paths::new(None).expect("state directory");
-    let sign_in_server = std::env::var("AIFREE_CONTROL_PLANE_URL")
-        .ok()
-        .filter(|url| !url.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_CONTROL_PLANE.to_owned());
+    let sign_in_server = control_plane_url();
     let app = Arc::new(App {
         paths,
         sign_in_server,
@@ -403,8 +412,8 @@ fn main() {
         .run(|handle, event| match event {
             tauri::RunEvent::Exit => {
                 let app = handle.state::<Arc<App>>();
-                if app.tunnel.wants_connection() {
-                    app.request_stop();
+                if app.tunnel.owns_connection() {
+                    let _ = app.request_stop();
                 }
                 app.visitor.lock().unwrap().stop();
             }

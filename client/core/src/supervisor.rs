@@ -16,6 +16,7 @@
 //! privilege boundary: the client's config is validated and re-rendered before sing-box ever sees it.
 
 use crate::runtime::{self, write_protected};
+use crate::session::{self, Paths};
 use crate::sysdns;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -35,8 +36,10 @@ pub struct Options {
     pub client_config: PathBuf,
     /// User-writable signals; only their existence / modification time is looked at.
     pub stop_file: PathBuf,
-    /// Heartbeat file and how old it may get before we stop. None: no heartbeat (headless `ccproxy up`).
+    /// Heartbeat file and how old it may get before we stop. None for the legacy privileged `up` command.
     pub heartbeat: Option<(PathBuf, Duration)>,
+    /// A delayed supervisor must still belong to the connection that requested it.
+    pub connection_id: Option<String>,
     pub poll: Duration,
     /// Where the supervisor keeps its own files: [`runtime::protected_dir`] in production.
     pub runtime_dir: PathBuf,
@@ -60,6 +63,10 @@ pub struct Status {
     pub pid: Option<u32>,
     pub message: String,
     pub updated: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supervisor_pid: Option<u32>,
     /// Advances only when the TUN starts or its routes are reloaded.
     #[serde(default)]
     pub route_generation: u64,
@@ -69,6 +76,10 @@ pub struct Status {
 }
 
 impl Status {
+    pub fn is_active(&self) -> bool {
+        matches!(self.state.as_str(), "starting" | "running")
+    }
+
     /// A visitor must establish its UDP path after this specific TUN route generation is ready.
     pub fn running_route(&self) -> Option<(u32, u64)> {
         if self.state != "running" {
@@ -85,6 +96,40 @@ impl Status {
     pub fn current() -> Option<Status> {
         Status::read(&runtime::status_path())
     }
+
+    pub fn for_paths(paths: &Paths) -> Option<Status> {
+        let connection_id = session::read_file_trimmed(&paths.connection_id());
+        let mut status = Self::current().filter(|status| status.connection_id == connection_id)?;
+        if status.is_active() && status.supervisor_pid.is_some_and(|pid| !process_exists(pid)) {
+            status.state = "failed".into();
+            status.pid = None;
+            status.message = "The tunnel supervisor exited unexpectedly.".into();
+        }
+        Some(status)
+    }
+}
+
+pub(crate) fn process_exists(pid: u32) -> bool {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(pid as libc::pid_t, 0) == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED, WAIT_OBJECT_0};
+        use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+        let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if process.is_null() {
+            return GetLastError() == ERROR_ACCESS_DENIED;
+        }
+        let dead = WaitForSingleObject(process, 0) == WAIT_OBJECT_0;
+        CloseHandle(process);
+        !dead
+    }
 }
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
@@ -94,18 +139,32 @@ extern "C" fn on_signal(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
+#[cfg(windows)]
+unsafe extern "system" fn on_console_signal(kind: u32) -> i32 {
+    use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT};
+    if matches!(kind, CTRL_C_EVENT | CTRL_BREAK_EVENT) {
+        INTERRUPTED.store(true, Ordering::SeqCst);
+        return 1;
+    }
+    0
+}
+
 /// Whether Ctrl-C / SIGTERM arrived since [`install_signal_handlers`].
 pub fn interrupted() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
 }
 
-/// Stop cleanly on Ctrl-C / SIGTERM (Unix). Windows ends the child with the console session.
+/// Stop cleanly on Ctrl-C, Ctrl-Break on Windows, or SIGTERM on Unix.
 pub fn install_signal_handlers() {
     #[cfg(unix)]
     unsafe {
         let handler = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
         libc::signal(libc::SIGINT, handler);
         libc::signal(libc::SIGTERM, handler);
+    }
+    #[cfg(windows)]
+    unsafe {
+        windows_sys::Win32::System::Console::SetConsoleCtrlHandler(Some(on_console_signal), 1);
     }
 }
 
@@ -138,6 +197,8 @@ impl Supervisor {
             pid: self.child.as_ref().map(|c| c.id()),
             message: message.into(),
             updated: now(),
+            connection_id: self.o.connection_id.clone(),
+            supervisor_pid: Some(std::process::id()),
             route_generation: self.route_generation,
             egress_fingerprint,
         };
@@ -199,15 +260,29 @@ impl Supervisor {
         runtime::prepare_protected_dir(&self.o.workdir(), privileged)?;
         runtime::clean_protected_file(&self.o.cache(), privileged)?;
         let log = runtime::open_protected_log(&self.o.log(), privileged)?;
-        let child = Command::new(&self.o.singbox)
-            .args(["run", "-c"])
+        let mut command = Command::new(&self.o.singbox);
+        command.args(["run", "-c"])
             .arg(self.o.config())
             .arg("-D")
             .arg(self.o.workdir())
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
-            .stderr(log)
-            .spawn()
+            .stderr(log);
+        #[cfg(target_os = "linux")]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            let supervisor = std::process::id() as libc::pid_t;
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() != supervisor {
+                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn()
             .with_context(|| format!("starting {}", self.o.singbox.display()))?;
         self.child = Some(child);
         Ok(())
@@ -233,6 +308,13 @@ impl Supervisor {
         }
     }
 
+    fn failed(&mut self, error: anyhow::Error) -> anyhow::Error {
+        self.stop_child();
+        sysdns::restore();
+        self.status("failed", &format!("{error:#}"));
+        error
+    }
+
     fn reload(&mut self) -> Result<()> {
         #[cfg(unix)]
         if let Some(child) = &self.child {
@@ -252,6 +334,12 @@ impl Supervisor {
         }
         if fs::symlink_metadata(&self.o.stop_file).is_ok() {
             return Some("stopped by the app".into());
+        }
+        if self.o.connection_id.as_ref().is_some_and(|id| {
+            crate::fsguard::read_regular_file(&self.o.stop_file.with_file_name("connection-id"), 128)
+                .ok().as_deref() != Some(id.as_bytes())
+        }) {
+            return Some("the connection was replaced".into());
         }
         if fs::symlink_metadata(&self.o.client_config).is_err() {
             return Some("config removed (signed out or no exit assigned)".into());
@@ -279,7 +367,14 @@ fn settle_then_apply_dns(config: &Path) {
 /// Run until told to stop. Returns Err only when sing-box cannot be kept running.
 pub fn run(o: Options) -> Result<()> {
     runtime::prepare_protected_dir(&o.runtime_dir, o.require_privileged)?;
+    let lock_path = o.runtime_dir.join("tunnel.lock");
+    runtime::clean_protected_file(&lock_path, o.require_privileged)?;
+    let _lock = session::try_lock(&lock_path)?.context("another tunnel supervisor is running on this host")?;
     let mut s = Supervisor { o, child: None, restarts: Vec::new(), route_generation: 0, running: None };
+    if let Some(reason) = s.stop_reason() {
+        s.status("stopped", &reason);
+        return Ok(());
+    }
     s.status("starting", "");
     // The version being loaded; anything written after this point is picked up by the loop, including changes
     // made while the DNS settle below is still waiting.
@@ -304,7 +399,9 @@ pub fn run(o: Options) -> Result<()> {
             match s.load() {
                 Ok(true) => {
                     s.status("starting", "reloading the tunnel configuration");
-                    s.reload()?;
+                    if let Err(error) = s.reload() {
+                        return Err(s.failed(error));
+                    }
                     s.publish_ready_routes("config reloaded");
                 }
                 Ok(false) => {}
@@ -328,7 +425,9 @@ pub fn run(o: Options) -> Result<()> {
             }
             s.restarts.push(Instant::now());
             s.status("starting", "restarting the tunnel");
-            s.start()?;
+            if let Err(error) = s.start() {
+                return Err(s.failed(error));
+            }
             s.publish_ready_routes(&format!("sing-box exited ({code}) and was restarted"));
         }
     }

@@ -31,7 +31,7 @@ pub fn sync_once(paths: &Paths, session: &Session, mode: &str) -> Result<SyncOut
     // Only send the ETag if the file it describes is still there.
     let etag = if paths.config().exists() { read_etag(paths) } else { None };
     let reply = api.config(&session.token, mode, etag.as_deref())?;
-    let _g = session::lock();
+    let _g = session::lock(paths)?;
     if !Session::is_current(paths, &session.id) {
         return Ok(SyncOutcome::Superseded);
     }
@@ -55,9 +55,7 @@ pub fn sync_once(paths: &Paths, session: &Session, mode: &str) -> Result<SyncOut
     }
 }
 
-/// [`sync_once`] and then the XTCP visitor ([`visitor::sync_visitor`]): what the desktop app (and `ccproxy up
-/// --visitor`) polls. Updated when either changed. A visitor whose settings do not match the tunnel config (sing-box
-/// must dial the visitor's local port) is reported as [`SyncOutcome::XtcpUnavailable`].
+/// Poll the tunnel config and XTCP visitor for the CLI and desktop app. The visitor and its tunnel entry must agree.
 pub fn sync_with_visitor(paths: &Paths, session: &Session, mode: &str) -> Result<SyncOutcome> {
     let config = sync_once(paths, session, mode)?;
     if !matches!(config, SyncOutcome::Updated | SyncOutcome::Unchanged) {
@@ -71,8 +69,11 @@ pub fn sync_with_visitor(paths: &Paths, session: &Session, mode: &str) -> Result
         // An older control plane without the endpoint: connect exactly as before this feature.
         VisitorSync::NotNeeded | VisitorSync::Unchanged | VisitorSync::Unsupported => false,
     };
+    let _g = session::lock(paths)?;
+    if !Session::is_current(paths, &session.id) {
+        return Ok(SyncOutcome::Superseded);
+    }
     if let Err(e) = visitor::check_entry(paths) {
-        let _g = session::lock();
         visitor::remove_config_files(paths);
         return Ok(SyncOutcome::XtcpUnavailable(format!("{e:#}")));
     }

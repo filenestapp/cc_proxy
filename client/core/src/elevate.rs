@@ -1,4 +1,4 @@
-//! Start the supervisor (`ccproxy tunnel ...`) with the privileges a TUN interface needs.
+//! Start the supervisor (`aifree tunnel ...`) with the privileges a TUN interface needs.
 //!
 //!   macOS    osascript "do shell script ... with administrator privileges"  (system password prompt)
 //!   Linux    pkexec                                                          (polkit prompt)
@@ -12,8 +12,8 @@ use anyhow::{anyhow, Context, Result};
 use std::path::Path;
 use std::process::Command;
 
-/// Arguments for `ccproxy tunnel` that point the supervisor at the shared files in `paths`.
-pub fn tunnel_args(paths: &Paths, singbox: &Path, heartbeat_timeout_secs: u64) -> Vec<String> {
+/// Arguments for the privileged supervisor of a particular connection.
+pub fn tunnel_args(paths: &Paths, singbox: &Path, heartbeat_timeout_secs: u64, connection_id: &str) -> Vec<String> {
     vec![
         "--state-dir".into(),
         paths.dir.display().to_string(),
@@ -22,6 +22,8 @@ pub fn tunnel_args(paths: &Paths, singbox: &Path, heartbeat_timeout_secs: u64) -
         singbox.display().to_string(),
         "--heartbeat-timeout".into(),
         heartbeat_timeout_secs.to_string(),
+        "--connection-id".into(),
+        connection_id.into(),
     ]
 }
 

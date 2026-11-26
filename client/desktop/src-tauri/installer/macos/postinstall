@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+bin_dir="${3%/}/usr/local/bin"
+link="$bin_dir/aifree"
+target="/Applications/aifree.app/Contents/MacOS/aifree"
+mkdir -p "$bin_dir"
+if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+  exit 0
+fi
+ln -sh "$target" "$link"

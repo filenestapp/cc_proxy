@@ -1,4 +1,4 @@
-//! Issue #61: the visitor guard (`ccproxy visitor`) and the app-side controller, driven against a fake frpc that
+//! Issue #61: the visitor guard (`aifree visitor`) and the app-side controller, driven against a fake frpc that
 //! prints frpc 0.72.0's log lines. Unix only: the fake frpc is a shell script. Real frpc runs in the Docker e2e.
 #![cfg(unix)]
 
@@ -86,7 +86,7 @@ fn mode(paths: &Paths, m: &str) {
 }
 
 fn guard(e: &Env, stdin: Stdio) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_ccproxy"))
+    Command::new(env!("CARGO_BIN_EXE_aifree"))
         .arg("--state-dir").arg(&e.paths.dir).arg("visitor").arg("--frpc").arg(&e.frpc)
         .stdin(stdin).stdout(Stdio::null()).stderr(Stdio::null())
         .spawn().unwrap()
@@ -184,7 +184,7 @@ fn sign_out_removes_the_files_and_stops_the_visitor() {
     let mut g = guard(&e, Stdio::piped());
     wait_for("ready", || state_of(&e.paths).as_deref() == Some("ready"));
     let pid = launches(&e.paths)[0];
-    Session::clear(&e.paths);
+    Session::clear(&e.paths).unwrap();
     assert!(exited_within(&mut g, Duration::from_secs(5)).is_some());
     assert!(!alive(pid));
     for p in [e.paths.visitor_toml(), e.paths.visitor_ca(), e.paths.visitor_token(), e.paths.visitor_info()] {
@@ -251,7 +251,7 @@ fn a_failed_hole_punch_is_reported_while_frpc_keeps_its_bounded_retries() {
 }
 
 fn launcher(e: &Env) -> Launcher {
-    Launcher { ccproxy: PathBuf::from(env!("CARGO_BIN_EXE_ccproxy")), frpc: e.frpc.clone() }
+    Launcher { cli: PathBuf::from(env!("CARGO_BIN_EXE_aifree")), frpc: e.frpc.clone() }
 }
 
 fn running_tunnel(pid: u32, route_generation: u64) -> Status {
@@ -260,6 +260,8 @@ fn running_tunnel(pid: u32, route_generation: u64) -> Status {
         pid: Some(pid),
         message: String::new(),
         updated: 100,
+        connection_id: None,
+        supervisor_pid: None,
         route_generation,
         egress_fingerprint: None,
     }
@@ -515,12 +517,12 @@ fn only_a_verified_orphan_is_killed() {
     cleanup(&e);
 }
 
-/// PR #64 review: the visitor never runs with elevated rights. `ccproxy up` (root) has no visitor option, and the
-/// guard and `ccproxy headless` refuse root. The refusal itself can only be exercised as root: here when the tests
+/// PR #64 review: the visitor never runs with elevated rights. `aifree up` (root) has no visitor option, and the
+/// guard and `aifree headless` refuse root. The refusal itself can only be exercised as root: here when the tests
 /// run as root, and always in the Docker e2e (controlplane/test/xtcp/desktop-phase.sh).
 #[test]
 fn the_privileged_cli_path_runs_no_visitor() {
-    let ccproxy = env!("CARGO_BIN_EXE_ccproxy");
+    let ccproxy = env!("CARGO_BIN_EXE_aifree");
     let out = Command::new(ccproxy).args(["up", "--visitor"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2), "clap rejects the removed flag");
     assert!(String::from_utf8_lossy(&out.stderr).contains("unexpected argument '--visitor'"));

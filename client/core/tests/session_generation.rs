@@ -45,7 +45,7 @@ fn replaced_while_in_flight(response: &'static str, tag: &str) {
     };
     std::thread::sleep(std::time::Duration::from_millis(200)); // the request is in flight
     // Sign out and sign in again (possibly as someone else) before the reply arrives.
-    Session::clear(&paths);
+    Session::clear(&paths).unwrap();
     let new = Session::new(url, "bob".into(), "mac".into(), "new-token".into());
     new.save(&paths).unwrap();
     fs::write(paths.config(), b"{\"bob\": true}").unwrap();
@@ -123,7 +123,7 @@ fn a_legacy_session_keeps_its_binding_when_the_login_username_is_recovered() {
     assert!(session.login_username.is_none());
 
     {
-        let _guard = ccproxy_core::session::lock();
+        let _guard = ccproxy_core::session::lock(&paths).unwrap();
         assert!(Session::is_current(&paths, &session.id));
         session.save_login_username_locked(&paths, "customer@example.com".into()).unwrap();
     }

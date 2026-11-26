@@ -216,7 +216,7 @@ impl ccproxy_core::commands::Effects for ConnectFx {
     fn sync(&self, paths: &Paths, session: &Session) -> anyhow::Result<SyncOutcome> {
         sync_with_visitor(paths, session, "app")
     }
-    fn launch_supervisor(&self, _: &Paths) -> anyhow::Result<()> {
+    fn launch_supervisor(&self, _: &Paths, _: &str) -> anyhow::Result<()> {
         Ok(())
     }
     fn remote_logout(&self, _: &Session) -> anyhow::Result<()> {
@@ -241,11 +241,15 @@ fn an_older_control_plane_without_the_visitor_endpoint_still_connects() {
     assert_eq!(connect(&paths, &tunnel, &ConnectFx), Ok(Connected::Started));
     assert!(paths.config().exists() && !visitor::required(&paths));
     assert_eq!(sync_visitor(&paths, &session).unwrap(), VisitorSync::Unsupported);
+    tunnel.request_stop(&paths).unwrap();
+    tunnel.release_if_stopped(&paths);
 
     // An XTCP host with a hand-run visitor (public entry 127.0.0.1): Connect still succeeds, the app runs no visitor.
     srv.route("/v1/config", ok("c2", &singbox_json("127.0.0.1", 20440)));
     assert_eq!(connect(&paths, &tunnel, &ConnectFx), Ok(Connected::Started));
     assert!(!visitor::required(&paths));
+    tunnel.request_stop(&paths).unwrap();
+    tunnel.release_if_stopped(&paths);
 
     // Visitor files from a newer server that was rolled back are dropped, not run against the old one.
     srv.route("/v1/xtcp-visitor", ok("v1", &visitor_json("frps-token-0123456789abcdef", 20440, "ready")));

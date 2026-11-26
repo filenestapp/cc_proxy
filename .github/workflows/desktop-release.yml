@@ -26,7 +26,7 @@ jobs:
           - os: macos-15
             target: universal-apple-darwin
             rust-targets: aarch64-apple-darwin x86_64-apple-darwin
-            bundles: app,dmg
+            bundles: app
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             bundles: deb,appimage
@@ -59,6 +59,8 @@ jobs:
         with:
           node-version: 22
       - name: Sidecars
+        env:
+          AIFREE_RELEASE_VERSION: ${{ inputs.version }}
         run: desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
       - name: Render release-only updater configuration
         env:
@@ -75,12 +77,16 @@ jobs:
         run: npx --yes @tauri-apps/cli@2.12.6 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config tauri.release.conf.json -- --locked
       - name: Verify the macOS app and sidecars run on both architectures
         if: runner.os == 'macOS'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           app="target/${{ matrix.target }}/release/bundle/macos/aifree.app/Contents"
           main=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Info.plist")
-          for executable in "$main" ccproxy sing-box frpc; do
+          for executable in "$main" aifree sing-box frpc; do
             for arch in arm64 x86_64; do lipo "$app/MacOS/$executable" -verify_arch "$arch"; done
           done
+          "$app/MacOS/aifree" --version | grep -Fx "aifree $RELEASE_VERSION"
+          desktop/scripts/package-macos-installer.sh "${app%/Contents}" "target/${{ matrix.target }}/release/bundle/dmg/aifree_${RELEASE_VERSION}_universal.dmg"
       - name: Sign Debian updater packages when Tauri does not create their signatures
         if: runner.os == 'Linux'
         env:
@@ -133,6 +139,8 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - name: Sidecars
+        env:
+          AIFREE_RELEASE_VERSION: ${{ inputs.version }}
         run: desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
       - name: Render release-only updater configuration
         env:
@@ -151,7 +159,7 @@ jobs:
           $release = Join-Path $PWD "target/$env:RELEASE_TARGET/release"
           $sidecars = Join-Path $PWD "desktop/src-tauri/binaries"
           $files = @((Join-Path $release "ccproxy-desktop.exe"))
-          foreach ($name in "ccproxy", "sing-box", "frpc") {
+          foreach ($name in "aifree", "sing-box", "frpc") {
             $files += Join-Path $sidecars "${name}-$($env:RELEASE_TARGET).exe"
           }
           foreach ($file in $files) {
@@ -240,6 +248,52 @@ jobs:
           path: |
             ${{ steps.installer.outputs.file }}
             ${{ steps.installer.outputs.file }}.sig
+          if-no-files-found: error
+          retention-days: 30
+
+  cli:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux musl toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ matrix.target }}
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - name: Package the standalone CLI
+        run: client/cli/package-linux.sh "$RELEASE_VERSION" ${{ matrix.target }} dist
+      - name: Verify the archive and version
+        working-directory: dist
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          package="aifree-cli-$RELEASE_VERSION-linux-$ARCH"
+          sha256sum -c "$package.tar.gz.sha256"
+          tar -xzf "$package.tar.gz"
+          "$package/aifree" --version | grep -Fx "aifree $RELEASE_VERSION"
+          "$package/aifree" --help
+          "$package/sing-box" version
+          "$package/frpc" --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aifree-cli-${{ inputs.version }}-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz*
           if-no-files-found: error
           retention-days: 30
 

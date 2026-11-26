@@ -281,7 +281,7 @@ async fn install(
     if !CONFIGURED {
         return Err(InstallResult::Failed);
     }
-    if app.tunnel.wants_connection() {
+    if app.tunnel.owns_connection() || app.current_status().is_some_and(|status| status.is_active()) {
         return Err(InstallResult::Connected);
     }
     let update = pending.begin_install(require_presentation)?;
@@ -292,8 +292,15 @@ async fn install(
             return Err(InstallResult::Failed);
         }
     };
-    let _session = ccproxy_core::session::lock();
-    if app.tunnel.wants_connection() {
+    let Ok(Some(_connection)) = ccproxy_core::commands::try_connection_lock(&app.paths) else {
+        pending.finish_install();
+        return Err(InstallResult::Connected);
+    };
+    let Ok(_session) = ccproxy_core::session::lock(&app.paths) else {
+        pending.finish_install();
+        return Err(InstallResult::Failed);
+    };
+    if app.current_status().is_some_and(|status| status.is_active()) {
         pending.finish_install();
         return Err(InstallResult::Connected);
     }

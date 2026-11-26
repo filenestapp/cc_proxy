@@ -9,9 +9,9 @@
 #   visitor  official frpc as the XTCP visitor (QUIC, no fallback) on 127.0.0.1:20443, and a sing-box client built
 #            from aifree's own client config (/v1/config?mode=proxy) on 127.0.0.1:2080
 #   echo     answers with the caller's IPv4 (and /big with 20 MB); also target.test (a client rule domain)
-#   cp-http  the same control plane over plain HTTP, for the ccproxy client (its TLS trusts public roots only)
-#   desktop  the real ccproxy client (client/cli, Linux TUN, app mode), split as the desktop app is: the user runs
-#            `ccproxy headless` (visitor from /v1/xtcp-visitor, frpc 0.72.0 as that user), root only `ccproxy tunnel`
+#   cp-http  the same control plane over plain HTTP, for the aifree client (its TLS trusts public roots only)
+#   desktop  the real aifree client (client/cli, Linux TUN, app mode), split as the desktop app is: the user runs
+#            `aifree headless` (visitor from /v1/xtcp-visitor, frpc 0.72.0 as that user), root only `aifree tunnel`
 #
 # Checks: XTCP registration; the agent's XTCP sync under systemd (installed file confirmed without reload, a second
 # shared port hot-reloaded and confirmed without rerunning the installer, release removes the proxy, ready after a
@@ -101,8 +101,8 @@ FROM debian:12-slim
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates python3 procps >/dev/null \
  && rm -rf /var/lib/apt/lists/*
 EOF
-# The ccproxy client for Linux (static musl build). frpc and sing-box are mounted next to it, where the desktop bundle
-# puts them, so `ccproxy headless` finds them without flags.
+# The aifree client for Linux (static musl build). frpc and sing-box are mounted next to it, where the desktop bundle
+# puts them, so `aifree headless` finds them without flags.
 docker build -q -t ccx-desktop -f - "$REPO/client" >/dev/null <<'EOF'
 FROM rust:1.95-alpine AS build
 RUN apk add --no-cache musl-dev
@@ -110,12 +110,14 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY core core
 COPY cli cli
-RUN sed -i 's#, *"desktop/src-tauri"##' Cargo.toml && cargo build --release -p ccproxy
+RUN sed -i 's#, *"desktop/src-tauri"##' Cargo.toml && cargo build --release -p aifree-cli
 FROM debian:12-slim
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates iproute2 procps python3 >/dev/null \
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates iproute2 procps python3 sudo >/dev/null \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=build /src/target/release/ccproxy /opt/aifree/ccproxy
-RUN ln -s /opt/aifree/ccproxy /usr/local/bin/ccproxy
+COPY --from=build /src/target/release/aifree /opt/aifree/aifree
+RUN ln -s /opt/aifree/aifree /usr/local/bin/aifree \
+ && printf 'cust ALL=(root) NOPASSWD: /opt/aifree/aifree\n' > /etc/sudoers.d/aifree-test \
+ && chmod 0440 /etc/sudoers.d/aifree-test
 EOF
 
 echo "== frp $FRP_VERSION and sing-box $SINGBOX_VERSION for the test peers (checked against the installer's pins)"
@@ -290,6 +292,13 @@ got=$(proxied -o /dev/null -w '%{size_download}' "http://$IP_ECHO:8080/big")
 after=$(frps_bytes)
 echo "20 MB transfer: downloaded $got bytes; frps interface counters $before -> $after ($((after - before)) bytes)"
 check "20 MB through the tunnel, frps carried under 1 MB" "[ '$got' = $((20 << 20)) ] && [ $((after - before)) -lt 1048576 ]"
+
+if [[ "${AIFREE_CLIENT_ONLY:-0}" == 1 ]]; then
+  # shellcheck source=desktop-phase.sh
+  source "$HERE/desktop-phase.sh"
+  [ "$status" = 0 ] && echo "AIFREE XTCP PASS" || echo "AIFREE XTCP FAILED"
+  exit "$status"
+fi
 
 echo "== automatic agent update (issue #67): two user ports, Direct and XTCP, normal service execution"
 host_field() { # host_field KEY: this host's field in GET /admin/agent-rollout
