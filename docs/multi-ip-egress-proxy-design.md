@@ -192,7 +192,7 @@ Probe(target, vantage, latency_ms, ok, at)
 | DNS | 命中的域名只由 sing-box 解析，真实解析在出口机进行 |
 | IPv6 | 首版命中的域名不返回 AAAA，出口机也不配置 IPv6 出站 |
 | QUIC/UDP | With QUIC blocking enabled, matching UDP 443 is rejected after the STUN rule is evaluated. |
-| WebRTC (STUN) | Compatible app-mode clients route recognized UDP STUN through the exit by default, including UDP 443. The dual-stack TUN captures IPv6 STUN and the exit refuses IPv6 destinations. The bundled frpc uses direct STUN to establish XTCP. The environment check compares STUN replies with the verified exit. See the [client policy and coverage](../client/README.md#webrtc-and-stun). |
+| WebRTC (STUN) | Compatible app-mode clients route recognized UDP STUN through the exit by default, including UDP 443. The dual-stack TUN captures IPv6 STUN that reaches it, and the exit refuses IPv6 destinations. Sockets bound to a physical device remain a Linux acceptance gap. The bundled frpc uses direct STUN to establish XTCP. The environment check compares STUN replies with the verified exit. See the [client policy and coverage](../client/README.md#webrtc-and-stun). |
 | 应用自带 DoH | 域名模式下无法控制；在诊断页说明，引导用户改用应用模式 |
 | 其他代理抢先接管 | 客户端检测并提示设置 `DIRECT` 规则 |
 | 绑定缺失 | 服务端 `final: deny`，没有绑定就断开 |

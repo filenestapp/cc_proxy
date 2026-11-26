@@ -117,6 +117,8 @@ While connected, **Environment check → UDP and STUN** reports **Exit** when a 
 
 The policy applies to new, TUN-routed UDP flows. The bundled frpc executable uses direct IPv4 STUN for XTCP hole punching. The supervisor limits that exception to its installed executable path on an XTCP connection. Local WebRTC host candidates, STUN over TCP or TLS, messages without the RFC 5389 magic cookie, and flows that began before Connect are outside this protection. Domain and local-proxy modes use their original routing. Deploy the control plane first, then release clients that declare support. Older clients receive their original configuration and require an update to enable the protection.
 
+The pinned sing-box can still miss STUN from a Linux socket bound to a physical network device. This case remains open for release acceptance.
+
 ### XTCP exits
 
 For an exit behind NAT, the CLI and GUI fetch device-scoped visitor settings from `/v1/xtcp-visitor`. The unprivileged frontend starts the bundled frpc after TUN routes are ready, because the UDP path must be established with the active routes. It reports running after frpc opens the direct path. The visitor receives the token through its environment and redacts it from logs. Disconnect, sign-out, or frontend exit stops the guard and frpc.
