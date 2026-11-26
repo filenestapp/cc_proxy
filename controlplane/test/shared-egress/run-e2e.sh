@@ -219,13 +219,15 @@ host_body='"server_name":"www.cloudflare.com","port_min":20000,"port_max":20999,
 echo "== direct host: alice exclusive, then switched to shared; bob joins the same IPv4"
 PUB_TOKEN=$(api POST /admin/hosts "{\"name\":\"pub\",\"public_host\":\"$IP_PUB\",$host_body}" | json '["agent_token"]')
 api POST /admin/hosts/pub/ips "{\"ips\":[\"$IP_PUB\"]}" >/dev/null
-for u in alice bob eve; do api POST /admin/users "{\"name\":\"$u\",\"password\":\"$PW\"}" >/dev/null; done
+for u in alice eve; do
+  api POST /admin/users "{\"name\":\"$u\",\"password\":\"$PW\",\"mode\":\"exclusive\"}" >/dev/null
+done
+api POST /admin/users "{\"name\":\"bob\",\"password\":\"$PW\"}" >/dev/null
 api POST /admin/users/alice/assign "{\"ip\":\"$IP_PUB\",\"port\":20007}" >/dev/null
 ALICE=$(login alice laptop)
 client_config "$ALICE" > "$OUT/alice-before.json"
 api POST /admin/users/bob/assign "{\"ip\":\"$IP_PUB\"}" > "$OUT/r.json"
 check "an exclusive holder refuses a second user (409, names the holder)" "[ \$(code) = 409 ] && grep -q 'alice (exclusive)' '$OUT/r.json'"
-api PUT /admin/users/bob '{"mode":"shared"}' >/dev/null
 api PUT /admin/users/alice '{"mode":"shared"}' >/dev/null
 check "switching alice to shared succeeds" "[ \$(code) = 200 ]"
 client_config "$ALICE" > "$OUT/alice-after.json"
@@ -262,7 +264,9 @@ check "and alice no longer does" "[ -z \"\$(seen ccs-c-alice)\" ]"
 echo "== XTCP host: an existing single-port host (carol on 20443) upgraded with a second shared user (dave)"
 NAT_TOKEN=$(api POST /admin/hosts "{\"name\":\"nat\",\"public_host\":\"127.0.0.1\",$host_body}" | json '["agent_token"]')
 api POST /admin/hosts/nat/ips "{\"ips\":[\"$IP_NAT\"]}" >/dev/null
-for u in carol dave; do api POST /admin/users "{\"name\":\"$u\",\"password\":\"$PW\"}" >/dev/null; done
+for u in carol dave; do
+  api POST /admin/users "{\"name\":\"$u\",\"password\":\"$PW\",\"mode\":\"exclusive\"}" >/dev/null
+done
 api POST /admin/users/carol/assign "{\"ip\":\"$IP_NAT\",\"port\":20443}" >/dev/null
 CA_JSON=$(python3 -I -c "import json,sys; print(json.dumps(open(sys.argv[1]).read()))" "$OUT/tls/ca.pem")
 api PUT /admin/hosts/nat/xtcp "{\"server_addr\":\"$IP_FRPS\",\"server_port\":7003,\"tls_server_name\":\"frps\",\"ca_pem\":$CA_JSON,\"auth_token\":\"$FRPS_TOKEN\",\"proxy_name\":\"ccproxy-nat-direct\",\"secret_key\":\"$XTCP_KEY\",\"local_port\":20443}" > "$OUT/xtcp.json"

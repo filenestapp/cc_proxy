@@ -107,6 +107,8 @@ controlplane/cpctl.py passwd alice --revoke-devices
 controlplane/cpctl.py revoke alice MacBook
 ```
 
+New proxy users default to shared egress mode. Select Dedicated egress IP in the console, pass `--exclusive` to `cpctl.py user-add`, or set `"mode":"exclusive"` in the admin API to create a dedicated user.
+
 Use a TLS 1.3 site as the Reality SNI and allow the host entry ports through its firewall. The console can manage hosts, IP inventory, user assignments, headless devices, settings, alerts, administrators, and audit history. Bulk IP entry accepts single addresses, ranges, and CIDR blocks from `/22` to `/32`.
 
 Browser sessions use an `HttpOnly`, `SameSite=Strict` cookie with a 12-hour expiry and a hashed session token. TLS requests set `Secure`. Authenticated mutations require `X-CSRF-Token`. Administrator password changes invalidate their sessions. The console has a content security policy and forbids framing. Audit entries retain successful mutations and login attempts for 180 days, redact sensitive request fields, and use `api-token` as the actor for bearer-token administration.

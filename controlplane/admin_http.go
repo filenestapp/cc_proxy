@@ -275,7 +275,7 @@ func (a *api) userAdd(r *apiRequest) (response, error) {
 		accountInput
 		Mode       string  `json:"mode"`
 		MaxDevices integer `json:"max_devices"`
-	}{Mode: "exclusive", MaxDevices: maxDevices}
+	}{Mode: "shared", MaxDevices: maxDevices}
 	if err := r.decode(&body, "name"); err != nil {
 		return response{}, err
 	}

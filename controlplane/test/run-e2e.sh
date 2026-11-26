@@ -54,7 +54,7 @@ cpctl ip-add hk-1 10.99.0.3 10.99.0.4 10.99.0.5 10.99.0.6 >/dev/null
 cpctl ip-add jp-1 10.99.0.13 10.99.0.14 >/dev/null
 compose --profile agents up -d egress-hk egress-jp 2>&1 | tail -n 1
 
-for u in alice bob erin frank gina; do cpctl user-add "$u" --password "pw-$u-0123" >/dev/null; done
+for u in alice bob erin frank gina; do cpctl user-add "$u" --exclusive --password "pw-$u-0123" >/dev/null; done
 for u in carol dave; do cpctl user-add "$u" --password "pw-$u-0123" --shared >/dev/null; done
 cpctl assign alice 10.99.0.3 >/dev/null
 cpctl assign bob --host hk-1 >/dev/null            # auto: lowest free IP and port on hk-1
