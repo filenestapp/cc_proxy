@@ -1,4 +1,4 @@
-use crate::{exit_probe::PublicExit, App, View};
+use crate::{exit_probe::PublicExit, updates::PendingUpdate, App, View};
 use serde::Deserialize;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, LazyLock};
@@ -214,6 +214,9 @@ pub(crate) fn show_window(handle: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        if let Some(pending) = handle.try_state::<PendingUpdate>() {
+            pending.request_check();
+        }
     }
 }
 

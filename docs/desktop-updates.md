@@ -59,7 +59,8 @@ receive an administrator-credential prompt before the package update completes.
 
 ## Client behavior
 
-The app checks for a signed update at launch and when the window opens. It queues a valid update,
+The app checks for a signed update at launch and when you reopen it from the system tray. If the
+app is up to date, its background check runs again after six hours. It queues a valid update,
 waits for the window to show the offer, then automatically installs after the proxy tunnel
 disconnects. The install command checks the tunnel state and the Later choice again immediately
 before activation. Once activation is claimed, a late Later request is rejected rather than racing
