@@ -35,7 +35,7 @@ func fakeDist(t *testing.T) (string, map[string]string) {
 		sums.WriteString(digests[platform] + "  " + name + "\n")
 	}
 	os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(sums.String()), 0o644)
-	os.WriteFile(filepath.Join(dir, "VERSION"), []byte("agent-test1234\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "VERSION"), []byte("v0.1.0\n"), 0o644)
 	return dir, digests
 }
 
@@ -85,7 +85,7 @@ func TestInstallersCarryTheDigests(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(sh)
-	if strings.Contains(text, "@@INSTALLER_DATA@@") || !strings.Contains(text, "AGENT_VERSION='agent-test1234'") {
+	if strings.Contains(text, "@@INSTALLER_DATA@@") || !strings.Contains(text, "AGENT_VERSION='v0.1.0'") {
 		t.Fatal("data block not filled in")
 	}
 	for platform, digest := range digests {
@@ -108,6 +108,19 @@ func TestInstallersCarryTheDigests(t *testing.T) {
 	}
 	if !bytes.Contains(ps, []byte("'windows-arm64' = '"+digests["windows-arm64"]+"'")) {
 		t.Fatal("exit.ps1 lacks the agent digest")
+	}
+}
+
+func TestInstallerAcceptsLegacyAndPublishedAgentVersions(t *testing.T) {
+	dist, _ := fakeDist(t)
+	for _, version := range []string{"agent-0a37adb7da36", "v0.1.0"} {
+		if err := os.WriteFile(filepath.Join(dist, "VERSION"), []byte(version+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		release, err := loadAgentRelease(dist)
+		if err != nil || release.Version != version {
+			t.Fatalf("loadAgentRelease(%q) = %+v, %v", version, release, err)
+		}
 	}
 }
 
@@ -221,7 +234,7 @@ func TestInstallRoutes(t *testing.T) {
 	var manifest struct {
 		Agent agentRelease `json:"agent"`
 	}
-	if code != 200 || json.Unmarshal(body, &manifest) != nil || manifest.Agent.Version != "agent-test1234" || len(manifest.Agent.Digests) != 6 {
+	if code != 200 || json.Unmarshal(body, &manifest) != nil || manifest.Agent.Version != "v0.1.0" || len(manifest.Agent.Digests) != 6 {
 		t.Fatalf("manifest: %d %s", code, body)
 	}
 	if code, _ = get(t, h, "/install/agent/darwin-arm64", ""); code != 401 {

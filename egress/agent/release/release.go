@@ -6,8 +6,9 @@
 //	release.json      the record: version, release sequence, source commit and every binary's name, size and SHA-256
 //	release.json.sig  an Ed25519 signature over the exact bytes of release.json, as "ed25519:<base64>"
 //
-// Agent versions are source hashes ("agent-<tree>"), so they carry no order. The sequence does: the workflow sets it
-// from its run number, and an agent never moves to a record whose sequence is lower than the release it runs. The
+// Published Agent versions use semantic versions ("vMAJOR.MINOR.PATCH"). Older source-hash versions
+// ("agent-<tree>") remain valid. The sequence determines update order: the workflow sets it from its run number,
+// and an agent never moves to a record whose sequence is lower than the release it runs. The
 // control plane only stores and serves these files; the agent checks the signature against the public keys compiled
 // into it (release_keys.txt), so a control plane cannot make a host run a binary the release key did not sign.
 package release

@@ -27,13 +27,18 @@ func TestUpdateWithRealBinaries(t *testing.T) {
 	if testing.Short() || runtime.GOOS != "darwin" {
 		t.Skip("builds four macOS agents and waits for update health checks")
 	}
+	const (
+		legacyVersion    = "agent-0a37adb7da36"
+		publishedVersion = "v0.1.0"
+		brokenVersion    = "v0.1.1"
+	)
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	build := t.TempDir()
 	binaries := map[string][]byte{}
-	for _, version := range []string{"launcher-it", "agent-it-v1", "agent-it-v2", "agent-it-v3"} {
+	for _, version := range []string{"launcher-it", legacyVersion, publishedVersion, brokenVersion} {
 		path := filepath.Join(build, version)
 		command := exec.Command("go", "build", "-trimpath", "-o", path, "-ldflags",
 			"-X main.version="+version+" -X main.extraReleaseKeys="+release.FormatPublicKey(public), ".")
@@ -64,9 +69,9 @@ func TestUpdateWithRealBinaries(t *testing.T) {
 		}
 		return path
 	}
-	v1Path := stage("agent-it-v1")
+	legacyPath := stage(legacyVersion)
 	stateDir := filepath.Join(dir, "state")
-	if err := saveUpdateFile(stateDir, updateFile{Launcher: "launcher-it", Running: "agent-it-v1", RunningSequence: 1}); err != nil {
+	if err := saveUpdateFile(stateDir, updateFile{Launcher: "launcher-it", Running: legacyVersion, RunningSequence: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "token"), []byte(testToken+"\n"), 0o600); err != nil {
@@ -205,41 +210,41 @@ func TestUpdateWithRealBinaries(t *testing.T) {
 		cp.mu.Unlock()
 	}
 	cp.mu.Lock()
-	cp.releases = map[string]*updateOffer{"agent-it-v1": offer("agent-it-v1", 1, 0)}
+	cp.releases = map[string]*updateOffer{legacyVersion: offer(legacyVersion, 1, 0)}
 	cp.mu.Unlock()
 
 	waitReport("v1 confirmed", 30*time.Second, func(report map[string]any) bool {
-		return report["agent_version"] == "agent-it-v1" && report["apply_state"] == "confirmed"
+		return report["agent_version"] == legacyVersion && report["apply_state"] == "confirmed"
 	})
 	reloadsBefore, pidBefore := reloads(), singboxPID()
 	if reloadsBefore != 1 || pidBefore == "" {
 		t.Fatalf("v1 should start sing-box once: %d reloads, pid %q", reloadsBefore, pidBefore)
 	}
 
-	publish("agent-it-v2", 2, 1)
+	publish(publishedVersion, 2, 1)
 	report := waitReport("v2 updated", 75*time.Second, func(report map[string]any) bool {
 		current := update(report)
-		return report["agent_version"] == "agent-it-v2" && current != nil && current["state"] == updUpdated
+		return report["agent_version"] == publishedVersion && current != nil && current["state"] == updUpdated
 	})
 	t.Logf("v1 -> v2: %v", update(report))
 	if got, _ := os.ReadFile(launcherPath); !bytes.Equal(got, binaries["launcher-it"]) {
 		t.Fatal("the stable launcher was replaced")
 	}
-	if got, _ := os.ReadFile(v1Path); !bytes.Equal(got, binaries["agent-it-v1"]) {
+	if got, _ := os.ReadFile(legacyPath); !bytes.Equal(got, binaries[legacyVersion]) {
 		t.Fatal("v1 was not retained under releases/")
 	}
-	if got, _ := os.ReadFile(releaseBinary(home, "agent-it-v2", testPlatform)); !bytes.Equal(got, binaries["agent-it-v2"]) {
+	if got, _ := os.ReadFile(releaseBinary(home, publishedVersion, testPlatform)); !bytes.Equal(got, binaries[publishedVersion]) {
 		t.Fatal("v2 was not staged under releases/")
 	}
 	if got, pid := reloads(), singboxPID(); got != reloadsBefore || pid != pidBefore {
 		t.Fatalf("upgrade reloaded or restarted sing-box: %d/%s, want %d/%s", got, pid, reloadsBefore, pidBefore)
 	}
 
-	publish("agent-it-v3", 3, 2)
+	publish(brokenVersion, 3, 2)
 	waitState("v3 activation", 75*time.Second, func(state updateFile) bool {
-		return state.Phase == phaseActivating && state.Target.Version == "agent-it-v3"
+		return state.Phase == phaseActivating && state.Target.Version == brokenVersion
 	})
-	v3Path := releaseBinary(home, "agent-it-v3", testPlatform)
+	v3Path := releaseBinary(home, brokenVersion, testPlatform)
 	if err := os.Chmod(v3Path, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -249,8 +254,8 @@ func TestUpdateWithRealBinaries(t *testing.T) {
 			return false
 		}
 		errorText, _ := current["error"].(string)
-		return report["agent_version"] == "agent-it-v2" && current["state"] == updRolledBack &&
-			current["target_version"] == "agent-it-v3" && strings.Contains(errorText, "cannot start agent-it-v3")
+		return report["agent_version"] == publishedVersion && current["state"] == updRolledBack &&
+			current["target_version"] == brokenVersion && strings.Contains(errorText, "cannot start "+brokenVersion)
 	})
 	t.Logf("pre-main rollback: %v", update(report))
 	if got, _ := os.ReadFile(launcherPath); !bytes.Equal(got, binaries["launcher-it"]) {

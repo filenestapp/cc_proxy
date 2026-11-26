@@ -20,8 +20,10 @@ egress/agent/build.sh --verify          # builds 6 targets twice and fails unles
 ```
 
 Output: `egress/agent/dist/ccproxy-exit-agent-{darwin,linux}-{arm64,amd64}`, `...-windows-{amd64,arm64}.exe`,
-`SHA256SUMS` and `VERSION` (`agent-` plus the git tree hash of `egress/agent`, so a rebase or merge that leaves the
-agent source alone gives the same files). The build pins the Go toolchain (`go.mod`), disables cgo, and uses
+`SHA256SUMS` and `VERSION`. Published builds take their semantic version from
+[`RELEASE_VERSION`](../agent/RELEASE_VERSION). Local builds use a visible `-dev.<tree>` suffix. The release workflow
+requires an `exit-agent/<version>` tag at the source commit, and the signed record retains that commit and every
+artifact digest. The build pins the Go toolchain (`go.mod`), disables cgo, and uses
 `-trimpath`, no VCS stamp and an empty build ID. CI (`.github/workflows/exit-agent.yml`) runs the Go tests and the
 reproducibility check, then uploads `dist` as an artifact. With the secret `AGENT_RELEASE_SIGNING_KEY` it also writes
 and signs `release.json` (release sequence = the workflow run number): that artifact is an agent release for managed

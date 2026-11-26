@@ -3,9 +3,8 @@
 #
 #   egress/agent/build.sh [--verify] [VERSION]
 #
-# Default VERSION: "agent-" and the git tree hash of egress/agent, so the binaries depend only on the agent source
-# and not on which commit (or rebase of the control plane) it sits in. A tree with uncommitted agent changes gets
-# "-dirty" appended.
+# Release builds (AGENT_RELEASE_BUILD=1) use the semantic version in RELEASE_VERSION and require its source tag.
+# Normal local builds add a development suffix. VERSION overrides the local label for test fixtures and older callers.
 #
 # Output: egress/agent/dist/ccproxy-exit-agent-<os>-<arch>[.exe] and dist/SHA256SUMS. The control plane serves
 # these files to the installers (GET /install/agent/<os>-<arch>) and embeds their SHA-256 in the install scripts,
@@ -22,13 +21,37 @@ here=$(cd "$(dirname "$0")" && pwd)
 cd "$here"
 verify=
 if [ "${1:-}" = --verify ]; then verify=1; shift; fi
-if [ -n "${1:-}" ]; then
-  version=$1
-else
-  tree=$(git rev-parse --short=12 HEAD:egress/agent 2>/dev/null || echo unknown)
-  version=agent-$tree
-  if [ -n "$(git status --porcelain -- . 2>/dev/null)" ]; then version=$version-dirty; fi
+fail() { printf '%s\n' "$1" >&2; exit 2; }
+[ "$#" -le 1 ] || fail "usage: $0 [--verify] [VERSION]"
+if [ "${AGENT_RELEASE_BUILD:-}" = 1 ] && [ "$#" -ne 0 ]; then
+  fail "a release build takes its version from RELEASE_VERSION"
 fi
+version=${1:-}
+if [ -z "$version" ]; then
+  release_version=$(cat RELEASE_VERSION)
+  case $release_version in
+    *[!v.0-9]*) fail "RELEASE_VERSION must be vMAJOR.MINOR.PATCH" ;;
+  esac
+  printf '%s\n' "$release_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
+    fail "RELEASE_VERSION must be vMAJOR.MINOR.PATCH"
+  if [ "${AGENT_RELEASE_BUILD:-}" = 1 ]; then
+    [ -z "${AGENT_EXTRA_RELEASE_KEYS:-}" ] || fail "a release build cannot include fixture signing keys"
+    [ -z "$(git status --porcelain -- .)" ] || fail "a release build requires a clean Agent source checkout"
+    head=$(git rev-parse HEAD)
+    source_tag=exit-agent/$release_version
+    [ "$(git rev-parse --quiet --verify "refs/tags/$source_tag^{commit}")" = "$head" ] ||
+      fail "a release build requires Git tag $source_tag at HEAD"
+    version=$release_version
+  else
+    tree=$(git rev-parse --short=12 HEAD:egress/agent 2>/dev/null || echo unknown)
+    version=$release_version-dev.$tree
+    if [ -n "$(git status --porcelain -- . 2>/dev/null)" ]; then version=$version-dirty; fi
+  fi
+fi
+case $version in
+  *[!A-Za-z0-9._+-]*) fail "agent version contains unsupported characters" ;;
+esac
+[ "${#version}" -le 64 ] || fail "agent version must not exceed 64 characters"
 toolchain=$(sed -n 's/^toolchain //p' go.mod)
 targets="darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64"
 

@@ -2,8 +2,9 @@
 # (CP_AGENT_DIST) and, signed, an agent release for managed automatic updates (CP_AGENT_RELEASES). Running this
 # workflow is how an operator publishes an agent release; see docs/exit-agent-updates.md.
 #
-# The release sequence is this workflow's run number, so a later run is always a newer release, whatever its source
-# hash. With the secret AGENT_RELEASE_SIGNING_KEY (agent-release keygen) the record is signed and checked against
+# The release sequence is this workflow's run number, so a later run is always a newer release. RELEASE_VERSION is
+# the operator-visible version and its exit-agent/<version> tag pins it to one source commit. With the secret
+# AGENT_RELEASE_SIGNING_KEY (agent-release keygen) the record is signed and checked against
 # egress/agent/release_keys.txt; without it the artifact is unsigned and the control plane refuses to roll it out.
 name: exit-agent
 
@@ -23,6 +24,8 @@ jobs:
         working-directory: egress/agent
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: egress/agent/go.mod
@@ -33,6 +36,8 @@ jobs:
           done
           go test ./...
       - name: Reproducible build
+        env:
+          AGENT_RELEASE_BUILD: "1"
         run: ./build.sh --verify
       - name: Release record
         run: go run ./cmd/agent-release record -dist dist -sequence "$GITHUB_RUN_NUMBER" -commit "$GITHUB_SHA"
