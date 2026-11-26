@@ -390,7 +390,8 @@ if waitfor 300 "the rollback" "[ \"\$(host_field state)\" = rolled_back ] && [ \
   echo "PASS $V3 was rolled back to $V2 ($((SECONDS - started))s): $(host_field error)"
 else echo "FAIL rollback: state $(host_field state), target $(host_field target_version)"; status=1; fi
 check "the console shows the rollout failed for this host, running $V2" "[ \"\$(host_field outcome)\" = failed ] && [ \"\$(host_field agent_version)\" = $V2 ] && [ \"\$(running_version)\" = $V2 ]"
-check "$V3 did start (and exited) before the rollback" "agent_logged 'broken test release: exiting at start' && agent_logged 'update: rolling back agent-e2e-v3-broken to agent-e2e-v2'"
+# The launcher can record the rollback before the Go updater starts. The journal proves the candidate exited.
+check "$V3 did start (and exited) before the rollback" "agent_logged 'broken test release: exiting at start' && agent_logged 'code=exited, status=3/'"
 check "after the rollback both ports are ready and sing-box and frpc kept running" \
   "[ \"\$(port_status)\" = '20443=ready 20444=ready' ] && [ \"\$(unit_pid ccproxy-exit-singbox)\" = '$SB_PID' ] && [ \"\$(unit_pid ccproxy-exit-frpc)\" = '$FRPC_PID' ]"
 check "alice and bob (XTCP) and alice (Direct) still leave from $IP_EXIT" "[ \"\$(via 2080)\" = $IP_EXIT ] && [ \"\$(via 2081)\" = $IP_EXIT ] && [ \"\$(via 2082)\" = $IP_EXIT ]"
