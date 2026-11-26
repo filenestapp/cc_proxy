@@ -16,6 +16,8 @@ pub mod api;
 pub mod commands;
 pub mod elevate;
 pub mod fsguard;
+#[cfg(target_os = "linux")]
+mod linux_stun;
 pub mod runtime;
 pub mod session;
 pub mod supervisor;

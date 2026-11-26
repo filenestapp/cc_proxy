@@ -115,9 +115,9 @@ An administrator can update `client_policy.stun` in the console under **Settings
 
 While connected, **Environment check → UDP and STUN** reports **Exit** when a returned address matches the verified public exit, **Leak** when it differs, or **No answer** when no address is returned. An address comparison requires a verified exit for the route being tested.
 
-The policy applies to new, TUN-routed UDP flows. The bundled frpc executable uses direct IPv4 STUN for XTCP hole punching. The supervisor limits that exception to its installed executable path on an XTCP connection. Local WebRTC host candidates, STUN over TCP or TLS, messages without the RFC 5389 magic cookie, and flows that began before Connect are outside this protection. Domain and local-proxy modes use their original routing. Deploy the control plane first, then release clients that declare support. Older clients receive their original configuration and require an update to enable the protection.
+The bundled frpc executable uses direct IPv4 STUN for XTCP hole punching. The supervisor limits that exception to its installed executable path on an XTCP connection. Local WebRTC host candidates, STUN over TCP or TLS, messages without the RFC 5389 magic cookie, and flows that began before Connect are outside this protection. Domain and local-proxy modes use their original routing. Deploy the control plane first, then release clients that declare support. Older clients receive their original configuration and require an update to enable the protection.
 
-The pinned sing-box can still miss STUN from a Linux socket bound to a physical network device. This case remains open for release acceptance.
+Linux also filters outgoing STUN after the kernel selects the network interface. A socket forced onto a physical interface gets no answer when its packets cannot enter the TUN. This protection requires the kernel's nftables owned-table support, available in Linux 5.15 and later. The kernel removes the filter when the tunnel supervisor exits.
 
 ### XTCP exits
 

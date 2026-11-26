@@ -20,6 +20,7 @@ else echo "FAIL carol's mapping: $(port_status)"; status=1; fi
 docker run -d --name ccx-desktop --network $NET --ip $IP_DESKTOP --cap-add NET_ADMIN --cap-add SYS_PTRACE --device /dev/net/tun --init \
   --add-host other.test:$IP_ECHO --add-host "stun.easyvoip.com:$STUN_ADDRESS" \
   -v "$FRP_DIR/frpc:/opt/aifree/frpc:ro" -v "$SB_BIN:/opt/aifree/sing-box:ro" \
+  -v "$REPO/client/test/stun_probe.py:/app/stun_probe.py:ro" \
   ccx-desktop sh -c "ip route replace default via $IP_STUN && echo 'nameserver 192.0.2.53' > /etc/resolv.conf && exec sleep infinity" >/dev/null
 docker exec ccx-desktop useradd -m -s /bin/sh cust
 STATE=/home/cust/.config/cc-proxy
@@ -32,6 +33,20 @@ stop_up() { ux aifree disconnect && waitfor 20 "aifree to stop" "gone aifree"; }
 gone() { ! dx pgrep -x "$1" >/dev/null; }
 logged() { dx grep -q -- "$1" /tmp/up.log; }
 via() { dx curl -q -sS --max-time 15 "http://$1:8080/${2:-}" 2>/dev/null || true; }
+client_stun_requests() {
+  docker logs ccx-stun 2>&1 | awk -v client="$IP_DESKTOP" '$1 == "stun" && $4 == client { ++n } END { print n + 0 }'
+}
+ordinary_stun() {
+  ux python3 -c '
+import sys
+sys.path.insert(0, "/app")
+from stun_probe import stun_address
+
+server, client, exit_ip = sys.argv[1:]
+assert stun_address(server, 3478) == exit_ip
+assert stun_address(server, 3478, client, device_bound=True) in (None, exit_ip)
+' "$STUN_ADDRESS" "$IP_DESKTOP" "$IP_EXIT"
+}
 # Read frpc's environment as its own user.
 frpc_env_token() { ux sh -c 'p=$(pgrep -x frpc) && tr "\0" "\n" < /proc/$p/environ' 2>/dev/null | sed -n 's/^FRP_AUTH_TOKEN=//p'; }
 # A command's combined output, whatever its exit status (run-e2e.sh sets pipefail, and these commands fail on purpose).
@@ -71,6 +86,7 @@ import json
 client = json.load(open(\"$STATE/sing-box.json\"))[\"route\"][\"rules\"]
 config = json.load(open(\"/var/lib/ccproxy/config.json\"))
 assert config[\"inbounds\"][0][\"auto_redirect\"] is True
+assert config[\"inbounds\"][0][\"auto_redirect_output_mark\"] == \"0xa1f0001\"
 protected = config[\"route\"][\"rules\"]
 assert client[2] == {\"network\": \"udp\", \"protocol\": \"stun\", \"outbound\": \"egress\"}
 assert protected[:2] + protected[3:] == client
@@ -94,8 +110,11 @@ print(json.dumps({'log': {'disabled': True}, 'outbounds': [c['outbounds'][0]],
 }
 PROBED=$(exit_probe)
 check "the public exit check agrees: the exit probe sees $IP_EXIT (got: $PROBED)" "[ '$PROBED' = '$IP_EXIT' ]"
+frpc_stun_count=$(client_stun_requests)
+check "ordinary STUN uses the XTCP exit and cannot use frpc's direct exception" ordinary_stun
+check "the XTCP responder saw no additional direct STUN request" '[[ "$(client_stun_requests)" == "$frpc_stun_count" ]]'
 check "other.test is not proxied (seen as $IP_DESKTOP)" "[ \"\$(via other.test)\" = '$IP_DESKTOP' ]"
-check "the TUN interface is present" "dx ip -o link show | grep -Eq '^[0-9]+: tun[0-9]+:'"
+check "the TUN interface is present" "dx ip link show dev tun-aifree >/dev/null"
 before=$(frps_bytes)
 got=$(dx curl -q -sS --max-time 90 -o /dev/null -w '%{size_download}' http://target.test:8080/big || true)
 after=$(frps_bytes)

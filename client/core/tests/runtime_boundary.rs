@@ -80,6 +80,7 @@ fn unexpected_fields_and_values_are_refused() {
     rejected(|v| v["outbounds"].as_array_mut().unwrap().push(json!({"type": "socks", "tag": "x", "server": "evil", "server_port": 1})));
     rejected(|v| v["inbounds"].as_array_mut().unwrap().push(json!({"type": "mixed", "listen": "0.0.0.0", "listen_port": 1080})));
     rejected(|v| v["inbounds"][0]["address"] = json!(["10.0.0.1/8"]));
+    rejected(|v| v["inbounds"][0]["auto_redirect_output_mark"] = json!("0xa1f0001"));
     rejected(|v| v["route"]["rules"].as_array_mut().unwrap().push(json!({"ip_cidr": ["0.0.0.0/0"], "outbound": "egress"})));
     rejected(|v| v["route"]["final"] = json!("egress"));
     rejected(|v| v["outbounds"][0]["tls"]["insecure"] = json!(true));

@@ -12,9 +12,11 @@ CLIENT_V6 = "2001:db8:88::60"
 COOKIE = bytes.fromhex("2112a442")
 
 
-def exchange(host, port, packet, source=None):
+def exchange(host, port, packet, source=None, device_bound=False):
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
     with socket.socket(family, socket.SOCK_DGRAM) as sock:
+        if device_bound:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"eth0\0")
         if source:
             sock.bind((source, 0))
         sock.settimeout(3)
@@ -25,19 +27,22 @@ def exchange(host, port, packet, source=None):
         except (TimeoutError, ConnectionRefusedError):
             return None
         except OSError as error:
-            if error.errno != errno.ENETUNREACH:
+            if error.errno not in (errno.ENETUNREACH, errno.EPERM):
                 raise
             return None
 
 
-def stun_address(host, port, source=None):
+def stun_address(host, port, source=None, device_bound=False):
     request = b"\x00\x01\x00\x00" + COOKIE + secrets.token_bytes(12)
-    reply = exchange(host, port, request, source)
+    reply = exchange(host, port, request, source, device_bound)
     if reply is None:
         return None
     if reply[:2] != b"\x01\x01" or reply[4:20] != request[4:20] or reply[20:22] != b"\x00\x20":
         raise ValueError("invalid STUN Binding response")
-    address = bytes(a ^ b for a, b in zip(reply[28:], request[4:20]))
+    address_size = int.from_bytes(reply[22:24], "big") - 4
+    if address_size not in (4, 16) or len(reply) < 28 + address_size:
+        raise ValueError("invalid STUN mapped address")
+    address = bytes(a ^ b for a, b in zip(reply[28:28 + address_size], request[4:20]))
     return str(ipaddress.ip_address(address))
 
 
@@ -60,14 +65,29 @@ def main():
         (f"{case}: unmatched plain IPv6 UDP", exchange(ECHO_V6, 9090, b"ping"),
          None if case == "direct" else CLIENT_V6.encode()),
     ]
+    checks.extend([
+        (f"{case}: IPv4 STUN bound to the network device",
+         stun_address(ECHO_V4, 3478, CLIENT_V4, device_bound=True),
+         (expected_v4, None) if case == "proxy" else expected_v4),
+        (f"{case}: IPv6 STUN bound to the network device",
+         stun_address(ECHO_V6, 3478, CLIENT_V6, device_bound=True), expected_v6),
+        (f"{case}: plain IPv4 UDP bound to the network device",
+         exchange(ECHO_V4, 3478, b"ping", CLIENT_V4, device_bound=True), CLIENT_V4.encode()),
+        (f"{case}: plain IPv6 UDP bound to the network device",
+         exchange(ECHO_V6, 3478, b"ping", CLIENT_V6, device_bound=True),
+         None if case == "direct" else CLIENT_V6.encode()),
+    ])
     if case == "proxy":
         checks.extend([
             ("STUN on a rule domain's UDP 443 precedes the QUIC block", stun_address("target.test", 443), egress),
             ("plain UDP 443 still blocked on a rule domain", exchange("target.test", 443, b"ping"), None),
         ])
+    failed = False
     for label, observed, expected in checks:
-        print(f"{'PASS' if observed == expected else 'FAIL'} {label}: {observed!r} (expected {expected!r})")
-    return int(any(observed != expected for _, observed, expected in checks))
+        matches = observed in expected if isinstance(expected, tuple) else observed == expected
+        print(f"{'PASS' if matches else 'FAIL'} {label}: {observed!r} (expected {expected!r})")
+        failed |= not matches
+    return int(failed)
 
 
 if __name__ == "__main__":

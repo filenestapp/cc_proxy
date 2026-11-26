@@ -191,6 +191,8 @@ struct Supervisor {
     route_generation: u64,
     /// The protected config sing-box is running (the accepted rendering).
     running: Option<Value>,
+    #[cfg(target_os = "linux")]
+    stun_guard: Option<crate::linux_stun::Guard>,
 }
 
 impl Supervisor {
@@ -227,11 +229,21 @@ impl Supervisor {
         if child.try_wait()?.is_none() {
             sysdns::apply(&self.o.config());
             if child.try_wait()?.is_none() {
+                #[cfg(target_os = "linux")]
+                if !self.uses_stun_guard() {
+                    // Hold the filter until the old protected routes have been replaced.
+                    self.stun_guard = None;
+                }
                 self.route_generation += 1;
                 self.status("running", message);
             }
         }
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn uses_stun_guard(&self) -> bool {
+        self.running.as_ref().is_some_and(|config| config["inbounds"][0]["auto_redirect"] == true)
     }
 
     /// Re-verify the runtime directory before writing into it with privileges.
@@ -259,8 +271,10 @@ impl Supervisor {
         let (spec, mut protected) = runtime::accept(&raw, &self.o.cache())?;
         if spec.stun.is_some() {
             // Linux policy routes alone miss sockets bound to a physical IPv6 address.
-            if cfg!(target_os = "linux") {
+            #[cfg(target_os = "linux")]
+            {
                 protected["inbounds"][0]["auto_redirect"] = Value::Bool(true);
+                protected["inbounds"][0]["interface_name"] = crate::linux_stun::TUN_NAME.into();
             }
             if let Some(frpc) = self.o.bundled_frpc.as_deref().and_then(Path::to_str)
                 .filter(|_| spec.server == visitor::BIND_ADDR)
@@ -273,6 +287,11 @@ impl Supervisor {
                         "ip_version": 4, "network": "udp", "protocol": "stun", "process_path": [frpc], "outbound": "direct",
                     }),
                 );
+                #[cfg(target_os = "linux")]
+                {
+                    protected["inbounds"][0]["auto_redirect_output_mark"] =
+                        format!("{:#x}", crate::linux_stun::XTCP_OUTPUT_MARK).into();
+                }
             }
         }
         if self.running.as_ref() == Some(&protected) {
@@ -282,7 +301,17 @@ impl Supervisor {
         self.guard()?;
         write_protected(&self.o.candidate(), &bytes, true)?;
         self.singbox_check(&self.o.candidate())?;
+        #[cfg(target_os = "linux")]
+        let new_guard = if spec.stun.is_some() && self.o.require_privileged && self.stun_guard.is_none() {
+            Some(crate::linux_stun::Guard::install()?)
+        } else {
+            None
+        };
         fs::rename(self.o.candidate(), self.o.config())?;
+        #[cfg(target_os = "linux")]
+        if let Some(guard) = new_guard {
+            self.stun_guard = Some(guard);
+        }
         self.running = Some(protected);
         Ok(true)
     }
@@ -350,11 +379,22 @@ impl Supervisor {
     fn failed(&mut self, error: anyhow::Error) -> anyhow::Error {
         self.stop_child();
         sysdns::restore();
+        #[cfg(target_os = "linux")]
+        {
+            self.stun_guard = None;
+        }
         self.status("failed", &format!("{error:#}"));
         error
     }
 
     fn reload(&mut self) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        if self.stun_guard.is_some() && !self.uses_stun_guard() {
+            // Start a new child with the direct policy before releasing the guard.
+            // Delivering SIGHUP does not confirm which policy a live child loaded.
+            self.stop_child();
+            return self.start();
+        }
         #[cfg(unix)]
         if let Some(child) = &mut self.child {
             if child.try_wait()?.is_none() {
@@ -404,7 +444,11 @@ pub fn run(o: Options) -> Result<()> {
     let lock_path = o.runtime_dir.join("tunnel.lock");
     runtime::clean_protected_file(&lock_path, o.require_privileged)?;
     let _lock = session::try_lock(&lock_path)?.context("another tunnel supervisor is running on this host")?;
-    let mut s = Supervisor { o, child: None, restarts: Vec::new(), route_generation: 0, running: None };
+    let mut s = Supervisor {
+        o, child: None, restarts: Vec::new(), route_generation: 0, running: None,
+        #[cfg(target_os = "linux")]
+        stun_guard: None,
+    };
     if let Some(reason) = s.stop_reason() {
         s.status("stopped", &reason);
         return Ok(());
@@ -414,8 +458,7 @@ pub fn run(o: Options) -> Result<()> {
     // made while the DNS settle below is still waiting.
     let mut seen = mtime(&s.o.client_config);
     if let Err(e) = s.load().and_then(|_| s.start()) {
-        s.status("failed", &format!("{e:#}"));
-        return Err(e);
+        return Err(s.failed(e));
     }
     if let Err(error) = s.publish_ready_routes("") {
         return Err(s.failed(error));
@@ -426,6 +469,10 @@ pub fn run(o: Options) -> Result<()> {
         if let Some(reason) = s.stop_reason() {
             s.stop_child();
             sysdns::restore();
+            #[cfg(target_os = "linux")]
+            {
+                s.stun_guard = None;
+            }
             s.status("stopped", &reason);
             return Ok(());
         }

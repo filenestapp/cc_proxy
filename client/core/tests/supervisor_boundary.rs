@@ -104,6 +104,8 @@ fn only_the_protected_xtcp_config_exempts_bundled_frpc_stun() {
     assert_eq!(protected_public["route"]["rules"], public["route"]["rules"]);
     if cfg!(target_os = "linux") {
         assert_eq!(protected_public["inbounds"][0]["auto_redirect"], true);
+        assert_eq!(protected_public["inbounds"][0]["interface_name"], "tun-aifree");
+        assert!(protected_public["inbounds"][0].get("auto_redirect_output_mark").is_none());
     } else {
         assert!(protected_public["inbounds"][0].get("auto_redirect").is_none());
     }
@@ -113,6 +115,9 @@ fn only_the_protected_xtcp_config_exempts_bundled_frpc_stun() {
     let protected = env.protected();
     assert_eq!(protected["route"]["rules"][2], bypass);
     assert_eq!(protected["route"]["rules"][3], xtcp["route"]["rules"][2]);
+    if cfg!(target_os = "linux") {
+        assert_eq!(protected["inbounds"][0]["auto_redirect_output_mark"], "0xa1f0001");
+    }
 
     xtcp["route"]["rules"].as_array_mut().unwrap().insert(2, bypass);
     env.write_client(&xtcp);

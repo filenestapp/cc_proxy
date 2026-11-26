@@ -45,7 +45,7 @@ cleanup() {
   docker cp ccx-visitor:/tmp/visitor-blocked.log "$OUT/" >/dev/null 2>&1 || true
   docker cp ccx-desktop:/tmp/up.log "$OUT/desktop-up.log" >/dev/null 2>&1 || true
   if [[ "${KEEP:-0}" != 1 ]]; then
-    docker rm -f $CONTAINERS >/dev/null 2>&1 || true
+    docker rm -fv $CONTAINERS >/dev/null 2>&1 || true
     docker network rm $NET >/dev/null 2>&1 || true
     rm -rf "$OUT/tls" "$OUT/frps.toml" "$OUT/visitor.toml" "$OUT/client.json" "$OUT/release.key" \
       "$OUT/bob-visitor.toml" "$OUT/bob-client.json" "$OUT/direct-client.json"   # test credentials
@@ -62,7 +62,7 @@ waitfor() { # waitfor SECONDS DESCRIPTION COMMAND
   done
 }
 
-docker rm -f $CONTAINERS >/dev/null 2>&1 || true
+docker rm -fv $CONTAINERS >/dev/null 2>&1 || true
 docker network rm $NET >/dev/null 2>&1 || true
 rm -rf "$OUT" && mkdir -p "$OUT/tls" "$OUT/frp" "$OUT/dist"
 chmod 700 "$OUT"
