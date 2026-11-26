@@ -89,6 +89,7 @@ func decodeJSON[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 // Every /v1/account route that account.html calls, exercised in the order a
 // customer meets them, against PostgreSQL and the fake Stripe client.
 func TestAccountUIRoutes(t *testing.T) {
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "fixture-signing-secret")
 	s := testStore(t)
 	fake := &fakeStripe{}
 	s.stripe = fake

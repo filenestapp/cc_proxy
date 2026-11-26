@@ -242,9 +242,9 @@ after the upgrade.
 
 ## Stripe subscriptions
 
-Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in the control-plane runtime. Use separate Stripe
-sandbox and live credentials. The API key needs customer and Billing Portal Session creation, Checkout Session
-creation, reads and expiry, and Price and subscription reads.
+Checkout requires both `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in the control-plane runtime.
+Use separate Stripe sandbox and live credentials. The API key needs permission to create customers and
+Billing Portal Sessions, create, read, and expire Checkout Sessions, and read Prices and subscriptions.
 
 1. In Stripe, create a monthly CNY Price for each plan and configure the Customer Portal for the available plans.
 2. In the admin console under **Plans**, enter the matching Stripe Price IDs and amounts. The seeded monthly
