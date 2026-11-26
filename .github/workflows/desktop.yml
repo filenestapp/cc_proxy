@@ -1,84 +1,103 @@
-# Build aifree desktop packages for macOS, Windows, and Linux.
-# Each job bundles the ccproxy helper, a SHA-256-verified sing-box and the pinned frpc (XTCP visitor) next to the app,
-# then uploads the installers.
-# Unsigned: macOS notarisation and Windows code signing need certificates and are not configured here.
-name: desktop
-
-on:
-  workflow_dispatch:
+name: Signed macOS Intel install and launch
+on: workflow_dispatch
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    if: ${{ github.ref == 'refs/heads/main' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            target: universal-apple-darwin
-            rust-targets: aarch64-apple-darwin x86_64-apple-darwin
-            bundles: app,dmg
-          - os: windows-2022
-            target: x86_64-pc-windows-msvc
-            bundles: nsis
-          - os: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            bundles: nsis
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            bundles: deb
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            bundles: deb,appimage
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
-    env:
-      RUSTUP_TOOLCHAIN: stable
-    defaults:
-      run:
-        shell: bash
-        working-directory: client
+  install-and-launch:
+    runs-on: macos-15-intel
+    timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
-      - name: Rust toolchain
-        run: rustup toolchain install stable --profile minimal && rustup target add ${{ matrix.rust-targets || matrix.target }}
-      - name: Linux build dependencies
-        if: runner.os == 'Linux'
+      - name: Verify Intel environment and download the signed candidate
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Sidecars (aifree CLI compatibility helper + verified sing-box and frpc)
-        run: desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
-      - name: Core and CLI checks
+          set -euo pipefail
+          sw_vers
+          test "$(uname -m)" = x86_64
+          cpu=$(sysctl -n machdep.cpu.brand_string)
+          printf 'Architecture x86_64, CPU %s\n' "$cpu"
+          case "$cpu" in *Intel*) ;; *) exit 1 ;; esac
+          qa_dir="$RUNNER_TEMP/aifree-intel"
+          mkdir "$qa_dir"
+          candidate="$qa_dir/aifree_0.2.2_universal.dmg"
+          curl --fail --location --silent --show-error --retry 3 --max-time 180 \
+            https://downloads.aifree.sg/desktop/0.2.2/darwin-universal/aifree_0.2.2_universal.dmg -o "$candidate"
+          printf '4206c337cabec96c9c80bcde1681be578338a06b8a52245a718f8223858726b0  %s\n' "$candidate" | shasum -a 256 --check
+
+      - name: Verify the DMG and install the app
         run: |
-          for target in ${{ matrix.rust-targets || matrix.target }}; do
-            cargo clippy --locked -p ccproxy -p ccproxy-core --target "$target" -- -D warnings
+          set -euo pipefail
+          qa_dir="$RUNNER_TEMP/aifree-intel"
+          candidate="$qa_dir/aifree_0.2.2_universal.dmg"
+          installed=/Applications/aifree.app
+          mount_dir="$qa_dir/mount"
+          hdiutil verify "$candidate"
+          xcrun stapler validate "$candidate"
+          codesign --verify --verbose=2 "$candidate"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$candidate"
+          test ! -e "$installed"
+          mkdir "$mount_dir"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$candidate"
+          trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true' EXIT
+          sudo ditto "$mount_dir/aifree.app" "$installed"
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$installed/Contents/Info.plist")" = 0.2.2
+          xcrun stapler validate "$installed"
+          codesign --verify --deep --strict --all-architectures --verbose=2 "$installed"
+          spctl --assess --type execute --verbose=2 "$installed"
+          main=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$installed/Contents/Info.plist")
+          for program in "$main" ccproxy sing-box frpc; do
+            executable="$installed/Contents/MacOS/$program"
+            lipo "$executable" -verify_arch x86_64
+            lipo "$executable" -verify_arch arm64
+            printf '%s %s\n' "$program" "$(lipo -archs "$executable")"
           done
-      - name: Build app
-        working-directory: client/desktop/src-tauri
-        run: npx --yes @tauri-apps/cli@2.12.6 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
-      - name: Verify the macOS app and sidecars run on both architectures
-        if: runner.os == 'macOS'
+
+      - name: Start the installed app and confirm a visible window
         run: |
-          app="target/${{ matrix.target }}/release/bundle/macos/aifree.app/Contents"
-          main=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Info.plist")
-          for executable in "$main" ccproxy sing-box frpc; do
-            for arch in arm64 x86_64; do lipo "$app/MacOS/$executable" -verify_arch "$arch"; done
+          set -euo pipefail
+          qa_dir="$RUNNER_TEMP/aifree-intel"
+          installed=/Applications/aifree.app
+          main=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$installed/Contents/Info.plist")
+          executable="$installed/Contents/MacOS/$main"
+          arch -x86_64 "$installed/Contents/MacOS/ccproxy" --version
+          arch -x86_64 "$installed/Contents/MacOS/sing-box" version
+          arch -x86_64 "$installed/Contents/MacOS/frpc" --version
+          launchctl print "gui/$(id -u)" >/dev/null
+          cat > "$qa_dir/window-check.swift" <<'SWIFT'
+          import AppKit
+          import CoreGraphics
+          import Foundation
+
+          guard CommandLine.arguments.count == 2,
+                let processID = Int32(CommandLine.arguments[1]),
+                let app = NSRunningApplication(processIdentifier: processID),
+                app.isFinishedLaunching, !app.isTerminated else { exit(1) }
+
+          let windows = CGWindowListCopyWindowInfo(
+              [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+          ) as? [[String: Any]] ?? []
+          let hasVisibleWindow = windows.contains { window in
+              guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == processID,
+                    (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                    let bounds = window[kCGWindowBounds as String] as? [String: NSNumber],
+                    let width = bounds["Width"], let height = bounds["Height"] else { return false }
+              return width.doubleValue >= 300 && height.doubleValue >= 350
+          }
+          if hasVisibleWindow { print("Installed aifree window is visible") }
+          exit(hasVisibleWindow ? 0 : 1)
+          SWIFT
+          xcrun swiftc "$qa_dir/window-check.swift" -o "$qa_dir/window-check"
+          /usr/bin/open -na "$installed"
+          for attempt in {1..30}; do
+            app_pid=$(ps -axo pid=,command= | awk -v app="$executable" '$2 == app { print $1; exit }')
+            if [[ -n "$app_pid" ]] && "$qa_dir/window-check" "$app_pid"; then
+              sleep 3
+              kill -0 "$app_pid"
+              printf 'Installed aifree 0.2.2 launched natively on Intel as PID %s\n' "$app_pid"
+              printf 'The notarized 0.2.2 DMG installed in /Applications and opened a visible window on macos-15-intel.\n' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 1
           done
-      - uses: actions/upload-artifact@v4
-        with:
-          name: aifree-${{ matrix.target }}
-          path: |
-            client/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            client/target/${{ matrix.target }}/release/bundle/**/*.app
-            client/target/${{ matrix.target }}/release/bundle/**/*.exe
-            client/target/${{ matrix.target }}/release/bundle/**/*.deb
-            client/target/${{ matrix.target }}/release/bundle/**/*.AppImage
-          if-no-files-found: error
-          retention-days: 14
+          /usr/bin/log show --last 2m --predicate 'process == "ccproxy-desktop"' --style compact | tail -30
+          exit 1
