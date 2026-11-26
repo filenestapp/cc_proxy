@@ -1504,7 +1504,7 @@
       const r = await form(tr("Add user"), [
         { name: "name", label: tr("Username"), required: true, hint: tr("1–64 characters. Spaces and slashes are prohibited.") },
         { name: "password", label: tr("Password (optional)"), type: "password", hint: tr("Leave blank to generate a password shown once. Use at least 8 characters.") },
-        { name: "mode", label: tr("Egress mode"), type: "select", value: "exclusive", options: [["exclusive", tr("Dedicated egress IP")], ["shared", tr("Share an egress IP with other shared-mode users")]] },
+        { name: "mode", label: tr("Egress mode"), type: "select", value: "shared", options: [["shared", tr("Share an egress IP with other shared-mode users")], ["exclusive", tr("Dedicated egress IP")]] },
         { name: "max_devices", label: tr("Device limit"), type: "number", value: 5, required: true },
         { name: "host", label: tr("Assign an egress IP now"), type: "select", value: "", options: [["", tr("Assign later")]].concat(hosts.map((h) => [h.name, tr("Auto-assign · {host}", { host: h.name })])) },
       ], async (v) => {

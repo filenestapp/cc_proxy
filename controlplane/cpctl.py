@@ -13,7 +13,8 @@ Hosts and IPs
   cpctl.py ip-available IP                    end cooldown / lift ban
 Users
   cpctl.py users
-  cpctl.py user-add NAME [--password P] [--shared] [--max-devices N]   generates a password if none is given
+  cpctl.py user-add NAME [--password P] [--shared | --exclusive] [--max-devices N]
+                                             defaults to shared mode and generates a password if none is given
   cpctl.py passwd NAME [--password P] [--revoke-devices]
   cpctl.py user-del NAME
   cpctl.py user-mode NAME exclusive|shared    keeps the IP, port and devices; exclusive needs no co-holder
@@ -86,7 +87,11 @@ def main(argv):
     sub.add_parser("ip-available").add_argument("ip")
     sub.add_parser("users")
     a = sub.add_parser("user-add")
-    a.add_argument("name"); a.add_argument("--password"); a.add_argument("--shared", action="store_true")
+    a.add_argument("name"); a.add_argument("--password")
+    egress_mode = a.add_mutually_exclusive_group()
+    egress_mode.add_argument("--shared", dest="mode", action="store_const", const="shared", help="share an egress IP (default)")
+    egress_mode.add_argument("--exclusive", dest="mode", action="store_const", const="exclusive", help="use a dedicated egress IP")
+    a.set_defaults(mode="shared")
     a.add_argument("--max-devices", type=int)
     a = sub.add_parser("passwd")
     a.add_argument("name"); a.add_argument("--password"); a.add_argument("--revoke-devices", action="store_true")
@@ -155,7 +160,7 @@ def main(argv):
                 u["name"], u["mode"], u["host"] or "-", entry,
                 sum(not d["revoked"] for d in u["devices"]), u["max_devices"], devs))
     elif c == "user-add":
-        body = {"name": args.name, "mode": "shared" if args.shared else "exclusive"}
+        body = {"name": args.name, "mode": args.mode}
         if args.password:
             body["password"] = args.password
         if args.max_devices:

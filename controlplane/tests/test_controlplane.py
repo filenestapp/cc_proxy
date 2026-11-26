@@ -184,6 +184,33 @@ class ApiTest(ServerFixture):
             self.assertEqual(self.login("alice", "wrong password")[0], 401)
         self.assertEqual(self.login("alice", PW)[0], 429)  # locked even with the right password
 
+    def test_new_users_default_to_shared_egress(self):
+        self.assertEqual(self.admin("POST", "/admin/users", {"name": "api-default", "password": PW})[0], 201)
+        self.assertEqual(self.admin("POST", "/admin/users", {
+            "name": "api-dedicated", "password": PW, "mode": "exclusive",
+        })[0], 201)
+        cli = Path(HERE).parent / "cpctl.py"
+        env = dict(os.environ, CP_URL=self.base, CP_ADMIN_TOKEN=ADMIN)
+        for name, flags in (("cli-default", []), ("cli-dedicated", ["--exclusive"]), ("cli-shared", ["--shared"])):
+            result = subprocess.run([sys.executable, str(cli), "user-add", name, "--password", PW, *flags],
+                                    env=env, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        status, users = self.admin("GET", "/admin/users")
+        self.assertEqual(status, 200)
+        self.assertEqual({user["name"]: user["mode"] for user in users}, {
+            "api-default": "shared",
+            "api-dedicated": "exclusive",
+            "cli-default": "shared",
+            "cli-dedicated": "exclusive",
+            "cli-shared": "shared",
+        })
+        ports = set()
+        for name in ("api-default", "cli-default"):
+            status, result = self.admin("POST", f"/admin/users/{name}/assign", {"ip": "203.0.113.3"})
+            self.assertEqual(status, 200, result)
+            ports.add(result["entry"]["port"])
+        self.assertEqual(ports, {20000, 20001})
+
     def test_device_limit_is_409(self):
         self.admin("POST", "/admin/users", {"name": "alice", "password": PW, "max_devices": 1})
         self.assertEqual(self.login(device="d1")[0], 200)
