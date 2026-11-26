@@ -357,7 +357,6 @@ fn main() {
     let sign_in_server = std::env::var("AIFREE_CONTROL_PLANE_URL")
         .ok()
         .filter(|url| !url.trim().is_empty())
-        .or_else(|| Session::load(&paths).map(|session| session.server))
         .unwrap_or_else(|| DEFAULT_CONTROL_PLANE.to_owned());
     let app = Arc::new(App {
         paths,
