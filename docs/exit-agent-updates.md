@@ -28,9 +28,10 @@ The public keys in `egress/agent/release_keys.txt` are compiled into the Agent. 
 can store and serve a signed release, yet it cannot make a host run an unsigned binary or a binary
 whose digest differs from the release record.
 
-The release workflow is deliberately manual on `main`. It builds the six supported Agent targets,
-writes the release record, and signs it only when `AGENT_RELEASE_SIGNING_KEY` is configured. An
-unsigned artifact remains suitable for installer distribution and is not a managed release.
+The release workflow is deliberately manual on `main`. It builds the six supported Agent targets, writes the
+release record, and verifies its signature using the public keys compiled into the Agent. It requires
+`AGENT_RELEASE_SIGNING_KEY` from the protected `release` environment. Unsigned artifacts can only be used by
+installers.
 
 ## Control-plane contract
 
@@ -122,7 +123,7 @@ publishes the matching signed installed release before beginning a managed rollo
 
 1. Generate a release key on an owner-controlled machine and add its public key to
    `egress/agent/release_keys.txt` before building the Agent that will trust it.
-2. Store the private key as `AGENT_RELEASE_SIGNING_KEY` in the protected release environment.
+2. Store the private key as `AGENT_RELEASE_SIGNING_KEY` in the GitHub `release` environment restricted to `main`.
 3. Bump `egress/agent/RELEASE_VERSION`, merge it, and create the matching `exit-agent/<version>` tag on that commit.
    For example, tag the release commit with `git tag exit-agent/v0.1.0 <commit>`, then push that tag and
    run **Actions → exit-agent → Run workflow** on `main` at the same commit.

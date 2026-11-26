@@ -25,9 +25,9 @@ Output: `egress/agent/dist/ccproxy-exit-agent-{darwin,linux}-{arm64,amd64}`, `..
 requires an `exit-agent/<version>` tag at the source commit, and the signed record retains that commit and every
 artifact digest. The build pins the Go toolchain (`go.mod`), disables cgo, and uses
 `-trimpath`, no VCS stamp and an empty build ID. CI (`.github/workflows/exit-agent.yml`) runs the Go tests and the
-reproducibility check, then uploads `dist` as an artifact. With the secret `AGENT_RELEASE_SIGNING_KEY` it also writes
-and signs `release.json` (release sequence = the workflow run number): that artifact is an agent release for managed
-automatic updates.
+reproducibility check. It writes and signs `release.json` with `AGENT_RELEASE_SIGNING_KEY` from the protected
+`release` environment, verifies it against the compiled public keys, and uploads `dist` as the managed-update
+artifact. The release sequence is the workflow run number.
 
 ## Automatic updates
 
