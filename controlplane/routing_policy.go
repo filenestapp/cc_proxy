@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"slices"
+	"strings"
 )
 
 //go:embed routing-presets.json
@@ -75,7 +76,7 @@ func uniqueDomains(domains []string) []string {
 	return unique
 }
 
-func (p *clientPolicy) applyDomainGroups(exactSupported bool) error {
+func (p *clientPolicy) applyDomainGroups() error {
 	if len(p.DomainGroups) == 0 {
 		return nil
 	}
@@ -85,9 +86,7 @@ func (p *clientPolicy) applyDomainGroups(exactSupported bool) error {
 		group := p.DomainGroups[id]
 		if group.Enabled {
 			suffixes = append(suffixes, group.DomainSuffix...)
-			if exactSupported {
-				exact = append(exact, group.Domain...)
-			}
+			exact = append(exact, group.Domain...)
 		}
 	}
 	if len(suffixes) == len(p.DomainSuffix) && len(exact) == 0 {
@@ -102,7 +101,7 @@ func (p *clientPolicy) applyDomainGroups(exactSupported bool) error {
 }
 
 // An older settings client can replace the flat policy without losing groups.
-// Check the combined limit in the same write transaction that saves the policy.
+// Check the count and wire size in the same write transaction that saves the policy.
 func validateRoutingPolicyChange(ctx context.Context, db database, value fields) error {
 	groups, supplied := value["domain_groups"]
 	if !supplied {
@@ -114,14 +113,40 @@ func validateRoutingPolicyChange(ctx context.Context, db database, value fields)
 		}
 		value["domain_groups"] = groups
 	}
-	var policy clientPolicy
-	if err := json.Unmarshal(groups, &policy.DomainGroups); err != nil {
+	raw, err := json.Marshal(value)
+	if err != nil {
 		return err
 	}
-	if suffixes := value["domain_suffix"]; len(suffixes) != 0 {
-		if err := json.Unmarshal(suffixes, &policy.DomainSuffix); err != nil {
-			return err
-		}
+	policy := clientPolicy{BlockQUIC: true, DirectDNS: "dhcp"}
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		return failure(400, "invalid client_policy: %s", err)
 	}
-	return policy.applyDomainGroups(true)
+	if len(policy.DomainGroups) == 0 {
+		return nil
+	}
+	if err := policy.applyDomainGroups(); err != nil {
+		return err
+	}
+	hasDomains := len(policy.DomainSuffix)+len(policy.DomainExact) != 0
+	if !hasDomains && len(policy.ProcessName)+len(policy.ProcessPath) == 0 {
+		return nil
+	}
+
+	// Reserve space for the longest client-supported endpoint and credential fields.
+	// These fields use ASCII characters that require no JSON escaping.
+	longestHostname := strings.Repeat("a", maxHostnameBytes)
+	entry := host{
+		PublicHost: longestHostname, ServerName: longestHostname,
+		RealityPublic: strings.Repeat("a", 43), ShortID: strings.Repeat("a", 16),
+	}
+	user := boundUser{Port: 65535}
+	device := credential{UUID: strings.Repeat("a", 36)}
+	if _, err := renderClientConfig(entry, user, device, policy, "app", true); err != nil {
+		return err
+	}
+	if hasDomains {
+		_, err := renderClientConfig(entry, user, device, policy, "domain", true)
+		return err
+	}
+	return nil
 }

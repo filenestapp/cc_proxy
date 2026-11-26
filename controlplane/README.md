@@ -117,7 +117,7 @@ Browser sessions use an `HttpOnly`, `SameSite=Strict` cookie with a 12-hour expi
 
 In **Settings → Client routing policy**, review the starter domains and enable the Claude, OpenAI, or Gemini group to route its domains through the client's assigned exit. Each group accepts exact hostnames and domain suffixes. Existing custom domains continue to contribute suffix rules.
 
-Settings API clients can write `client_policy.domain_groups` keyed by `claude`, `openai`, and `gemini`. Each group has `enabled`, `domain`, and `domain_suffix` fields. Legacy policy writes that omit the group map preserve saved groups. Clients opt in to exact matching with `exact_domains=1` on app or domain config requests. Suffix rules work with the existing config format.
+Settings API clients can write `client_policy.domain_groups` keyed by `claude`, `openai`, and `gemini`. Each group has `enabled`, `domain`, and `domain_suffix` fields. Legacy policy writes that omit the group map preserve saved groups. Clients opt in to exact matching with `exact_domains=1` on app or domain config requests. Older clients keep their connections under exact-only policies and use their supported rules, with unmatched traffic going direct. A grouped policy must fit within the client's 1 MiB configuration limit to be saved.
 
 The starter catalog records the review date. Its sources are the [requested Claude routing reference](https://ip.net.coffee/claude/site.html), [Claude Code network requirements](https://code.claude.com/docs/en/network-config#network-access-requirements), [OpenAI network recommendations](https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps), and [Gemini API quickstart](https://ai.google.dev/gemini-api/docs/quickstart).
 

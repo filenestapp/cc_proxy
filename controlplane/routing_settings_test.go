@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -84,9 +85,9 @@ func TestRoutingGroupsPreserveLegacySettingsAndNegotiateExactHosts(t *testing.T)
 		}
 		return rec
 	}
-	put := func(body string, want int) {
+	put := func(body string, want int) *httptest.ResponseRecorder {
 		t.Helper()
-		request("PUT", "/admin/settings", testAdminToken, body, "", want)
+		return request("PUT", "/admin/settings", testAdminToken, body, "", want)
 	}
 	config := func(query, etag string, want int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -152,6 +153,49 @@ func TestRoutingGroupsPreserveLegacySettingsAndNegotiateExactHosts(t *testing.T)
 		!slices.Equal(exact, []string{"gemini.google.com"}) {
 		t.Fatalf("disabling a group changed other rules: suffixes %v, exact %v", suffixes, exact)
 	}
+
+	longDomains := func(prefix string) []string {
+		domains := make([]string, 500)
+		for i := range domains {
+			domains[i] = fmt.Sprintf("%s%03d%s.%s.%s.%s", prefix, i, strings.Repeat("a", 59),
+				strings.Repeat("b", 63), strings.Repeat("c", 63), strings.Repeat("d", 61))
+		}
+		return domains
+	}
+	largeGroups, err := json.Marshal(map[string]routingGroup{"claude": {
+		Enabled: true, Domain: longDomains("e"), DomainSuffix: longDomains("s"),
+	}})
+	require(t, err)
+	rejected := put(`{"client_policy":{"domain_groups":`+string(largeGroups)+`}}`, http.StatusBadRequest)
+	if !strings.Contains(rejected.Body.String(), "1 MiB size limit") {
+		t.Fatalf("expected the config size limit, got %s", rejected.Body)
+	}
+	config("mode=app&exact_domains=1", changed.Header().Get("ETag"), http.StatusNotModified)
+
+	put(`{"client_policy":{"domain_suffix":[],"domain_groups":{
+		"gemini":{"enabled":true,"domain":["gemini.google.com"]}
+	}}}`, http.StatusOK)
+	for _, mode := range []string{"app", "domain"} {
+		query := "mode=" + mode
+		compatible := config(query, oldClient.Header().Get("ETag"), http.StatusOK)
+		suffixes, exact := fakeIP(compatible)
+		var legacyConfig struct {
+			Route struct{ Final string }
+		}
+		require(t, json.Unmarshal(compatible.Body.Bytes(), &legacyConfig))
+		if len(suffixes)+len(exact) != 0 || legacyConfig.Route.Final != "direct" {
+			t.Fatalf("exact-only policy should keep suffix-only %s clients connected with direct routing", mode)
+		}
+		config(query, compatible.Header().Get("ETag"), http.StatusNotModified)
+		suffixes, exact = fakeIP(config(query+"&exact_domains=1", compatible.Header().Get("ETag"), http.StatusOK))
+		if len(suffixes) != 0 || !slices.Equal(exact, []string{"gemini.google.com"}) {
+			t.Fatalf("exact-capable %s client lost its exact rule", mode)
+		}
+	}
+
+	put(`{"client_policy":{"domain_groups":{"gemini":{"enabled":false,"domain":["gemini.google.com"]}}}}`, http.StatusOK)
+	config("mode=app", "", http.StatusConflict)
+	config("mode=domain&exact_domains=1", "", http.StatusConflict)
 }
 
 func TestDefaultHandshakeFollowsSNIAndPreservesAnOverride(t *testing.T) {
