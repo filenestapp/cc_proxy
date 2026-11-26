@@ -125,8 +125,8 @@ func TestAccountUIRoutes(t *testing.T) {
 
 	c.mutation("/v1/account/verify/resend", "{}", 200)
 	messages := mail.waitForMessages(t, 2)
-	c.expect(c.do(http.MethodPost, "/v1/account/verify", `{"token":"`+tokenFromMail(t, messages[1].content)+`"}`, false), 200, "")
-	c.expect(c.do(http.MethodPost, "/v1/account/verify", `{"token":"`+tokenFromMail(t, messages[0].content)+`"}`, false), 400, "invalid_token")
+	c.expect(c.do(http.MethodPost, "/v1/account/verify", `{"token":"`+tokenFromMail(t, linkFromMail(t, messages[1]))+`"}`, false), 200, "")
+	c.expect(c.do(http.MethodPost, "/v1/account/verify", `{"token":"`+tokenFromMail(t, linkFromMail(t, messages[0]))+`"}`, false), 400, "invalid_token")
 	c.expect(c.do(http.MethodPost, "/v1/account/verify/resend", "{}", true), 409, "already_verified")
 
 	checkout := decodeJSON[struct{ URL string }](t, c.mutation("/v1/account/checkout", `{"plan":"premium"}`, 200))
@@ -193,7 +193,7 @@ func TestAccountUIRoutes(t *testing.T) {
 	c.csrf = login.CSRF
 
 	c.expect(c.do(http.MethodPost, "/v1/account/password/forgot", `{"email":"ui@example.com"}`, true), 202, "")
-	reset := mail.waitForMessages(t, 3)[2].content
+	reset := linkFromMail(t, mail.waitForMessages(t, 3)[2])
 	c.expect(c.do(http.MethodPost, "/v1/account/password/reset", `{"token":"`+tokenFromMail(t, reset)+`","new_password":"uipass789"}`, true), 204, "")
 	c.expect(c.do(http.MethodGet, "/v1/account/me", "", false), http.StatusUnauthorized, "")
 
