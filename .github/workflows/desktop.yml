@@ -69,7 +69,7 @@ jobs:
           app="target/${{ matrix.target }}/release/bundle/macos/aifree.app/Contents"
           main=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Info.plist")
           for executable in "$main" ccproxy sing-box frpc; do
-            for arch in arm64 x86_64; do lipo -verify_arch "$arch" "$app/MacOS/$executable"; done
+            for arch in arm64 x86_64; do lipo "$app/MacOS/$executable" -verify_arch "$arch"; done
           done
       - uses: actions/upload-artifact@v4
         with:
