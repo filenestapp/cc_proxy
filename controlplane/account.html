@@ -380,7 +380,7 @@ footer .row-between{gap:8px 20px}
       checkout_cancel: "你已取消结账，没有产生扣款。",
       sub_title: "我的订阅", sub_none: "你还没有订阅。选择下面的套餐开始使用。",
       plan: "套餐", status: "状态", period: "当前周期", renews: "续费日期", ends: "到期日期",
-      team_seat: "团队席位", proxy: "独享 IP", egress_ip: "出口 IP",
+      team_seat: "团队席位", proxy: "独享 IP",
       manage_billing: "管理订阅与账单", manage_hint: "升级、降级、更换支付方式或取消订阅，都在 Stripe 账单页面完成。",
       cancel_note: "已取消自动续费，{date} 之后不再扣款，到期前仍可使用。",
       past_due_note: "最近一次扣款失败。请在账单管理中更新支付方式，否则宽限期结束后订阅会停止。",
@@ -465,7 +465,7 @@ footer .row-between{gap:8px 20px}
       checkout_cancel: "Checkout cancelled. You have not been charged.",
       sub_title: "Subscription", sub_none: "You don't have a subscription yet. Pick a plan below to get started.",
       plan: "Plan", status: "Status", period: "Current period", renews: "Renews on", ends: "Ends on",
-      team_seat: "Team seat", proxy: "Dedicated IP", egress_ip: "Exit IP",
+      team_seat: "Team seat", proxy: "Dedicated IP",
       manage_billing: "Manage subscription & billing", manage_hint: "Upgrade, downgrade, change your card or cancel on the Stripe billing page.",
       cancel_note: "Auto-renewal is off. You won't be charged after {date} and can keep using the service until then.",
       past_due_note: "Your last payment failed. Update your payment method in billing, or the subscription stops after the grace period.",
@@ -942,7 +942,6 @@ footer .row-between{gap:8px 20px}
     if (sub.team_seat) row(t("team_seat"), pill(t("t_" + sub.team_seat), sub.team_seat === "done" ? "ok" : "warn"));
     if (sub.proxy && sub.proxy.state) {
       row(t("proxy"), pill(t("p_" + sub.proxy.state), sub.proxy.state === "ready" ? "ok" : sub.proxy.state === "waiting_ip" ? "warn" : ""));
-      if (sub.proxy.egress_ip) row(t("egress_ip"), el("span", { class: "mono", text: sub.proxy.egress_ip }));
     }
     body.appendChild(kv);
 
