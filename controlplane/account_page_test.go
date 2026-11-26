@@ -86,6 +86,9 @@ func TestAccountPageDesktopDownloadLinks(t *testing.T) {
 		!strings.Contains(panel, `data-download-badge`) {
 		t.Fatal("download panel has no universal macOS release placeholder or recommendation badge")
 	}
+	if !strings.Contains(panel, "data-download-unavailable") || !strings.Contains(panel, "data-download-retry") {
+		t.Fatal("download panel must display an installer availability notice and retry action")
+	}
 	if !strings.Contains(string(accountPage), "aifreeEnhanceDownloads") {
 		t.Fatal("account page does not use the shared desktop download chooser")
 	}

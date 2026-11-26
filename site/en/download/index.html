@@ -15,7 +15,7 @@
 <meta name="theme-color" content="#14213D">
 <link rel="stylesheet" href="/assets/site.css?v=platform-downloads">
 <script defer src="/assets/site-session.js"></script>
-<script defer src="/assets/desktop-downloads.js"></script>
+<script defer src="/assets/desktop-downloads.js?v=installer-retry"></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -42,6 +42,10 @@
 <div class="prose">
 <div data-downloads-auto>
 <p>Version <span data-download-version>0.2.0</span>. Choose the installer for your operating system and processor.</p>
+<div data-download-unavailable hidden>
+  <p role="status">The latest installer list is temporarily unavailable. Retry, or choose an earlier installer below if it matches your device.</p>
+  <button type="button" class="btn btn-outline btn-sm" data-download-retry>Retry loading installers</button>
+</div>
 <p class="dl-recommended" data-download-badge hidden>Recommended for this device</p>
 <div class="dl-grid">
   <details class="node dl-group" id="macos" data-platform="macos" open>
