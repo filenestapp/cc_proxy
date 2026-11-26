@@ -16,7 +16,7 @@ case "$TARGET" in
     for executable in ccproxy sing-box frpc; do
       lipo -create -output "$BIN/$executable-$TARGET" \
         "$BIN/$executable-aarch64-apple-darwin" "$BIN/$executable-x86_64-apple-darwin"
-      for arch in arm64 x86_64; do lipo -verify_arch "$arch" "$BIN/$executable-$TARGET"; done
+      for arch in arm64 x86_64; do lipo "$BIN/$executable-$TARGET" -verify_arch "$arch"; done
     done
     exit 0 ;;
   aarch64-apple-darwin)        asset="darwin-arm64";   exe="" ;;
