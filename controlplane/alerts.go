@@ -334,7 +334,7 @@ func (s *store) evaluateAlerts(ctx context.Context, send func(context.Context, s
 			const rule = "subscription_waiting_ip"
 			conditions[rule+"/"+item.UserName] = alertCondition{
 				Rule: rule, Subject: item.UserName, Severity: "warning",
-				Summary: fmt.Sprintf("Paid customer proxy %s is waiting for an exclusive egress IP.", item.UserName),
+				Summary: fmt.Sprintf("Paid customer proxy %s is waiting for an egress IP.", item.UserName),
 			}
 		}
 		queued, err = updateAlerts(ctx, tx, topo.Now, cfg, conditions)

@@ -325,6 +325,8 @@ type assignment struct {
 	IP   *string  `json:"ip"`
 	Port *integer `json:"port"`
 	Host string   `json:"host"`
+
+	reuseSharedIP bool
 }
 
 type assignmentResult struct {
@@ -385,11 +387,25 @@ func (s *store) chooseBinding(ctx context.Context, db database, user userRow, re
 				return "", host{}, 0, err
 			}
 		}
-		err := db.QueryRow(ctx, `SELECT host(e.ip) FROM egress_ips e
-			WHERE ($1 = '' OR e.host = $1) AND NOT e.banned AND e.cooldown_until <= $2
-				AND e.ip IS DISTINCT FROM $3::text::inet
-				AND NOT EXISTS (SELECT 1 FROM users WHERE egress_ip = e.ip)
-			ORDER BY e.ip LIMIT 1`, req.Host, s.now(), user.IP).Scan(&ip)
+		var err error
+		if req.reuseSharedIP {
+			err = db.QueryRow(ctx, `SELECT host(e.ip) FROM egress_ips e
+				JOIN hosts h ON h.name = e.host
+				LEFT JOIN users u ON u.egress_ip = e.ip
+				WHERE ($1 = '' OR e.host = $1) AND NOT e.banned AND e.cooldown_until <= $2
+					AND e.ip IS DISTINCT FROM $3::text::inet
+					AND (e.host = $4 OR (SELECT count(*) FROM users
+						WHERE host = e.host AND port BETWEEN h.port_min AND h.port_max) < h.port_max - h.port_min + 1)
+				GROUP BY e.ip
+				HAVING count(u.name) < `+sharedIPUserLimitSQL+` AND COALESCE(bool_and(u.mode = 'shared'), true)
+				ORDER BY count(u.name) DESC, e.ip LIMIT 1`, req.Host, s.now(), user.IP, user.Host).Scan(&ip)
+		} else {
+			err = db.QueryRow(ctx, `SELECT host(e.ip) FROM egress_ips e
+				WHERE ($1 = '' OR e.host = $1) AND NOT e.banned AND e.cooldown_until <= $2
+					AND e.ip IS DISTINCT FROM $3::text::inet
+					AND NOT EXISTS (SELECT 1 FROM users WHERE egress_ip = e.ip)
+				ORDER BY e.ip LIMIT 1`, req.Host, s.now(), user.IP).Scan(&ip)
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			if req.Host != "" {
 				return "", host{}, 0, failure(409, "no free egress IP on host %s", req.Host)
@@ -436,6 +452,16 @@ func (s *store) chooseBinding(ctx context.Context, db database, user userRow, re
 			}
 			return "", host{}, 0, failure(409, "ip %s is held by %s and %s is %s; sharing needs mode=shared on every holder",
 				ip, strings.Join(names, ", "), user.Name, user.Mode)
+		}
+	}
+	// Changing the port of an existing holder does not consume another slot.
+	if len(holders) > 0 && (user.IP == nil || *user.IP != ip) {
+		var limit int
+		if err := db.QueryRow(ctx, "SELECT "+sharedIPUserLimitSQL).Scan(&limit); err != nil {
+			return "", host{}, 0, err
+		}
+		if len(holders) >= limit {
+			return "", host{}, 0, failure(409, "egress IP %s has reached its limit of %d users", ip, limit)
 		}
 	}
 	h, err := getHost(ctx, db, hostName)

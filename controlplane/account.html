@@ -941,7 +941,7 @@ footer .row-between{gap:8px 20px}
     }
     if (sub.team_seat) row(t("team_seat"), pill(t("t_" + sub.team_seat), sub.team_seat === "done" ? "ok" : "warn"));
     if (sub.proxy && sub.proxy.state) {
-      row(t("proxy"), pill(t("p_" + sub.proxy.state), sub.proxy.state === "ready" ? "ok" : sub.proxy.state === "waiting_ip" ? "warn" : ""));
+      row(t(sub.plan === "residential_ip" ? "plan_name_residential_ip" : "proxy"), pill(t("p_" + sub.proxy.state), sub.proxy.state === "ready" ? "ok" : sub.proxy.state === "waiting_ip" ? "warn" : ""));
     }
     body.appendChild(kv);
 

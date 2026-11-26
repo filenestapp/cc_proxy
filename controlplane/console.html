@@ -1666,6 +1666,7 @@
       '<div class="form-row check"><label><input type="checkbox" id="block_quic"' + (cp.block_quic === false ? "" : " checked") + `> ${trHTML("Block QUIC (UDP 443) for proxied domains so apps use TCP.")}</label></div>` +
       `<button class="primary" type="submit">${trHTML("Save routing policy")}</button><p class="small muted">${trHTML("Clients check for and apply updates every 30 seconds.")}</p></form>` +
       `<form class="card" id="s-ip"><h2>${trHTML("Egress IPs")}</h2>` + field("cooldown", tr("Cooldown after release (days)"), Math.round((s.cooldown_seconds || 0) / 86400 * 10) / 10, { type: "number", hint: tr("Released IPs stay out of the available pool during cooldown.") }) +
+      `<div class="form-row"><label for="shared-ip-user-limit">${trHTML("Maximum users per shared IP")}</label><input id="shared-ip-user-limit" type="number" value="${esc(s.shared_ip_user_limit)}" min="1" required></div>` +
       `<button class="primary" type="submit">${trHTML("Save")}</button></form>` +
       `<form class="card" id="s-monitor"><h2>${trHTML("Health probes")}</h2>` +
       field("targets", tr("Egress probe targets"), (mon.egress_targets || []).join("\n"), { area: true, ph: "https://www.example.com/", hint: tr("One URL per line. The agent probes each URL from every egress IP on its configured interval. HTTP 403 and 429 count as failures.") }) +
@@ -1690,7 +1691,7 @@
       };
     };
     save("#s-policy", () => ({ client_policy: Object.assign({}, cp, { domain_suffix: lines($("#domains").value).map((d) => d.replace(/^\./, "").toLowerCase()), direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked }) }), tr("Routing policy saved."));
-    save("#s-ip", () => ({ cooldown_seconds: Math.round(Number($("#cooldown").value) * 86400) }), tr("Saved."));
+    save("#s-ip", () => ({ cooldown_seconds: Math.round(Number($("#cooldown").value) * 86400), shared_ip_user_limit: Number($("#shared-ip-user-limit").value) }), tr("Saved."));
     save("#s-monitor", () => ({ monitor: { egress_targets: lines($("#targets").value), entries: lines($("#entries").value).map((l) => {
       const m = l.match(/^(\S+)\s+(\S+):(\d+)$/); if (!m) throw new Error(tr("Invalid additional entry: {entry}", { entry: l })); return { name: m[1], host: m[2], port: Number(m[3]) }; }) } }), tr("Probe settings saved."));
     save("#s-alerts", () => ({ alerts: Object.assign({}, al, {
