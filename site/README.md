@@ -1,6 +1,6 @@
 # aifree.sg website
 
-Static marketing site for aifree, served by nginx on the control-plane server (the same host as `ccproxy.macmini.sg`) behind Cloudflare. No build step. First-party scripts recommend an installer and check whether a visitor already has an account-center session. The marketing site does not set a cookie or load third-party scripts.
+Static marketing site for aifree, served by nginx on the control-plane server (the same host as `ccproxy.macmini.sg`) behind Cloudflare. No build step. First-party scripts recommend an installer and check whether a visitor already has an account-center session. Cloudflare Web Analytics provides cookieless page-view and performance measurements. The Cloudflare beacon loads from https://static.cloudflareinsights.com and reports to the site's own /cdn-cgi/rum endpoint. [Cloudflare data collection](https://developers.cloudflare.com/web-analytics/data-metrics/data-origin-and-collection/)
 
 ```text
 site/

@@ -37,6 +37,7 @@ func TestAccountPageRoutes(t *testing.T) {
 				}
 			}
 			if csp := h.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") ||
+				!strings.Contains(csp, "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com;") ||
 				!strings.Contains(csp, "connect-src 'self' https://downloads.aifree.sg") || !strings.Contains(csp, "frame-ancestors 'none'") {
 				t.Fatalf("%s CSP = %q", path, csp)
 			}
