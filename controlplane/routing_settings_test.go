@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -58,7 +59,11 @@ func TestRoutingGroupNormalization(t *testing.T) {
 	}
 }
 
-func TestRoutingGroupsPreserveLegacySettingsAndNegotiateExactHosts(t *testing.T) {
+func routingSettingsRequests(t *testing.T) (
+	put func(string, int) *httptest.ResponseRecorder,
+	config func(string, string, int) *httptest.ResponseRecorder,
+) {
+	t.Helper()
 	s := testStore(t)
 	ctx := t.Context()
 	testHost(t, s, "exit", "203.0.113", 20443)
@@ -85,14 +90,19 @@ func TestRoutingGroupsPreserveLegacySettingsAndNegotiateExactHosts(t *testing.T)
 		}
 		return rec
 	}
-	put := func(body string, want int) *httptest.ResponseRecorder {
+	put = func(body string, want int) *httptest.ResponseRecorder {
 		t.Helper()
 		return request("PUT", "/admin/settings", testAdminToken, body, "", want)
 	}
-	config := func(query, etag string, want int) *httptest.ResponseRecorder {
+	config = func(query, etag string, want int) *httptest.ResponseRecorder {
 		t.Helper()
 		return request("GET", "/v1/config?"+query, token, "", etag, want)
 	}
+	return put, config
+}
+
+func TestRoutingGroupsPreserveLegacySettingsAndNegotiateExactHosts(t *testing.T) {
+	put, config := routingSettingsRequests(t)
 	legacy := `{"client_policy":{"domain_suffix":["custom.example","claude.ai"],"block_quic":true}}`
 	put(legacy, http.StatusOK)
 	previous := config("mode=app", "", http.StatusOK)
@@ -196,6 +206,60 @@ func TestRoutingGroupsPreserveLegacySettingsAndNegotiateExactHosts(t *testing.T)
 	put(`{"client_policy":{"domain_groups":{"gemini":{"enabled":false,"domain":["gemini.google.com"]}}}}`, http.StatusOK)
 	config("mode=app", "", http.StatusConflict)
 	config("mode=domain&exact_domains=1", "", http.StatusConflict)
+}
+
+func TestSTUNPolicyNegotiatesAppModeAndPreservesLegacyConfig(t *testing.T) {
+	put, config := routingSettingsRequests(t)
+	domains := `{"client_policy":{"domain_suffix":["custom.example"],"direct_dns":"local","block_quic":true}}`
+	put(domains, http.StatusOK)
+
+	const old = "mode=app&exact_domains=1"
+	const capable = old + "&stun=1"
+	withoutFlags := config("", "", http.StatusOK)
+	baseline := config(old, "", http.StatusOK)
+	legacyDomain := config("mode=domain", "", http.StatusOK)
+	legacyProxy := config("mode=proxy", "", http.StatusOK)
+	assertRule := func(rec *httptest.ResponseRecorder, key, value string) {
+		t.Helper()
+		var cfg struct {
+			Inbounds []struct{ Address []string }
+			Route    struct{ Rules []map[string]any }
+		}
+		require(t, json.Unmarshal(rec.Body.Bytes(), &cfg))
+		if len(cfg.Inbounds) != 1 || !slices.Equal(cfg.Inbounds[0].Address, []string{tunAddress, tunIPv6Address}) {
+			t.Fatalf("invalid dual-stack TUN: %+v", cfg.Inbounds)
+		}
+		rules := cfg.Route.Rules
+		if len(rules) < 4 || rules[1]["action"] != "hijack-dns" || rules[3]["port"] != float64(443) ||
+			len(rules[2]) != 3 || rules[2]["network"] != "udp" || rules[2]["protocol"] != "stun" ||
+			rules[2][key] != value {
+			t.Fatalf("invalid STUN rule or order: %+v", rules)
+		}
+	}
+	defaultProxy := config(capable, baseline.Header().Get("ETag"), http.StatusOK)
+	assertRule(defaultProxy, "outbound", "egress")
+	put(`{"client_policy":{"stun":"proxy"}}`, http.StatusOK)
+	config(capable, defaultProxy.Header().Get("ETag"), http.StatusNotModified)
+
+	put(`{"client_policy":{"stun":"reject"}}`, http.StatusOK)
+	reject := config(capable, defaultProxy.Header().Get("ETag"), http.StatusOK)
+	assertRule(reject, "action", "reject")
+	put(domains, http.StatusOK)
+	config(capable, reject.Header().Get("ETag"), http.StatusNotModified)
+	config(old, baseline.Header().Get("ETag"), http.StatusNotModified)
+	config("", withoutFlags.Header().Get("ETag"), http.StatusNotModified)
+	if got := config(old, "", http.StatusOK); !bytes.Equal(baseline.Body.Bytes(), got.Body.Bytes()) {
+		t.Fatal("the STUN settings change modified the legacy config bytes")
+	}
+	config("mode=domain&stun=1", legacyDomain.Header().Get("ETag"), http.StatusNotModified)
+	config("mode=proxy&stun=1", legacyProxy.Header().Get("ETag"), http.StatusNotModified)
+
+	put(`{"client_policy":{"stun":"direct"}}`, http.StatusOK)
+	config(capable, baseline.Header().Get("ETag"), http.StatusNotModified)
+	for _, invalid := range []string{`"auto"`, `null`, `""`, `true`} {
+		put(`{"client_policy":{"stun":`+invalid+`}}`, http.StatusBadRequest)
+	}
+	config(capable, baseline.Header().Get("ETag"), http.StatusNotModified)
 }
 
 func TestDefaultHandshakeFollowsSNIAndPreservesAnOverride(t *testing.T) {

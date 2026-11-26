@@ -28,6 +28,8 @@ use std::path::{Path, PathBuf};
 
 pub const FAKEIP_RANGE: &str = "198.18.0.0/15";
 pub const TUN_ADDRESS: &str = "172.19.0.1/30";
+const TUN_IPV6_ADDRESS: &str = "fdcc:50b5:6f77::1/126";
+pub(crate) const STUN_RULE_INDEX: usize = 2;
 const FLOW: &str = "xtls-rprx-vision";
 const FINGERPRINTS: &[&str] = &["chrome", "firefox", "edge", "safari", "ios", "android", "random"];
 const MAX_CONFIG_BYTES: u64 = 1 << 20;
@@ -38,6 +40,12 @@ pub enum DirectDns {
     Dhcp,
     Local,
     Udp(IpAddr),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StunPolicy {
+    Proxy,
+    Reject,
 }
 
 /// Everything a client tunnel needs; nothing else crosses the privilege boundary.
@@ -55,6 +63,7 @@ pub struct TunnelSpec {
     pub process_names: Vec<String>,
     pub process_paths: Vec<String>,
     pub block_quic: bool,
+    pub stun: Option<StunPolicy>,
     pub direct_dns: DirectDns,
 }
 
@@ -217,7 +226,10 @@ pub fn extract(v: &Value) -> Result<TunnelSpec> {
     let mut process_paths = Vec::new();
     let mut block_quic = false;
     for rule in v.pointer("/route/rules").and_then(|r| r.as_array()).into_iter().flatten() {
-        if rule.get("action").and_then(|a| a.as_str()) == Some("reject") {
+        if rule.get("action").and_then(Value::as_str) == Some("reject")
+            && rule.get("network").and_then(Value::as_str) == Some("udp")
+            && rule.get("port").and_then(Value::as_u64) == Some(443)
+        {
             block_quic = true;
         }
         if rule.get("outbound").and_then(|o| o.as_str()) == Some("egress") {
@@ -232,6 +244,23 @@ pub fn extract(v: &Value) -> Result<TunnelSpec> {
     if !process_names.iter().chain(&process_paths).all(|p| valid_process_value(p)) {
         bail!("config: process rule values must be non-empty text without control characters");
     }
+
+    // The dual-stack TUN and the STUN rule are an indivisible part of the policy.
+    let stun = if v.pointer("/inbounds/0/address/1").and_then(Value::as_str) == Some(TUN_IPV6_ADDRESS) {
+        let rule = v["route"]["rules"].get(STUN_RULE_INDEX).ok_or_else(|| anyhow!("config: missing STUN rule"))?;
+        if rule.get("network").and_then(Value::as_str) != Some("udp")
+            || rule.get("protocol").and_then(Value::as_str) != Some("stun")
+        {
+            bail!("config: expected the UDP STUN rule after DNS hijack");
+        }
+        match (rule.get("outbound").and_then(Value::as_str), rule.get("action").and_then(Value::as_str)) {
+            (Some("egress"), None) => Some(StunPolicy::Proxy),
+            (None, Some("reject")) => Some(StunPolicy::Reject),
+            _ => bail!("config: invalid STUN rule"),
+        }
+    } else {
+        None
+    };
 
     let dns = v.pointer("/dns/servers/1").ok_or_else(|| anyhow!("config: no direct DNS server"))?;
     let direct_dns = match dns.get("type").and_then(|t| t.as_str()) {
@@ -256,6 +285,7 @@ pub fn extract(v: &Value) -> Result<TunnelSpec> {
         process_names,
         process_paths,
         block_quic,
+        stun,
         direct_dns,
     })
 }
@@ -328,6 +358,14 @@ pub fn render(spec: &TunnelSpec, cache_path: Option<&Path>) -> Value {
         matchers.push(json!({"process_path": spec.process_paths}));
     }
     let mut route_rules = vec![json!({"action": "sniff"}), json!({"protocol": "dns", "action": "hijack-dns"})];
+    let mut addresses = vec![TUN_ADDRESS];
+    if let Some(policy) = spec.stun {
+        addresses.push(TUN_IPV6_ADDRESS);
+        route_rules.push(match policy {
+            StunPolicy::Proxy => json!({"network": "udp", "protocol": "stun", "outbound": "egress"}),
+            StunPolicy::Reject => json!({"network": "udp", "protocol": "stun", "action": "reject"}),
+        });
+    }
     if spec.block_quic {
         for m in &matchers {
             route_rules.push(with(m.clone(), json!({"network": "udp", "port": 443, "action": "reject"})));
@@ -342,7 +380,7 @@ pub fn render(spec: &TunnelSpec, cache_path: Option<&Path>) -> Value {
     }
     json!({
         "log": {"level": "warn", "timestamp": true},
-        "inbounds": [{"type": "tun", "tag": "tun-in", "address": [TUN_ADDRESS], "auto_route": true, "stack": "mixed",
+        "inbounds": [{"type": "tun", "tag": "tun-in", "address": addresses, "auto_route": true, "stack": "mixed",
                       "strict_route": true}],
         "outbounds": [
             egress_outbound(spec),

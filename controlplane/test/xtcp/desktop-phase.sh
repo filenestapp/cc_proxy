@@ -62,6 +62,14 @@ else echo "FAIL visitor not ready: $(dx tail -n 20 /tmp/up.log)"; status=1; fi
 check "frpc started after sing-box (the TUN was up first)" "[ \"\$(start_jiffies frpc)\" -ge \"\$(start_jiffies sing-box)\" ]"
 check "frpc is the pinned $FRP_VERSION, run from next to aifree with the visitor file" \
   "dx /opt/aifree/frpc -v | grep -qx $FRP_VERSION && dx pgrep -f '^/opt/aifree/frpc -c $STATE/frpc-visitor.toml\$' >/dev/null"
+check "only the protected XTCP config routes the bundled frpc's STUN direct" "dx python3 -c '
+import json
+client = json.load(open(\"$STATE/sing-box.json\"))[\"route\"][\"rules\"]
+protected = json.load(open(\"/var/lib/ccproxy/config.json\"))[\"route\"][\"rules\"]
+assert client[2] == {\"network\": \"udp\", \"protocol\": \"stun\", \"outbound\": \"egress\"}
+assert protected[:2] + protected[3:] == client
+assert protected[2] == {\"ip_version\": 4, \"network\": \"udp\", \"protocol\": \"stun\", \"process_path\": [\"/opt/aifree/frpc\"], \"outbound\": \"direct\"}
+'"
 waitfor 60 "first request through the visitor" "[ -n \"\$(via target.test)\" ]" || status=1
 SEEN=$(via target.test)
 check "target.test leaves via the exit host's egress IPv4 ($IP_EXIT, seen: $SEEN)" "[ '$SEEN' = '$IP_EXIT' ]"

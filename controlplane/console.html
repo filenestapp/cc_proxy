@@ -1663,6 +1663,11 @@
     const s = await api("GET", "/admin/settings");
     if (!current(token)) return;
     const cp = s.client_policy || {}, mon = s.monitor || {}, al = s.alerts || {};
+    const stunOptions = [
+      ["proxy", "Route through the exit (default)"],
+      ["reject", "Block STUN"],
+      ["direct", "Use the existing routing rules"],
+    ].map(([value, label]) => `<option value="${value}"${(cp.stun ?? "proxy") === value ? " selected" : ""}>${trHTML(label)}</option>`).join("");
     const starters = s.routing_presets?.groups || {};
     const field = (id, label, value, opts = {}) => '<div class="form-row"><label for="' + id + '">' + esc(label) + "</label>" +
       (opts.area ? '<textarea id="' + id + '" placeholder="' + esc(opts.ph || "") + '">' + esc(value) + "</textarea>" : '<input id="' + id + '" type="' + (opts.type || "text") + '" value="' + esc(value) + '" placeholder="' + esc(opts.ph || "") + '">') +
@@ -1683,6 +1688,7 @@
       field("domains", tr("Existing custom domains"), (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: tr("Enter one domain or web URL per line. A URL adds its hostname and subdomains.") }) +
       field("direct_dns", tr("DNS for other domains"), cp.direct_dns || "dhcp", { hint: tr("Use dhcp for the DNS assigned by the local network, or enter an IP such as 223.5.5.5.") }) +
       '<div class="form-row check"><label><input type="checkbox" id="block_quic"' + (cp.block_quic === false ? "" : " checked") + `> ${trHTML("Block QUIC (UDP 443) for proxied domains so apps use TCP.")}</label></div>` +
+      `<div class="form-row"><label for="stun">${trHTML("WebRTC (STUN)")}</label><select id="stun">${stunOptions}</select><div class="hint">${trHTML("Applies to UDP STUN from all apps on compatible clients.")}</div></div>` +
       `<button class="primary" type="submit">${trHTML("Save routing policy")}</button><p class="small muted">${trHTML("Clients check for and apply updates every 30 seconds.")}</p></form>` +
       `<form class="card" id="s-ip"><h2>${trHTML("Egress IPs")}</h2>` + field("cooldown", tr("Cooldown after release (days)"), Math.round((s.cooldown_seconds || 0) / 86400 * 10) / 10, { type: "number", hint: tr("Released IPs stay out of the available pool during cooldown.") }) +
       `<button class="primary" type="submit">${trHTML("Save")}</button></form>` +
@@ -1721,7 +1727,7 @@
       }]));
       return { client_policy: Object.assign({}, cp, {
         domain_groups, domain_suffix: lines($("#domains").value),
-        direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked,
+        direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked, stun: $("#stun").value,
       }) };
     }, tr("Routing policy saved."), (message) => {
       const group = /^(?:invalid )?routing group (claude|openai|gemini)\b/.exec(message);

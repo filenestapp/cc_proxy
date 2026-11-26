@@ -17,7 +17,7 @@
 
 use crate::runtime::{self, write_protected};
 use crate::session::{self, Paths};
-use crate::sysdns;
+use crate::{sysdns, visitor};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -32,6 +32,8 @@ const MAX_RESTARTS: usize = 5;
 #[derive(Debug, Clone)]
 pub struct Options {
     pub singbox: PathBuf,
+    /// The exact path of the frpc sidecar shipped alongside this supervisor.
+    pub bundled_frpc: Option<PathBuf>,
     /// The client's config, in the user-writable state directory. Only read, through [`runtime::accept`].
     pub client_config: PathBuf,
     /// User-writable signals; only their existence / modification time is looked at.
@@ -254,7 +256,19 @@ impl Supervisor {
     /// (and passed `sing-box check`); Ok(false): it is what is already running.
     fn load(&mut self) -> Result<bool> {
         let raw = runtime::read_client_config(&self.o.client_config)?;
-        let (_, protected) = runtime::accept(&raw, &self.o.cache())?;
+        let (spec, mut protected) = runtime::accept(&raw, &self.o.cache())?;
+        if spec.stun.is_some() && spec.server == visitor::BIND_ADDR {
+            if let Some(frpc) = self.o.bundled_frpc.as_deref().and_then(Path::to_str) {
+                // The XTCP visitor uses IPv4 STUN before it can carry traffic. The
+                // supervisor grants that exception by exact path in its protected copy.
+                protected["route"]["rules"].as_array_mut().expect("rendered route rules").insert(
+                    runtime::STUN_RULE_INDEX,
+                    serde_json::json!({
+                        "ip_version": 4, "network": "udp", "protocol": "stun", "process_path": [frpc], "outbound": "direct",
+                    }),
+                );
+            }
+        }
         if self.running.as_ref() == Some(&protected) {
             return Ok(false);
         }

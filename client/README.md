@@ -101,6 +101,22 @@ The bundle identifier is `sg.aifree.desktop`. macOS treats it as a new app relat
 - The supervisor keeps its logs and validated configuration in `/Library/Application Support/CCProxy` on macOS, `/var/lib/ccproxy` on Linux, and `%ProgramData%\CCProxy` on Windows.
 - The TUN handles routing and DNS. Rule domains use fake IPs, local networks stay direct, and rule traffic falls back to TCP when QUIC is blocked. On macOS the supervisor sets per-domain resolvers after TUN setup and restores them on stop. The client refreshes the DNS cache when the tunnel starts, reloads, and stops.
 
+### WebRTC and STUN
+
+In app mode, compatible clients request `stun=1` from the control plane. The default policy sends new UDP flows that start with an RFC 5389 STUN message through the exit, regardless of process or destination port. STUN on UDP 443 takes precedence over the QUIC block. The dual-stack TUN captures IPv6 internet traffic, and the IPv4-only exit refuses IPv6 destinations.
+
+An administrator can update `client_policy.stun` in the console under **Settings → Client routing policy → WebRTC (STUN)** or via `PUT /admin/settings` with `{"client_policy":{"stun":"reject"}}` (substitute the desired value). The client applies the policy during config sync.
+
+| Value | Behavior |
+| --- | --- |
+| `proxy` (default) | Route UDP STUN through the exit. IPv4 STUN servers see the exit address. IPv6 STUN receives no answer. |
+| `reject` | Drop UDP STUN at the client. |
+| `direct` | Use the original split routing and IPv4-only TUN. Unmatched STUN can reveal the device's own address. IPv6 follows the platform's legacy behavior. |
+
+While connected, **Environment check → UDP and STUN** reports **Exit** when a returned address matches the verified public exit, **Leak** when it differs, or **No answer** when no address is returned. An address comparison requires a verified exit for the route being tested.
+
+The policy applies to new, TUN-routed UDP flows. The bundled frpc executable uses direct IPv4 STUN for XTCP hole punching. The supervisor limits that exception to its installed executable path on an XTCP connection. Local WebRTC host candidates, STUN over TCP or TLS, messages without the RFC 5389 magic cookie, and flows that began before Connect are outside this protection. Domain and local-proxy modes use their original routing. Deploy the control plane first, then release clients that declare support. Older clients receive their original configuration and require an update to enable the protection.
+
 ### XTCP exits
 
 For an exit behind NAT, the CLI and GUI fetch device-scoped visitor settings from `/v1/xtcp-visitor`. The unprivileged frontend starts the bundled frpc after TUN routes are ready, because the UDP path must be established with the active routes. It reports running after frpc opens the direct path. The visitor receives the token through its environment and redacts it from logs. Disconnect, sign-out, or frontend exit stops the guard and frpc.
@@ -119,6 +135,6 @@ npx --yes @tauri-apps/cli@2.12.6 build --bundles app  # macOS. Windows uses nsis
 
 The desktop release workflow builds the platform installers and the standalone Linux x86_64 and ARM64 archives. See [desktop release and update instructions](../docs/desktop-updates.md) for packaging and publication.
 
-The Linux [direct exit suite](../controlplane/test/run-e2e.sh) exercises the CLI sign-in and TUN, routing, assignment changes, and revocation. Run the [XTCP suite](../controlplane/test/xtcp/run-e2e.sh) with `AIFREE_CLIENT_ONLY=1` to test CLI connect with real frpc, routed traffic, duplicate connection prevention, disconnect and crash cleanup, token rotation, and revocation.
+The Linux [direct exit suite](../controlplane/test/run-e2e.sh) exercises the CLI sign-in and TUN, routing, IPv4 and IPv6 STUN, assignment changes, and revocation. Run the [XTCP suite](../controlplane/test/xtcp/run-e2e.sh) with `AIFREE_CLIENT_ONLY=1` to test CLI connect with real frpc, routed traffic, duplicate connection prevention, disconnect and crash cleanup, token rotation, and revocation.
 
 Earlier Apple silicon GUI acceptance exercised authorization, rule-domain traffic through the assigned exit, direct traffic, configuration reload, and cleanup after quitting. Use a domain such as `echo.example.com` for macOS DNS tests because the platform resolves the special-use `.test` suffix locally. Windows UAC, Linux polkit, and the desktop routes for XTCP remain platform acceptance checks.

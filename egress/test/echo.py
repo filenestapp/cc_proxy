@@ -2,14 +2,16 @@
 
 TCP 8080: HTTP, body is the client IP. /strict answers 403 to the IPs in $BLOCK_IPS (comma-separated),
           standing in for a site that has started refusing an egress IP.
-UDP 9090 and 443: reply with the client IP.
+UDP 9090, 3478 and 443: echo the source IP or answer a STUN Binding request.
 """
 import http.server
 import os
 import socket
+import struct
 import threading
 
 BLOCKED = {ip for ip in os.environ.get("BLOCK_IPS", "").split(",") if ip}
+STUN_COOKIE = bytes.fromhex("2112a442")
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -25,16 +27,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
         print("tcp", self.client_address[0], fmt % args, flush=True)
 
 
-def udp_echo(port):
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(("0.0.0.0", port))
+def udp_echo(host, port):
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    s = socket.socket(family, socket.SOCK_DGRAM)
+    s.bind((host, port))
     while True:
-        _, addr = s.recvfrom(2048)
-        print("udp", port, addr[0], flush=True)
-        s.sendto(addr[0].encode(), addr)
+        packet, addr = s.recvfrom(2048)
+        if len(packet) >= 20 and packet[:2] == b"\x00\x01" and packet[4:8] == STUN_COOKIE:
+            # Use the actual source address for the XOR-MAPPED-ADDRESS attribute.
+            print("stun", "ipv6" if family == socket.AF_INET6 else "ipv4", port, addr[0], flush=True)
+            mask = packet[4:20]
+            ip = socket.inet_pton(family, addr[0])
+            mapped = bytes(a ^ b for a, b in zip(ip, mask))
+            address = struct.pack("!BBH", 0, 2 if family == socket.AF_INET6 else 1, addr[1] ^ 0x2112)
+            attribute = struct.pack("!HH", 0x0020, len(address) + len(mapped)) + address + mapped
+            reply = struct.pack("!HH", 0x0101, len(attribute)) + mask + attribute
+        else:
+            print("udp", port, addr[0], flush=True)
+            reply = addr[0].encode()
+        s.sendto(reply, addr)
 
 
-# 443 stands in for QUIC: clients must block it for tunnelled traffic.
-for p in (9090, 443):
-    threading.Thread(target=udp_echo, args=(p,), daemon=True).start()
+# 443 also stands in for QUIC in the plain UDP checks.
+for host in filter(None, ("0.0.0.0", os.environ.get("ECHO_IPV6"))):
+    for port in (9090, 3478, 443):
+        threading.Thread(target=udp_echo, args=(host, port), daemon=True).start()
 http.server.ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()

@@ -149,21 +149,58 @@ cpctl assign hana 10.99.0.7 >/dev/null
 compose --profile desktop up -d desktop 2>&1 | tail -n 1
 dx() { compose exec -T desktop "$@"; }
 ux() { compose exec -T -u cust -e HOME=/home/cust desktop "$@"; }
+stun_hits() {
+  compose logs --no-log-prefix echo | awk -v family="${1:-}" '$1 == "stun" && (!family || $2 == family) { ++n } END { print n + 0 }'
+}
+route_generation() {
+  dx python3 -c 'import json; s = json.load(open("/var/lib/ccproxy/status.json")); print(s["route_generation"] if s["state"] == "running" else 0)'
+}
+wait_for_client_reload() {
+  local previous=$1 current
+  for _ in $(seq 1 20); do
+    current=$(route_generation) || return 1
+    if [[ "$current" -gt "$previous" ]]; then return 0; fi
+    sleep 1
+  done
+  ux aifree status
+  return 1
+}
+set_stun_policy() {
+  local previous
+  previous=$(route_generation) || return 1
+  curl -fsS -X PUT -H "Authorization: Bearer $CP_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+    -d "{\"client_policy\":{\"stun\":\"$1\"}}" "$CP/admin/settings" >/dev/null || return 1
+  wait_for_client_reload "$previous"
+}
+dx python3 /app/stun_probe.py disconnected 10.99.0.7 || status=1
 ux sh -c 'AIFREE_PASSWORD=pw-hana-0123 aifree login --server http://10.88.0.5:8443 --user hana --device hana-linux' || status=1
 ux sh -c 'nohup aifree connect --interval 2 > /tmp/up.log 2>&1 &'
 for _ in $(seq 1 20); do ux aifree status 2>/dev/null | grep 'tunnel: running' >/dev/null && break; sleep 1; done
 ux aifree status
 wait_for_agent egress-hk "$HK_TOKEN" || status=1
 dx python3 /app/desktop_probe.py 10.99.0.7 10.88.0.60 --routing-groups || status=1
+ipv6_hits=$(stun_hits ipv6)
+dx python3 /app/stun_probe.py proxy 10.99.0.7 || status=1
+check "the IPv6 STUN responder received no request with proxy" '[[ "$(stun_hits ipv6)" == "$ipv6_hits" ]]'
 
 echo "-- admin moves hana to jp-1 in one step; the client follows without doing anything"
+previous_route=$(route_generation)
 cpctl reassign hana 10.99.0.15 >/dev/null
 wait_for_agent egress-jp "$JP_TOKEN" || status=1
-for _ in $(seq 1 20); do dx grep 'config updated' /tmp/up.log >/dev/null && break; sleep 1; done
-sleep 2
+check "client reloaded the reassigned exit" 'wait_for_client_reload "$previous_route"'
 dx python3 /app/desktop_probe.py 10.99.0.15 10.88.0.60 --routing-groups || status=1
 check "client stayed up through the move (never saw an unassigned user)" \
   "dx pgrep -x aifree >/dev/null && ! dx grep -E 'stopping|no exit' /tmp/up.log >/dev/null"
+
+echo "-- admin changes the STUN policy on the running client"
+check "client reloaded the reject policy" 'set_stun_policy reject'
+hits=$(stun_hits)
+dx python3 /app/stun_probe.py reject 10.99.0.15 || status=1
+check "the STUN responder received no request with reject" '[[ "$(stun_hits)" == "$hits" ]]'
+check "client reloaded the direct policy" 'set_stun_policy direct'
+dx python3 /app/stun_probe.py direct 10.99.0.15 || status=1
+check "client reloaded the proxy policy" 'set_stun_policy proxy'
+dx python3 /app/stun_probe.py proxy 10.99.0.15 || status=1
 
 echo "-- admin revokes the device; the client signs out and takes the tunnel down"
 cpctl revoke hana hana-linux >/dev/null
@@ -173,6 +210,7 @@ check "aifree connect exited after revocation" "! dx pgrep -x aifree >/dev/null"
 check "no sing-box left running" "! dx pgrep -x sing-box >/dev/null"
 check "session forgotten" "ux aifree status | grep 'not signed in' >/dev/null"
 check "TUN interface removed" "! dx sh -c 'ip -o link | grep -E \": tun[0-9]+:\"' >/dev/null"
+dx python3 /app/stun_probe.py disconnected 10.99.0.15 || status=1
 dx cat /tmp/up.log | tail -n 4
 
 echo "-- supervisor exits on its own: stop file, and stale heartbeat (the desktop app's two off-switches)"

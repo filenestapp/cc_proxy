@@ -229,17 +229,22 @@ def find_device(inv, device_name, user_name=None):
 
 FAKEIP_RANGE = "198.18.0.0/15"
 TUN_ADDRESS = "172.19.0.1/30"
+TUN_IPV6_ADDRESS = "fdcc:50b5:6f77::1/126"
 TUN_DNS = "172.19.0.2"  # resolver address handed to the OS; queries to it enter the TUN and are hijacked
 CLIENT_MODES = ("proxy", "domain", "app")
 
 
 def client_policy(inv):
     p = inv.get("client_policy") or {}
+    stun = p.get("stun", "proxy")
+    if stun not in ("proxy", "reject", "direct"):
+        raise InventoryError("client_policy.stun must be one of proxy, reject, direct")
     return {
         "domain_suffix": p.get("domain_suffix", []),
         "process_name": p.get("process_name", []),
         "process_path": p.get("process_path", []),
         "block_quic": p.get("block_quic", True),
+        "stun": stun,
         # "dhcp" = resolvers handed out by the local network; or an IP such as "192.168.1.1".
         "direct_dns": p.get("direct_dns", "dhcp"),
     }
@@ -299,12 +304,19 @@ def build_client(inv, device_name, listen="127.0.0.1", port=2080, allow_revoked=
                           "action": "predefined", "rcode": "NOERROR"})
         dns_rules.append({"domain_suffix": policy["domain_suffix"], "server": "fakeip"})
 
+    rules = [{"action": "sniff"}, {"protocol": "dns", "action": "hijack-dns"}]
     tun = {"type": "tun", "tag": "tun-in", "address": [TUN_ADDRESS], "auto_route": True, "stack": "mixed"}
     if mode == "domain":
         # Only the fake-IP range and the TUN's own /30 are routed; the default route stays as it was.
         tun["route_address"] = [FAKEIP_RANGE, "172.19.0.0/30"]
     else:
         tun["strict_route"] = True
+        stun = policy["stun"]
+        if stun != "direct":
+            tun["address"].append(TUN_IPV6_ADDRESS)
+            rule = {"network": "udp", "protocol": "stun"}
+            rule.update({"outbound": "egress"} if stun == "proxy" else {"action": "reject"})
+            rules.append(rule)
 
     config["inbounds"] = [tun]
     config["dns"] = {
@@ -316,7 +328,7 @@ def build_client(inv, device_name, listen="127.0.0.1", port=2080, allow_revoked=
         "final": "direct-dns",
     }
     config["route"] = {
-        "rules": [{"action": "sniff"}, {"protocol": "dns", "action": "hijack-dns"}] + tunnel_rules(policy, mode),
+        "rules": rules + tunnel_rules(policy, mode),
         "final": "direct",
         "auto_detect_interface": True,
         "default_domain_resolver": "direct-dns",

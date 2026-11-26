@@ -161,8 +161,15 @@ fn options(
     heartbeat: Option<u64>,
     connection_id: Option<String>,
 ) -> supervisor::Options {
+    let frpc = find_sidecar(None, "frpc");
+    // An absolute result here comes from the directory containing this executable.
+    // The fallback PATH lookup and any visitor command-line override are ineligible.
+    let bundled_frpc = (frpc.is_absolute()
+        && frpc.symlink_metadata().is_ok_and(|meta| meta.is_file()))
+    .then_some(frpc);
     supervisor::Options {
         singbox,
+        bundled_frpc,
         client_config: paths.config(),
         stop_file: paths.stop(),
         heartbeat: heartbeat

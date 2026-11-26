@@ -21,7 +21,7 @@ pub(super) enum PublicExit {
 }
 
 #[derive(PartialEq, Eq)]
-struct Target {
+pub(super) struct Target {
     session_id: String,
     connection_id: Option<String>,
     route: (u32, u64),
@@ -51,12 +51,19 @@ impl Target {
         })
     }
 
-    fn active(app: &App) -> Option<Self> {
+    pub(super) fn active(app: &App) -> Option<Self> {
         if app.paths.stop().exists() {
             return None;
         }
         let session = Session::load(&app.paths)?;
         Self::new(app, &session, &app.current_status()?)
+    }
+
+    pub(super) fn public_exit(&self, app: &App) -> PublicExit {
+        match app.exit_observation.lock().unwrap().as_ref().filter(|reading| &reading.target == self) {
+            Some(reading) => reading.address.map_or(PublicExit::Unavailable, PublicExit::Verified),
+            None => PublicExit::Checking,
+        }
     }
 }
 
@@ -70,18 +77,7 @@ pub(super) fn display(app: &App, session: &Session, status: &Status) -> PublicEx
     let Some(target) = Target::new(app, session, status) else {
         return PublicExit::Unavailable;
     };
-    match app
-        .exit_observation
-        .lock()
-        .unwrap()
-        .as_ref()
-        .filter(|reading| reading.target == target)
-    {
-        Some(reading) => reading
-            .address
-            .map_or(PublicExit::Unavailable, PublicExit::Verified),
-        None => PublicExit::Checking,
-    }
+    target.public_exit(app)
 }
 
 /// Probe independently of the heartbeat and config sync so a slow HTTPS request cannot interrupt the tunnel.

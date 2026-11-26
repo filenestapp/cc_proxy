@@ -42,6 +42,7 @@ impl Env {
     fn options(&self, heartbeat: Option<Duration>) -> Options {
         Options {
             singbox: self.root.join("sing-box"),
+            bundled_frpc: None,
             client_config: self.user.join("sing-box.json"),
             stop_file: self.user.join("stop"),
             heartbeat: heartbeat.map(|d| (self.user.join("heartbeat"), d)),
@@ -82,6 +83,39 @@ impl Env {
     fn protected(&self) -> Value {
         serde_json::from_slice(&fs::read(self.runtime.join("config.json")).unwrap()).unwrap()
     }
+}
+
+#[test]
+fn only_the_protected_xtcp_config_exempts_bundled_frpc_stun() {
+    let env = Env::new("xtcp-stun");
+    let frpc = env.root.join("frpc");
+    let public = fixture();
+    let mut xtcp = public.clone();
+    xtcp["outbounds"][0]["server"] = serde_json::json!("127.0.0.1");
+    let bypass = serde_json::json!({
+        "ip_version": 4, "network": "udp", "protocol": "stun", "process_path": [frpc], "outbound": "direct",
+    });
+    let mut opts = env.options(None);
+    opts.bundled_frpc = Some(frpc);
+    env.write_client(&public);
+    let handle = std::thread::spawn(move || supervisor::run(opts));
+    env.wait("public route", |e| e.status().is_some_and(|s| s.state == "running"));
+    assert_eq!(env.protected()["route"]["rules"], public["route"]["rules"]);
+
+    env.write_client(&xtcp);
+    env.wait("protected XTCP route", |e| e.status().is_some_and(|s| s.route_generation == 2));
+    let protected = env.protected();
+    assert_eq!(protected["route"]["rules"][2], bypass);
+    assert_eq!(protected["route"]["rules"][3], xtcp["route"]["rules"][2]);
+
+    xtcp["route"]["rules"].as_array_mut().unwrap().insert(2, bypass);
+    env.write_client(&xtcp);
+    env.wait("injected bypass rejected", |e| e.status().is_some_and(|s| s.message.contains("rejected")));
+    assert_eq!(env.protected(), protected);
+    assert_eq!(env.status().unwrap().route_generation, 2);
+
+    fs::write(env.user.join("stop"), b"").unwrap();
+    handle.join().unwrap().unwrap();
 }
 
 impl Drop for Env {
@@ -156,6 +190,17 @@ fn supervisor_runs_only_the_protected_copy_and_refuses_tampering() {
     assert!(!env.calls().contains("HUP"));
     assert!(!Path::new("/tmp/owned-by-root").exists());
     assert_eq!(env.status().unwrap().egress_fingerprint.as_deref(), Some(original_exit.as_str()));
+
+    let mut missing_stun = good.clone();
+    missing_stun["route"]["rules"].as_array_mut().unwrap().remove(2);
+    let route = env.status().unwrap().running_route();
+    env.write_client(&missing_stun);
+    env.wait("STUN rule rejection", |e| {
+        e.status().is_some_and(|s| s.state == "running" && s.message.contains("expected the UDP STUN rule"))
+    });
+    assert_eq!(env.protected(), before);
+    assert_eq!(env.status().unwrap().running_route(), route);
+    assert!(!env.calls().contains("HUP"));
 
     // A valid policy and exit change is applied before probes can use the new exit.
     let mut spec = ccproxy_core::runtime::extract(&good).unwrap();

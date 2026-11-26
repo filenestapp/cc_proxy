@@ -142,6 +142,9 @@ impl Api {
         if mode != "proxy" {
             req = req.query("exact_domains", "1");
         }
+        if mode == "app" {
+            req = req.query("stun", "1");
+        }
         if let Some(tag) = etag {
             req = req.set("If-None-Match", tag);
         }

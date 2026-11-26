@@ -240,6 +240,12 @@ func settingsPatch(body fields) (map[string]any, error) {
 			if err := json.Unmarshal(raw, &policy); err != nil {
 				return nil, failure(409, "client_policy must be an object")
 			}
+			if rawSTUN, ok := policy["stun"]; ok {
+				var stun string
+				if err := json.Unmarshal(rawSTUN, &stun); err != nil || (stun != "proxy" && stun != "reject" && stun != "direct") {
+					return nil, failure(400, "client_policy.stun must be one of proxy, reject, direct")
+				}
+			}
 			if suffixes, ok := policy["domain_suffix"]; ok {
 				var domains []string
 				if err := json.Unmarshal(suffixes, &domains); err != nil {
