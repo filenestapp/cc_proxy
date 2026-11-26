@@ -3,9 +3,8 @@
 # workflow is how an operator publishes an agent release; see docs/exit-agent-updates.md.
 #
 # The release sequence is this workflow's run number, so a later run is always a newer release. RELEASE_VERSION is
-# the operator-visible version and its exit-agent/<version> tag pins it to one source commit. With the secret
-# AGENT_RELEASE_SIGNING_KEY (agent-release keygen) the record is signed and checked against
-# egress/agent/release_keys.txt; without it the artifact is unsigned and the control plane refuses to roll it out.
+# the operator-visible version and its exit-agent/<version> tag pins it to one source commit. The main-only release
+# environment holds AGENT_RELEASE_SIGNING_KEY. The workflow verifies its signature against release_keys.txt.
 name: exit-agent
 
 on:
@@ -17,6 +16,7 @@ permissions:
 jobs:
   build:
     if: ${{ github.ref == 'refs/heads/main' }}
+    environment: release
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
@@ -46,8 +46,8 @@ jobs:
           AGENT_RELEASE_SIGNING_KEY: ${{ secrets.AGENT_RELEASE_SIGNING_KEY }}
         run: |
           if [ -z "$AGENT_RELEASE_SIGNING_KEY" ]; then
-            echo "::warning::AGENT_RELEASE_SIGNING_KEY is not set: this build is not an agent release (installers only)"
-            exit 0
+            echo "::error::AGENT_RELEASE_SIGNING_KEY is required in the release environment"
+            exit 1
           fi
           go run ./cmd/agent-release sign -dist dist
           # Fails when the key is not in release_keys.txt: agents built from this tree would refuse the release.
@@ -56,7 +56,7 @@ jobs:
         run: |
           {
             echo "### ccproxy-exit-agent $(cat dist/VERSION), release sequence $GITHUB_RUN_NUMBER"
-            if [ -f dist/release.json.sig ]; then echo "Signed release: copy the artifact to CP_AGENT_RELEASES/$(cat dist/VERSION)/ on the control plane."; else echo "Unsigned: installers only."; fi
+            echo "Signed release: copy the artifact to CP_AGENT_RELEASES/$(cat dist/VERSION)/ on the control plane."
             echo '```'
             cat dist/SHA256SUMS
             echo '```'

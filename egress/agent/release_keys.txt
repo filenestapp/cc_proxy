@@ -4,3 +4,5 @@
 #
 # With no key here, an agent built from this tree never updates itself and reports the update state "disabled".
 # Keep the old key listed for one release when rotating, so hosts on the old key can move to the new one.
+
+ed25519:fz4Ok3Ni2T0NPKwYYEPUe8HzGnNqedQJhpR8W+zoIe0=
