@@ -16,7 +16,8 @@ if waitfor 120 "carol's port ready" "port_status | grep -q '20445=ready'"; then
 else echo "FAIL carol's mapping: $(port_status)"; status=1; fi
 
 # Like a real OS: the resolver is an off-link address the TUN hijacks (Docker's 127.0.0.11 is loopback).
-docker run -d --name ccx-desktop --network $NET --ip $IP_DESKTOP --cap-add NET_ADMIN --device /dev/net/tun --init \
+# Let privileged sing-box resolve the unprivileged frpc's executable via /proc.
+docker run -d --name ccx-desktop --network $NET --ip $IP_DESKTOP --cap-add NET_ADMIN --cap-add SYS_PTRACE --device /dev/net/tun --init \
   --add-host other.test:$IP_ECHO -v "$FRP_DIR/frpc:/opt/aifree/frpc:ro" -v "$SB_BIN:/opt/aifree/sing-box:ro" \
   ccx-desktop sh -c "echo 'nameserver 192.0.2.53' > /etc/resolv.conf && exec sleep infinity" >/dev/null
 docker exec ccx-desktop useradd -m -s /bin/sh cust
@@ -30,7 +31,7 @@ stop_up() { ux aifree disconnect && waitfor 20 "aifree to stop" "gone aifree"; }
 gone() { ! dx pgrep -x "$1" >/dev/null; }
 logged() { dx grep -q -- "$1" /tmp/up.log; }
 via() { dx curl -q -sS --max-time 15 "http://$1:8080/${2:-}" 2>/dev/null || true; }
-# Read frpc's environment as its own user: container root has no ptrace right over another UID's /proc/<pid>/environ.
+# Read frpc's environment as its own user.
 frpc_env_token() { ux sh -c 'p=$(pgrep -x frpc) && tr "\0" "\n" < /proc/$p/environ' 2>/dev/null | sed -n 's/^FRP_AUTH_TOKEN=//p'; }
 # A command's combined output, whatever its exit status (run-e2e.sh sets pipefail, and these commands fail on purpose).
 output_of() { dx "$@" 2>&1 || true; }
