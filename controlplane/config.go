@@ -20,6 +20,10 @@ const (
 	vlessFlow   = "xtls-rprx-vision"
 	fakeIPRange = "198.18.0.0/15"
 	tunAddress  = "172.19.0.1/30"
+
+	maxHostnameBytes = 253
+	// Match the file size limit enforced by the client's tunnel supervisor.
+	maxClientConfigBytes = 1 << 20
 )
 
 // Preserve the field order of the original wire format so existing ETags survive the database cutover.
@@ -157,11 +161,13 @@ func buildServerConfig(h host, users []boundUser, devices []credential) configOb
 }
 
 type clientPolicy struct {
-	DomainSuffix []string `json:"domain_suffix"`
-	ProcessName  []string `json:"process_name"`
-	ProcessPath  []string `json:"process_path"`
-	BlockQUIC    bool     `json:"block_quic"`
-	DirectDNS    string   `json:"direct_dns"`
+	DomainSuffix []string                `json:"domain_suffix"`
+	DomainGroups map[string]routingGroup `json:"domain_groups"`
+	DomainExact  []string                `json:"-"`
+	ProcessName  []string                `json:"process_name"`
+	ProcessPath  []string                `json:"process_path"`
+	BlockQUIC    bool                    `json:"block_quic"`
+	DirectDNS    string                  `json:"direct_dns"`
 }
 
 var proxiedDomainLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -183,7 +189,7 @@ func normalizeProxiedDomains(rules []string) ([]string, error) {
 		}
 		domain = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(domain, "."), "."))
 		labels := strings.Split(domain, ".")
-		if len(domain) > 253 || len(labels) < 2 {
+		if len(domain) > maxHostnameBytes || len(labels) < 2 {
 			return nil, failure(400, "proxied rule %d must contain a valid domain", i+1)
 		}
 		for _, label := range labels {
@@ -196,7 +202,7 @@ func normalizeProxiedDomains(rules []string) ([]string, error) {
 	return domains, nil
 }
 
-func clientConfig(ctx context.Context, db database, identity deviceIdentity, mode string) (renderedConfig, error) {
+func clientConfig(ctx context.Context, db database, identity deviceIdentity, mode string, exactSupported bool) (renderedConfig, error) {
 	var u boundUser
 	var h host
 	var d credential
@@ -233,15 +239,26 @@ func clientConfig(ctx context.Context, db database, identity deviceIdentity, mod
 		if err != nil {
 			return renderedConfig{}, err
 		}
+		if err := policy.applyDomainGroups(); err != nil {
+			return renderedConfig{}, err
+		}
 	}
-	cfg, err := buildClientConfig(h, u, d, policy, mode)
+	return renderClientConfig(h, u, d, policy, mode, exactSupported)
+}
+
+func renderClientConfig(h host, user boundUser, d credential, policy clientPolicy, mode string, exactSupported bool) (renderedConfig, error) {
+	cfg, err := buildClientConfig(h, user, d, policy, mode, exactSupported)
 	if err != nil {
 		return renderedConfig{}, err
 	}
-	return renderConfig(cfg)
+	rendered, err := renderConfig(cfg)
+	if len(policy.DomainGroups) != 0 && len(rendered.Body) > maxClientConfigBytes {
+		return renderedConfig{}, failure(400, "client routing configuration exceeds the 1 MiB size limit")
+	}
+	return rendered, err
 }
 
-func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy, mode string) (configObject, error) {
+func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy, mode string, exactSupported bool) (configObject, error) {
 	outbounds := []configObject{{
 		{"type", "vless"}, {"tag", "egress"}, {"server", h.PublicHost}, {"server_port", user.Port}, {"uuid", d.UUID},
 		{"flow", vlessFlow}, {"tls", configObject{
@@ -258,10 +275,12 @@ func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy
 			{"outbounds", outbounds}, {"route", configObject{{"final", "egress"}}},
 		}, nil
 	}
-	if len(policy.DomainSuffix) == 0 && mode == "domain" {
+	// An exact-only policy is configured even for a client that can only use suffix rules.
+	domainCount := len(policy.DomainSuffix) + len(policy.DomainExact)
+	if domainCount == 0 && mode == "domain" {
 		return nil, failure(409, "client_policy.domain_suffix is empty; domain mode would tunnel nothing")
 	}
-	if len(policy.DomainSuffix)+len(policy.ProcessName)+len(policy.ProcessPath) == 0 {
+	if domainCount+len(policy.ProcessName)+len(policy.ProcessPath) == 0 {
 		return nil, failure(409, "client_policy has no process or domain rules; app mode would tunnel nothing")
 	}
 
@@ -271,11 +290,24 @@ func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy
 	} else {
 		tun = append(tun, configField{"strict_route", true})
 	}
-	dnsRules := make([]configObject, 0, 2)
-	if len(policy.DomainSuffix) != 0 {
+	dnsRules := make([]configObject, 0, 4)
+	matchers := make([]configField, 0, 5)
+	var exactDomains []string
+	if exactSupported {
+		exactDomains = policy.DomainExact
+	}
+	for _, domains := range []struct {
+		key   string
+		names []string
+	}{{"domain_suffix", policy.DomainSuffix}, {"domain", exactDomains}} {
+		if len(domains.names) == 0 {
+			continue
+		}
+		match := configField{domains.key, domains.names}
 		dnsRules = append(dnsRules,
-			configObject{{"domain_suffix", policy.DomainSuffix}, {"query_type", []string{"AAAA"}}, {"action", "predefined"}, {"rcode", "NOERROR"}},
-			configObject{{"domain_suffix", policy.DomainSuffix}, {"server", "fakeip"}})
+			configObject{match, {"query_type", []string{"AAAA"}}, {"action", "predefined"}, {"rcode", "NOERROR"}},
+			configObject{match, {"server", "fakeip"}})
+		matchers = append(matchers, match)
 	}
 	directDNS := configObject{{"type", policy.DirectDNS}, {"tag", "direct-dns"}}
 	if policy.DirectDNS != "dhcp" && policy.DirectDNS != "local" {
@@ -286,10 +318,6 @@ func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy
 		{"rules", dnsRules}, {"final", "direct-dns"},
 	}
 	rules := []configObject{{{"action", "sniff"}}, {{"protocol", "dns"}, {"action", "hijack-dns"}}}
-	matchers := make([]configField, 0, 4)
-	if len(policy.DomainSuffix) != 0 {
-		matchers = append(matchers, configField{"domain_suffix", policy.DomainSuffix})
-	}
 	matchers = append(matchers, configField{"ip_cidr", []string{fakeIPRange}})
 	if mode == "app" && len(policy.ProcessName) != 0 {
 		matchers = append(matchers, configField{"process_name", policy.ProcessName})

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+link="${3%/}/usr/local/bin/aifree"
+target="/Applications/aifree.app/Contents/MacOS/aifree"
+if [ -e "$link" ] || [ -L "$link" ]; then
+  if [ ! -L "$link" ] || [ "$(readlink "$link")" != "$target" ]; then
+    printf 'Move the existing %s before installing aifree.\n' "$link" >&2
+    exit 1
+  fi
+fi

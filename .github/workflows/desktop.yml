@@ -1,5 +1,5 @@
 # Build aifree desktop packages for macOS, Windows, and Linux.
-# Each job bundles the ccproxy helper, a SHA-256-verified sing-box and the pinned frpc (XTCP visitor) next to the app,
+# Each job bundles the aifree CLI, a SHA-256-verified sing-box and the pinned frpc (XTCP visitor) next to the app,
 # then uploads the installers.
 # Unsigned: macOS notarisation and Windows code signing need certificates and are not configured here.
 name: desktop
@@ -20,7 +20,7 @@ jobs:
           - os: macos-15
             target: universal-apple-darwin
             rust-targets: aarch64-apple-darwin x86_64-apple-darwin
-            bundles: app,dmg
+            bundles: app
           - os: windows-2022
             target: x86_64-pc-windows-msvc
             bundles: nsis
@@ -53,12 +53,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Sidecars (aifree CLI compatibility helper + verified sing-box and frpc)
-        run: desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
+      - name: Sidecars (aifree CLI and verified sing-box and frpc)
+        run: |
+          export AIFREE_RELEASE_VERSION=$(node -p 'require("./desktop/src-tauri/tauri.conf.json").version')
+          desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
       - name: Core and CLI checks
         run: |
           for target in ${{ matrix.rust-targets || matrix.target }}; do
-            cargo clippy --locked -p ccproxy -p ccproxy-core --target "$target" -- -D warnings
+            cargo clippy --locked -p aifree-cli -p ccproxy-core --target "$target" -- -D warnings
           done
       - name: Build app
         working-directory: client/desktop/src-tauri
@@ -68,9 +70,36 @@ jobs:
         run: |
           app="target/${{ matrix.target }}/release/bundle/macos/aifree.app/Contents"
           main=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Info.plist")
-          for executable in "$main" ccproxy sing-box frpc; do
+          for executable in "$main" aifree sing-box frpc; do
             for arch in arm64 x86_64; do lipo "$app/MacOS/$executable" -verify_arch "$arch"; done
           done
+          "$app/MacOS/aifree" --version
+          version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Info.plist")
+          desktop/scripts/package-macos-installer.sh "${app%/Contents}" "target/${{ matrix.target }}/release/bundle/dmg/aifree_${version}_universal.dmg"
+      - name: Verify Linux terminal entry points
+        if: runner.os == 'Linux'
+        run: |
+          bundles="target/${{ matrix.target }}/release/bundle"
+          staging=$(mktemp -d)
+          dpkg-deb --extract "$bundles"/deb/*.deb "$staging"
+          "$staging/usr/bin/aifree" --version
+          for image in "$bundles"/appimage/*.AppImage; do
+            if [[ -f "$image" ]]; then
+              APPIMAGE_EXTRACT_AND_RUN=1 "$image" cli --version
+            fi
+          done
+      - name: Verify the installed Windows terminal entry point
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path "target/${{ matrix.target }}/release/bundle/nsis" -Filter "*.exe" -File
+          if (@($installer).Count -ne 1) { throw "Expected one NSIS installer" }
+          $result = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "aifree install failed with exit code $($result.ExitCode)" }
+          $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + $env:Path
+          $command = Get-Command aifree -CommandType Application -ErrorAction Stop
+          & $command.Source --version
+          if ($LASTEXITCODE -ne 0) { throw "aifree --version failed" }
       - uses: actions/upload-artifact@v4
         with:
           name: aifree-${{ matrix.target }}

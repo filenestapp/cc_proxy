@@ -1,6 +1,6 @@
-"""Checks run inside the Linux client container while `ccproxy up` runs (app mode TUN).
+"""Checks run inside the Linux client container while `aifree connect` runs.
 
-Usage: desktop_probe.py EXPECTED_EGRESS_IP SELF_IP
+Usage: desktop_probe.py EXPECTED_EGRESS_IP SELF_IP [--routing-groups]
 """
 import ipaddress
 import socket
@@ -50,6 +50,14 @@ check("other names still resolve (DNS hijacked, sent direct)", resolve("cp"), re
 check("target.test leaves via the user's exit IP", http("target.test"), http("target.test") == egress)
 check("other.test is not proxied", http("other.test"), http("other.test") == me)
 check("default route goes through the TUN (app mode)", route_dev("1.1.1.1"), route_dev("1.1.1.1").startswith("tun"))
+if "--routing-groups" in sys.argv[3:]:
+    for host in ("api.claude-route.test", "openai-route.test", "gemini-route.test"):
+        address = resolve(host)
+        check(f"{host} gets a fake IP", address, not address.startswith("ERR") and ipaddress.ip_address(address) in FAKEIP)
+        public_ip = http(host)
+        check(f"{host} uses the selected egress", public_ip, public_ip == egress)
+    direct = http("child.gemini-route.test")
+    check("a subdomain of an exact-only rule stays direct", direct, direct == me)
 failed = results.count(False)
 print("desktop: %d failure(s)" % failed)
 sys.exit(1 if failed else 0)

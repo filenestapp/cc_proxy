@@ -23,7 +23,7 @@ pub(super) enum PublicExit {
 #[derive(PartialEq, Eq)]
 struct Target {
     session_id: String,
-    connected_at: u64,
+    connection_id: Option<String>,
     route: (u32, u64),
     visitor_guard: Option<u32>,
     fingerprint: String,
@@ -31,13 +31,9 @@ struct Target {
 
 impl Target {
     fn new(app: &App, session: &Session, status: &Status) -> Option<Self> {
-        let connected_at = app.tunnel.connected_at();
-        if status.updated < connected_at {
-            return None;
-        }
         let route = status.running_route()?;
         let visitor_guard = if visitor::required(&app.paths) {
-            let guard = app.visitor.lock().unwrap().guard_pid(Some(status))?;
+            let guard = visitor::guard_for_route(&app.paths, status)?;
             let (state, _) = visitor::tunnel_view(&app.paths, Some(guard))?;
             if state != "running" {
                 return None;
@@ -48,7 +44,7 @@ impl Target {
         };
         Some(Self {
             session_id: session.id.clone(),
-            connected_at,
+            connection_id: status.connection_id.clone(),
             route,
             visitor_guard,
             fingerprint: status.egress_fingerprint.clone()?,
@@ -56,11 +52,11 @@ impl Target {
     }
 
     fn active(app: &App) -> Option<Self> {
-        if !app.tunnel.wants_connection() {
+        if app.paths.stop().exists() {
             return None;
         }
         let session = Session::load(&app.paths)?;
-        Self::new(app, &session, &Status::current()?)
+        Self::new(app, &session, &app.current_status()?)
     }
 }
 

@@ -280,6 +280,10 @@ footer .row-between{gap:8px 20px}
       <article class="card panel" id="panel-download" aria-labelledby="h-download">
         <h2 id="h-download" data-t="download_title">下载客户端</h2>
         <p data-t="download_lead">在电脑上安装 aifree 桌面客户端，用本账号的邮箱和密码登录即可使用。</p>
+        <div class="notice info" data-download-unavailable hidden>
+          <p role="status" data-t="download_unavailable">The latest installer list is temporarily unavailable. Retry, or choose an earlier installer below if it matches your device.</p>
+          <div class="actions"><button type="button" class="btn btn-outline btn-sm" data-download-retry data-t="download_retry">Retry loading installers</button></div>
+        </div>
         <p class="dl-recommended" data-download-badge data-t="download_recommended" hidden>Recommended for this device</p>
         <div class="dl-groups">
           <details class="dl-group" data-platform="macos" open>
@@ -398,6 +402,7 @@ footer .row-between{gap:8px 20px}
       device_revoked: "设备“{name}”已吊销。", active_state: "使用中",
       orders_title: "订单与收据", orders_none: "还没有订单。", order_date: "日期", amount: "金额", receipt: "收据", view_receipt: "查看收据",
       download_recommended: "推荐用于当前设备", download_mac_universal: "通用 DMG（Apple 芯片与 Intel）", download_mac_apple: "Apple 芯片 DMG",
+      download_unavailable: "暂时无法加载最新的安装包列表。请重试，或在下方选择与你的设备匹配的旧版安装包。", download_retry: "重试加载安装包",
       download_title: "下载客户端", download_lead: "在电脑上安装 aifree 桌面客户端，用本账号的邮箱和密码登录即可使用。",
       mail_title: "企业邮箱", mail_none: "订阅后可联系客服申请 @aifree.sg 邮箱。",
       mail_address: "地址", open_webmail: "打开网页邮箱", mail_disabled_note: "如需恢复邮箱访问，请联系客服。",
@@ -483,6 +488,7 @@ footer .row-between{gap:8px 20px}
       device_revoked: "“{name}” has been revoked.", active_state: "Active",
       orders_title: "Orders & receipts", orders_none: "No orders yet.", order_date: "Date", amount: "Amount", receipt: "Receipt", view_receipt: "View receipt",
       download_recommended: "Recommended for this device", download_mac_universal: "Universal DMG (Apple silicon and Intel)", download_mac_apple: "Apple silicon DMG",
+      download_unavailable: "The latest installer list is temporarily unavailable. Retry, or choose an earlier installer below if it matches your device.", download_retry: "Retry loading installers",
       download_title: "Download the client", download_lead: "Install the aifree desktop client and sign in with this account's email and password.",
       mail_title: "Business email", mail_none: "Subscribers can contact support to request an @aifree.sg mailbox.",
       mail_address: "Address", open_webmail: "Open webmail", mail_disabled_note: "Contact support if you need help restoring access.",

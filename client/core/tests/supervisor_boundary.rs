@@ -45,6 +45,7 @@ impl Env {
             client_config: self.user.join("sing-box.json"),
             stop_file: self.user.join("stop"),
             heartbeat: heartbeat.map(|d| (self.user.join("heartbeat"), d)),
+            connection_id: None,
             poll: Duration::from_millis(100),
             runtime_dir: self.runtime.clone(),
             require_privileged: false,
@@ -87,6 +88,41 @@ impl Drop for Env {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[test]
+fn a_delayed_supervisor_cannot_start_for_a_replaced_connection() {
+    let env = Env::new("replaced-connection");
+    env.write_client(&fixture());
+    fs::write(env.user.join("connection-id"), "new").unwrap();
+    let mut options = env.options(None);
+    options.connection_id = Some("old".into());
+
+    supervisor::run(options).unwrap();
+
+    let status = env.status().unwrap();
+    assert_eq!(status.state, "stopped");
+    assert_eq!(status.connection_id.as_deref(), Some("old"));
+    assert!(env.calls().is_empty());
+}
+
+#[test]
+fn an_exiting_sing_box_is_never_reported_as_ready() {
+    let env = Env::new("unready-child");
+    env.write_client(&fixture());
+    let options = env.options(None);
+    fs::write(&options.singbox, format!(
+        "#!/bin/sh\n[ \"$1\" = check ] && exit 0\nprintf 'start\\n' >> '{}'\nexit 1\n",
+        env.calls.display(),
+    )).unwrap();
+    let worker = std::thread::spawn(move || supervisor::run(options));
+
+    env.wait("a retry after sing-box exits", |env| {
+        assert!(!env.status().is_some_and(|status| status.state == "running"));
+        env.calls().lines().count() >= 2
+    });
+    fs::write(env.user.join("stop"), b"").unwrap();
+    worker.join().unwrap().unwrap();
 }
 
 #[test]

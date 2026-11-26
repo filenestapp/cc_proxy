@@ -139,6 +139,9 @@ impl Api {
             .get(&format!("{}/v1/config", self.base))
             .query("mode", mode)
             .set("Authorization", &format!("Bearer {token}"));
+        if mode != "proxy" {
+            req = req.query("exact_domains", "1");
+        }
         if let Some(tag) = etag {
             req = req.set("If-None-Match", tag);
         }

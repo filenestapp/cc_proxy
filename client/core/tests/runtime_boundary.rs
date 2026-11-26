@@ -32,6 +32,28 @@ fn accepted_config_gets_the_supervisors_cache_path_and_nothing_else_changes() {
     assert_eq!(without, v);
 }
 
+#[test]
+fn exact_hosts_and_suffixes_round_trip_as_distinct_matchers() {
+    let mut expected = extract(&fixture("app-domains")).unwrap();
+    expected.exact_domains = vec!["clau.de".into(), "gemini.google.com".into()];
+    let config = render(&expected, None);
+    let bytes = serde_json::to_vec(&config).unwrap();
+    let (actual, protected) = accept(&bytes, Path::new("/protected/cache.db")).unwrap();
+    assert_eq!(actual, expected);
+    let dns = protected["dns"]["rules"].as_array().unwrap();
+    assert!(dns.contains(&json!({"domain": expected.exact_domains, "server": "fakeip"})));
+    assert!(dns.contains(&json!({"domain_suffix": expected.domains, "server": "fakeip"})));
+    let routes = protected["route"]["rules"].as_array().unwrap();
+    assert!(routes.contains(&json!({"domain": expected.exact_domains, "outbound": "egress"})));
+    assert!(routes.contains(&json!({"domain_suffix": expected.domains, "outbound": "egress"})));
+
+    let mut mismatched = config;
+    mismatched["route"]["rules"].as_array_mut().unwrap().retain(|rule| {
+        rule.get("domain").is_none() || rule.get("outbound").is_none()
+    });
+    assert!(accept(&serde_json::to_vec(&mismatched).unwrap(), Path::new("/protected/cache.db")).is_err());
+}
+
 fn rejected(mutate: impl Fn(&mut Value)) -> String {
     let mut v = fixture("app-processes");
     mutate(&mut v);

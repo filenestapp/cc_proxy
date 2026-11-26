@@ -126,6 +126,12 @@
   .badge.bad { background: var(--bad-soft); color: var(--bad); }
   .badge.warn { background: var(--warn-soft); color: var(--warn); }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; }
+  #s-policy { grid-column: 1 / -1; }
+  .routing-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(232px, 100%), 1fr)); gap: 12px; }
+  .routing-group { min-width: 0; margin: 0; padding: 10px 12px 0; border: 1px solid var(--line); border-radius: 8px; }
+  .routing-group legend { padding: 0 4px; font-weight: 650; }
+  .routing-group-error { color: var(--bad); font-size: 12px; margin: 0 0 12px; }
+  .routing-group-error:empty { display: none; }
   .form-row { margin-bottom: 12px; }
   .form-row label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   .form-row .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
@@ -1651,17 +1657,30 @@
 
   // ---- settings -------------------------------------------------------------------------------------------
   const lines = (t) => t.split("\n").map((s) => s.trim()).filter(Boolean);
+  const routingGroups = [["claude", "Claude"], ["openai", "OpenAI"], ["gemini", "Gemini"]];
   PAGES.settings = async (_, token) => {
     setTitle(tr("Settings"));
     const s = await api("GET", "/admin/settings");
     if (!current(token)) return;
     const cp = s.client_policy || {}, mon = s.monitor || {}, al = s.alerts || {};
+    const starters = s.routing_presets?.groups || {};
     const field = (id, label, value, opts = {}) => '<div class="form-row"><label for="' + id + '">' + esc(label) + "</label>" +
       (opts.area ? '<textarea id="' + id + '" placeholder="' + esc(opts.ph || "") + '">' + esc(value) + "</textarea>" : '<input id="' + id + '" type="' + (opts.type || "text") + '" value="' + esc(value) + '" placeholder="' + esc(opts.ph || "") + '">') +
       (opts.hint ? '<div class="hint">' + esc(opts.hint) + "</div>" : "") + "</div>";
+    const groups = routingGroups.map(([id, name]) => {
+      const group = cp.domain_groups?.[id] || starters[id] || {};
+      return `<fieldset class="routing-group">
+        <legend>${esc(name)}</legend>
+        <div class="form-row check"><label><input type="checkbox" id="route-${id}-enabled"${group.enabled ? " checked" : ""}> ${trHTML("Enable group")}</label></div>
+        ${field("route-" + id + "-exact", tr("Exact hostnames"), (group.domain || []).join("\n"), { area: true, hint: tr("One hostname per line. Subdomains are excluded.") })}
+        ${field("route-" + id + "-suffix", tr("Domain suffixes"), (group.domain_suffix || []).join("\n"), { area: true, hint: tr("One domain per line. Each domain includes its subdomains.") })}
+        <p class="routing-group-error" role="alert" id="route-${id}-error"></p>
+      </fieldset>`;
+    }).join("");
     $("#view").innerHTML = '<div class="grid2">' +
       `<form class="card" id="s-policy"><h2>${trHTML("Client routing policy")}</h2>` +
-      field("domains", tr("Proxied domains"), (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: tr("Enter one domain or web URL per line. A URL adds its hostname and subdomains.") }) +
+      `<div class="routing-groups">${groups}</div><p class="small muted">${trHTML("Exact hostname rules require a compatible client. Older clients send unmatched traffic directly.")}</p>` +
+      field("domains", tr("Existing custom domains"), (cp.domain_suffix || []).join("\n"), { area: true, ph: "example.com", hint: tr("Enter one domain or web URL per line. A URL adds its hostname and subdomains.") }) +
       field("direct_dns", tr("DNS for other domains"), cp.direct_dns || "dhcp", { hint: tr("Use dhcp for the DNS assigned by the local network, or enter an IP such as 223.5.5.5.") }) +
       '<div class="form-row check"><label><input type="checkbox" id="block_quic"' + (cp.block_quic === false ? "" : " checked") + `> ${trHTML("Block QUIC (UDP 443) for proxied domains so apps use TCP.")}</label></div>` +
       `<button class="primary" type="submit">${trHTML("Save routing policy")}</button><p class="small muted">${trHTML("Clients check for and apply updates every 30 seconds.")}</p></form>` +
@@ -1679,19 +1698,41 @@
       field("sync", tr("Config sync threshold (seconds)"), al.out_of_sync_seconds ?? 300, { type: "number" }) +
       field("repeat", tr("Alert repeat interval (seconds, 0 disables repeats)"), al.repeat_seconds ?? 0, { type: "number" }) +
       `<button class="primary" type="submit">${trHTML("Save alert settings")}</button></form></div>`;
-    const save = (id, build, text) => {
+    const save = (id, build, text, reportError = (message) => toast(message, true)) => {
       const formEl = $(id);
       formEl.noValidate = true;
       formEl.onsubmit = async (e) => {
         e.preventDefault();
-        if (!validateForm(formEl, (message) => toast(message, true))) return;
-        let body;
-        try { body = build(); } catch (err) { return toast(err.message, true); }
-        if (await act(() => api("PUT", "/admin/settings", body), text)) route();
+        if (!validateForm(formEl, reportError)) return;
+        try {
+          await api("PUT", "/admin/settings", build());
+          toast(text);
+          route();
+        } catch (err) {
+          if (err.message !== "Signed out") reportError(err.message);
+        }
       };
     };
-    save("#s-policy", () => ({ client_policy: Object.assign({}, cp, { domain_suffix: lines($("#domains").value).map((d) => d.replace(/^\./, "").toLowerCase()), direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked }) }), tr("Routing policy saved."));
-    save("#s-ip", () => ({ cooldown_seconds: Math.round(Number($("#cooldown").value) * 86400), shared_ip_user_limit: Number($("#shared-ip-user-limit").value) }), tr("Saved."));
+    save("#s-policy", () => {
+      $$(".routing-group-error").forEach((el) => { el.textContent = ""; });
+      const domain_groups = Object.fromEntries(routingGroups.map(([id]) => [id, {
+        enabled: $("#route-" + id + "-enabled").checked,
+        domain: lines($("#route-" + id + "-exact").value),
+        domain_suffix: lines($("#route-" + id + "-suffix").value),
+      }]));
+      return { client_policy: Object.assign({}, cp, {
+        domain_groups, domain_suffix: lines($("#domains").value),
+        direct_dns: $("#direct_dns").value.trim() || "dhcp", block_quic: $("#block_quic").checked,
+      }) };
+    }, tr("Routing policy saved."), (message) => {
+      const group = /^(?:invalid )?routing group (claude|openai|gemini)\b/.exec(message);
+      if (group) $("#route-" + group[1] + "-error").textContent = consoleMessage(message);
+      else toast(message, true);
+    });
+    save("#s-ip", () => ({
+      cooldown_seconds: Math.round(Number($("#cooldown").value) * 86400),
+      shared_ip_user_limit: Number($("#shared-ip-user-limit").value),
+    }), tr("Saved."));
     save("#s-monitor", () => ({ monitor: { egress_targets: lines($("#targets").value), entries: lines($("#entries").value).map((l) => {
       const m = l.match(/^(\S+)\s+(\S+):(\d+)$/); if (!m) throw new Error(tr("Invalid additional entry: {entry}", { entry: l })); return { name: m[1], host: m[2], port: Number(m[3]) }; }) } }), tr("Probe settings saved."));
     save("#s-alerts", () => ({ alerts: Object.assign({}, al, {

@@ -51,23 +51,29 @@
 
   async function loadRelease(root) {
     // The versioned links in the HTML remain usable before a new release or if the feed is unavailable.
+    const request = new AbortController();
+    const timeout = setTimeout(() => request.abort(), 6000);
     try {
-      const response = await fetch(`${downloadOrigin}/desktop/stable.json`, { credentials: "omit", redirect: "error" });
-      if (!response.ok) return;
+      const response = await fetch(`${downloadOrigin}/desktop/stable.json`, { credentials: "omit", redirect: "error", signal: request.signal });
+      if (!response.ok) return false;
       const manifest = await response.json();
-      if (typeof manifest.version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(manifest.version)) return;
+      if (typeof manifest.version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(manifest.version)) return false;
       const links = [...root.querySelectorAll("[data-installer]")];
       const urls = links.map(link => installerURL(manifest, link));
       const universal = links.findIndex(link => link.dataset.arch === "universal");
-      if (universal < 0 || !urls[universal] || links.some((link, index) => !link.hasAttribute("data-fallback") && !urls[index])) return;
+      if (universal < 0 || !urls[universal] || links.some((link, index) => !link.hasAttribute("data-fallback") && !urls[index])) return false;
       links.forEach((link, index) => {
         if (urls[index]) link.href = urls[index];
         link.hidden = !urls[index];
       });
       const version = root.querySelector("[data-download-version]");
       if (version) version.textContent = manifest.version;
+      return true;
     } catch (_) {
-      // The static download options remain available on an offline or restricted connection.
+      // Keep the known versioned links when the current release cannot be loaded.
+      return false;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -110,7 +116,17 @@
       }
     }
 
-    loadRelease(root).then(recommend);
+    const unavailable = root.querySelector("[data-download-unavailable]");
+    const retry = root.querySelector("[data-download-retry]");
+    const refreshRelease = async () => {
+      if (retry) retry.disabled = true;
+      const loaded = await loadRelease(root);
+      if (unavailable) unavailable.hidden = loaded;
+      if (retry) retry.disabled = false;
+      recommend();
+    };
+    retry?.addEventListener("click", refreshRelease);
+    refreshRelease();
     if (current) processor(navigator).then(value => { arch = value; recommend(); });
   }
 

@@ -15,7 +15,7 @@
 <meta name="theme-color" content="#14213D">
 <link rel="stylesheet" href="/assets/site.css?v=platform-downloads">
 <script defer src="/assets/site-session.js"></script>
-<script defer src="/assets/desktop-downloads.js"></script>
+<script defer src="/assets/desktop-downloads.js?v=installer-retry"></script>
 </head>
 <body>
 <a class="skip" href="#main">跳到正文</a>
@@ -42,6 +42,10 @@
 <div class="prose">
 <div data-downloads-auto>
 <p>版本 <span data-download-version>0.2.0</span>。选择与你的操作系统和处理器匹配的安装包。</p>
+<div data-download-unavailable hidden>
+  <p role="status">暂时无法加载最新的安装包列表。请重试，或在下方选择与你的设备匹配的旧版安装包。</p>
+  <button type="button" class="btn btn-outline btn-sm" data-download-retry>重试加载安装包</button>
+</div>
 <p class="dl-recommended" data-download-badge hidden>推荐用于当前设备</p>
 <div class="dl-grid">
   <details class="node dl-group" id="macos" data-platform="macos" open>
