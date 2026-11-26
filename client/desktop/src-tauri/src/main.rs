@@ -33,9 +33,11 @@ use tauri::Manager;
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
 const HEARTBEAT_TIMEOUT_SECS: u64 = 30;
 const SYNC_EVERY: Duration = Duration::from_secs(30);
+const DEFAULT_CONTROL_PLANE: &str = "https://cp.aifree.sg";
 
 struct App {
     paths: Paths,
+    sign_in_server: String,
     /// Whether the user wants the tunnel, and when they last connected (older supervisor status belongs to an
     /// earlier run).
     tunnel: Tunnel,
@@ -116,8 +118,7 @@ impl From<ConnectError> for AppMessage {
 #[derive(Serialize)]
 struct View {
     signed_in: bool,
-    server: Option<String>,
-    user: Option<String>,
+    login_username: Option<String>,
     device: String,
     has_assignment: bool,
     public_exit: PublicExit,
@@ -158,8 +159,7 @@ impl App {
         let session = Session::load(&self.paths);
         let mut v = View {
             signed_in: session.is_some(),
-            server: session.as_ref().map(|s| s.server.clone()),
-            user: session.as_ref().map(|s| s.user.clone()),
+            login_username: session.as_ref().map(|s| s.login_username.as_ref().unwrap_or(&s.user).clone()),
             device: session.as_ref().map(|s| s.device.clone()).unwrap_or_else(default_device_name),
             has_assignment: false,
             public_exit: PublicExit::NotConnected,
@@ -179,7 +179,15 @@ impl App {
                 let _g = ccproxy_core::session::lock();
                 if Session::is_current(&self.paths, &session.id) {
                     match reply {
-                        Ok(Some(me)) => *self.assignment.lock().unwrap() = Some((session.id.clone(), me.entry.is_some())),
+                        Ok(Some(me)) => {
+                            *self.assignment.lock().unwrap() = Some((session.id.clone(), me.entry.is_some()));
+                            if let Some(username) = me.login_username.filter(|_| session.login_username.is_none()) {
+                                if let Err(error) = session.save_login_username_locked(&self.paths, username.clone()) {
+                                    eprintln!("Could not save the login username: {error}");
+                                }
+                                v.login_username = Some(username);
+                            }
+                        }
                         Ok(None) => {
                             Session::clear_locked(&self.paths);
                             *self.assignment.lock().unwrap() = None;
@@ -236,15 +244,17 @@ async fn get_state(app: tauri::State<'_, Arc<App>>, refresh: bool) -> Result<Vie
 }
 
 #[tauri::command]
-async fn login(app: tauri::State<'_, Arc<App>>, server: String, username: String, password: String,
+async fn login(app: tauri::State<'_, Arc<App>>, username: String, password: String,
                device: Option<String>) -> Result<View, AppMessage> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let api = Api::new(&server).map_err(|_| AppMessage::InvalidServer)?;
+        let api = Api::new(&app.sign_in_server).map_err(|_| AppMessage::InvalidServer)?;
         let device = device.filter(|d| !d.trim().is_empty()).unwrap_or_else(default_device_name);
-        let resp = api.login(username.trim(), &password, device.trim(), platform())?;
-        Session::new(api.base().to_string(), resp.user, resp.device, resp.token)
-            .save(&app.paths)
+        let username = username.trim();
+        let resp = api.login(username, &password, device.trim(), platform())?;
+        let mut session = Session::new(api.base().to_string(), resp.user, resp.device, resp.token);
+        session.login_username = Some(username.to_owned());
+        session.save(&app.paths)
             .map_err(|error| AppMessage::SessionSaveFailed(error.to_string()))?;
         app.set_message(None);
         Ok(app.view(true))
@@ -344,8 +354,14 @@ fn background(app: Arc<App>) {
 
 fn main() {
     let paths = Paths::new(None).expect("state directory");
+    let sign_in_server = std::env::var("AIFREE_CONTROL_PLANE_URL")
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+        .or_else(|| Session::load(&paths).map(|session| session.server))
+        .unwrap_or_else(|| DEFAULT_CONTROL_PLANE.to_owned());
     let app = Arc::new(App {
         paths,
+        sign_in_server,
         tunnel: Tunnel::default(),
         message: Mutex::new(None),
         assignment: Mutex::new(None),

@@ -112,3 +112,28 @@ fn sessions_get_distinct_ids() {
     let b = Session::new("s".into(), "u".into(), "d".into(), "t".into());
     assert_ne!(a.id, b.id);
 }
+
+#[test]
+fn a_legacy_session_keeps_its_binding_when_the_login_username_is_recovered() {
+    let paths = state("legacy-username");
+    let old = Session::new("http://localhost".into(), "c42".into(), "mac".into(), "token".into());
+    old.save(&paths).unwrap();
+    fs::write(paths.config(), b"{}").unwrap();
+    let session = Session::load(&paths).unwrap();
+    assert!(session.login_username.is_none());
+
+    {
+        let _guard = ccproxy_core::session::lock();
+        assert!(Session::is_current(&paths, &session.id));
+        session.save_login_username_locked(&paths, "customer@example.com".into()).unwrap();
+    }
+
+    let restored = Session::load(&paths).unwrap();
+    assert_eq!(restored.login_username.as_deref(), Some("customer@example.com"));
+    assert_eq!(restored.user, old.user);
+    assert_eq!(restored.id, old.id);
+    assert_eq!(restored.token, old.token);
+    assert_eq!(restored.server, old.server);
+    assert_eq!(fs::read(paths.config()).unwrap(), b"{}");
+    fs::remove_dir_all(&paths.dir).unwrap();
+}

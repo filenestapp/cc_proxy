@@ -121,11 +121,11 @@
   .exit-ip output { color: var(--muted); font-size: 13px; text-align: right; overflow-wrap: anywhere; }
   .exit-ip output[data-verified=true] { color: var(--accent); font: 13px/1.6 var(--mono); background: var(--accent-soft); border-radius: 6px; padding: 2px 7px; }
   .account { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 5px 8px; margin: 13px 0; }
-  .account dt, .footer { color: var(--muted); font-size: 12px; }
+  .account dt { color: var(--muted); font-size: 12px; }
   .account dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
-  .footer { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding-top: 11px; }
-  .footer span { overflow-wrap: anywhere; }
-  .footer button { border: 0; background: transparent; color: var(--accent); white-space: nowrap; padding: 4px 0; text-decoration: underline; text-underline-offset: 3px; }
+  .session-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .session-actions[data-signed-in=true] { margin-top: 0; border-top: 1px solid var(--line); padding-top: 7px; }
+  #logout { min-height: 34px; border: 0; background: transparent; color: var(--accent); font-size: 13px; white-space: nowrap; padding: 6px 0; text-decoration: underline; text-underline-offset: 3px; }
   .update-card { display: grid; gap: 8px; margin: 0 0 16px; padding: 13px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 11px; }
   .update-card h2 { color: var(--accent); }
   .update-card p { color: var(--muted); }
@@ -236,10 +236,6 @@
     <h1 data-i18n="sign_in">Sign in</h1>
     <div class="fields">
       <div class="field">
-        <label for="server" data-i18n="server">Control plane URL</label>
-        <input id="server" name="server" type="url" value="https://cp.aifree.sg" placeholder="https://cp.aifree.sg" required data-required-message="server_required">
-      </div>
-      <div class="field">
         <label for="username" data-i18n="username">Username</label>
         <input id="username" name="username" autocomplete="username" required data-required-message="username_required">
       </div>
@@ -288,11 +284,11 @@
       <dt data-i18n="account">Account</dt><dd id="v-user">—</dd>
       <dt data-i18n="device">Device</dt><dd id="v-device">—</dd>
     </dl>
-    <div class="footer"><span id="v-server"></span><button id="logout" type="button">Sign out</button></div>
   </section>
-  <nav id="environment-entry" class="environment-entry">
+  <footer id="session-actions" class="environment-entry session-actions">
     <button id="environment-open" class="environment-link" aria-controls="environment-page" type="button" data-i18n="environment_check">Environment check</button>
-  </nav>
+    <button id="logout" type="button" hidden>Sign out</button>
+  </footer>
   <section id="environment-page" aria-labelledby="environment-title" hidden>
     <div class="environment-actions">
       <button id="environment-back" class="environment-link environment-back" type="button" data-i18n="environment_back">Back</button>
@@ -312,7 +308,7 @@ import { createPreferenceMenu } from "./preferences.mjs";
 (() => {
   const $ = (id) => document.getElementById(id);
   const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args || {});
-  const loginInputs = [$("server"), $("username"), $("password"), $("device")];
+  const loginInputs = [$("username"), $("password"), $("device")];
   const languageKey = "aifree.language";
   const webviewLanguages = () => navigator.languages?.length ? navigator.languages : [navigator.language];
   let systemLanguages = webviewLanguages();
@@ -420,7 +416,10 @@ import { createPreferenceMenu } from "./preferences.mjs";
     renderUpdate();
     text("loading", t(loadingFailed ? "loading_failed" : "loading"));
     const inspecting = environment.isOpen();
-    $("environment-entry").hidden = inspecting;
+    const actions = $("session-actions");
+    actions.hidden = inspecting;
+    actions.dataset.signedIn = String(Boolean(view?.signed_in));
+    $("logout").hidden = !view?.signed_in;
     $("loading").hidden = inspecting || Boolean(view);
     if (!view || inspecting) {
       $("login").hidden = true;
@@ -455,7 +454,7 @@ import { createPreferenceMenu } from "./preferences.mjs";
     $("logout").disabled = Boolean(pending);
     text("logout", t(pending === "logout" ? "signing_out" : "sign_out"));
 
-    text("v-user", v.user || "—");
+    text("v-user", v.login_username || "—");
     text("v-device", v.device || "—");
     const exit = disconnecting || pending === "logout" ? null : v.public_exit;
     $("v-public-exit").dataset.verified = String(exit?.state === "verified");
@@ -465,8 +464,6 @@ import { createPreferenceMenu } from "./preferences.mjs";
       unavailable: t("exit_ip_unavailable"),
     };
     text("v-public-exit", exitText[exit?.state] ?? "—");
-    text("v-server", v.server || "");
-    if (v.server) $("server").value = v.server;
     const notice = operationError || v.message || (!v.has_assignment ? { key: "no_egress_assigned" } : null);
     showNotice("msg", "home-details", notice, connecting || disconnecting ? "" : v.tunnel_message);
     $("msg").classList.toggle("bad", Boolean(operationError));
@@ -565,9 +562,6 @@ import { createPreferenceMenu } from "./preferences.mjs";
     if (input.validity.valueMissing || (input.id === "username" && !input.value.trim())) {
       return input.dataset.requiredMessage;
     }
-    if (input.id === "server" && (input.validity.typeMismatch || !/^https?:\/\//.test(input.value))) {
-      return "invalid_server";
-    }
     if (input.id === "device") {
       const name = input.value.trim();
       if (Array.from(name).length > 64 || /[\/ \t\n]/.test(name)) return "invalid_device";
@@ -600,7 +594,6 @@ import { createPreferenceMenu } from "./preferences.mjs";
       if (!input.reportValidity()) return;
     }
     run("login", {
-      server: $("server").value,
       username: $("username").value,
       password: $("password").value,
       device: $("device").value.trim(),
