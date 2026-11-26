@@ -1,6 +1,6 @@
 # aifree.sg website
 
-Static marketing site for aifree, served by nginx on the control-plane server (the same host as `ccproxy.macmini.sg`) behind Cloudflare. Plain HTML and one stylesheet; no build step, no JavaScript, no cookies, no third-party requests.
+Static marketing site for aifree, served by nginx on the control-plane server (the same host as `ccproxy.macmini.sg`) behind Cloudflare. No build step. First-party scripts recommend an installer and check whether a visitor already has an account-center session. The marketing site does not set a cookie or load third-party scripts.
 
 ```text
 site/
@@ -10,6 +10,8 @@ site/
   en/download/ en/terms/ en/privacy/  English sub-pages
   404.html                Shared not-found page
   assets/site.css         All styles
+  assets/site-session.js  Homepage and download navigation session check
+  assets/desktop-downloads.js  Shared chooser; points to controlplane/desktop_downloads.js
   assets/*.svg, og.png    Copies of brand files (see ../brand)
   favicon.*, apple-touch-icon.png
   _headers                Security headers and asset caching (mirrored in deploy/site/aifree.sg.conf)
@@ -27,7 +29,11 @@ All account actions go to the user center on `https://app.aifree.sg` (WP6, #41):
 | 注册 / Sign up | `/account/register` |
 | 登录 / Log in | `/account/login` |
 | Subscribe | `/account/checkout?plan=standard`, `premium` or `residential_ip` |
-| Download / account center | `/account` |
+| Account center | `/account` |
+
+The homepage and download navigation read only `signed_in` from `GET https://app.aifree.sg/v1/account/session`. The existing session cookie stays on the account host. If the status check is unavailable, the guest links remain usable.
+
+Both download pages and the account-center download panel use the same chooser. They default to the detected system and a matching installer when the browser reports one. The universal macOS DMG runs on both Apple silicon and Intel. The public `desktop/stable.json` feed advertises current installer links; older or unavailable feeds keep the existing versioned links intact. See [desktop publishing](../docs/desktop-updates.md#publishing) for the release order.
 
 The checkout route should send a signed-out visitor to register or log in first and then continue to Stripe for the chosen plan.
 
@@ -37,7 +43,7 @@ The checkout route should send a signed-out visitor to register or log in first 
 python3 -m http.server 8765 -d site
 ```
 
-Open <http://localhost:8765/>. The server serves `download/index.html` at `/download/` the same way.
+Open <http://localhost:8765/>. The server serves `download/index.html` at `/download/` the same way. The account status endpoint only allows the production marketing origin; local previews use the guest links.
 
 ## Deploy
 
@@ -45,7 +51,7 @@ Open <http://localhost:8765/>. The server serves `download/index.html` at `/down
 deploy/site/deploy.sh            # default target ubuntu@43.156.58.218
 ```
 
-The script copies `site/` (without `README.md` and `_headers`) to `/www/wwwroot/aifree.sg`, installs `deploy/site/aifree.sg.conf` as the BaoTa nginx vhost, tests the config and reloads nginx. If you change `_headers`, change the `add_header` lines in that file too.
+The script copies `site/` (without `README.md` and `_headers`) to `/www/wwwroot/aifree.sg`, resolving the shared chooser to a regular JavaScript file, installs `deploy/site/aifree.sg.conf` as the BaoTa nginx vhost, tests the config and reloads nginx. If you change `_headers`, change the `add_header` lines in that file too. Deploy the control plane session endpoint alongside the site so the new account link can reflect login state.
 
 How it is set up (2026-11-24):
 

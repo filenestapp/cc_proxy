@@ -18,7 +18,8 @@ jobs:
       matrix:
         include:
           - os: macos-15
-            target: aarch64-apple-darwin
+            target: universal-apple-darwin
+            rust-targets: aarch64-apple-darwin x86_64-apple-darwin
             bundles: app,dmg
           - os: windows-2022
             target: x86_64-pc-windows-msvc
@@ -43,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Rust toolchain
-        run: rustup toolchain install stable --profile minimal && rustup target add ${{ matrix.target }}
+        run: rustup toolchain install stable --profile minimal && rustup target add ${{ matrix.rust-targets || matrix.target }}
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -55,10 +56,21 @@ jobs:
       - name: Sidecars (aifree CLI compatibility helper + verified sing-box and frpc)
         run: desktop/scripts/fetch-binaries.sh ${{ matrix.target }}
       - name: Core and CLI checks
-        run: cargo clippy --locked -p ccproxy -p ccproxy-core --target ${{ matrix.target }} -- -D warnings
+        run: |
+          for target in ${{ matrix.rust-targets || matrix.target }}; do
+            cargo clippy --locked -p ccproxy -p ccproxy-core --target "$target" -- -D warnings
+          done
       - name: Build app
         working-directory: client/desktop/src-tauri
         run: npx --yes @tauri-apps/cli@2.12.6 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+      - name: Verify the macOS app and sidecars run on both architectures
+        if: runner.os == 'macOS'
+        run: |
+          app="target/${{ matrix.target }}/release/bundle/macos/aifree.app/Contents"
+          main=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Info.plist")
+          for executable in "$main" ccproxy sing-box frpc; do
+            for arch in arm64 x86_64; do lipo "$app/MacOS/$executable" -verify_arch "$arch"; done
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: aifree-${{ matrix.target }}

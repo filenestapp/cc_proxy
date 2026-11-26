@@ -6,7 +6,8 @@ target=${1:-ubuntu@43.156.58.218}
 root=$(cd "$(dirname "$0")/../.." && pwd)
 stage=/tmp/aifree-site.$$
 
-rsync -a --delete --exclude README.md --exclude _headers "$root/site/" "$target:$stage/"
+# Dereference the desktop chooser shared with the control plane when staging the static site.
+rsync -aL --delete --exclude README.md --exclude _headers "$root/site/" "$target:$stage/"
 scp -q "$root/deploy/site/aifree.sg.conf" "$target:$stage.conf"
 ssh "$target" "set -e
   sudo mkdir -p /www/wwwroot/aifree.sg /var/lib/aifree-site/acme
