@@ -146,6 +146,10 @@ egress/agent/build.sh --verify                      # six OS/architecture binari
 CP_AGENT_DIST=$PWD/egress/agent/dist cc-controlplane serve ...
 ```
 
+The checked-in Agent `RELEASE_VERSION` is the operator-visible semantic version. A local build includes a development
+suffix. The release workflow builds the clean tagged source as the published semantic version and records its source
+commit and digests in the signed release record.
+
 Managed automatic updates of installed agents read signed releases from `CP_AGENT_RELEASES` (one directory per
 release, the exit-agent workflow's artifact) and roll one out to chosen hosts: `cpctl.py agent-releases`,
 `agent-rollout`, `agent-rollout-set VERSION HOST... | --all`, `agent-rollout-pause|resume|clear`. See
@@ -242,7 +246,7 @@ reports, including `agent.py`, keeps working and is listed as unavailable.
 **Rollout.** Usage history starts when collection becomes available on an exit.
 
 1. Deploy the control plane. It adds the usage tables, which a previous binary ignores on rollback.
-2. Rebuild the agent (`egress/agent/build.sh --verify`) and serve it with `CP_AGENT_DIST`.
+2. Build the Agent with the [release workflow](../docs/exit-agent-updates.md#publishing-and-pilot-procedure) and serve the resulting artifact with `CP_AGENT_DIST`.
 3. Run each exit's **Install command** again. The new agent reloads sing-box once with the API service. The pinned
    sing-box 1.14.4 does not change.
 4. Confirm that **Usage collection by exit** shows the exit as collecting.

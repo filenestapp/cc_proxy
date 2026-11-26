@@ -179,6 +179,7 @@ func (e *updateEnv) launcherUnchanged() {
 
 func TestUpdateUpgradesConfirmsAndReports(t *testing.T) {
 	e := newUpdateEnv(t)
+	const publishedVersion = "v0.1.0"
 	if err := e.cycle(); err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +189,10 @@ func TestUpdateUpgradesConfirmsAndReports(t *testing.T) {
 	if v := e.cp.last()["agent_version"]; v != version {
 		t.Fatalf("heartbeat agent_version %v", v)
 	}
-	e.publish("agent-new", 7, 1, nil)
+	// A signed semantic-version release upgrades a host running a legacy hash-based release. Sequence, rather than
+	// either version format, controls the update decision.
+	e.t.Setenv("CCPROXY_FAKE_AGENT_VERSION", publishedVersion)
+	e.publish(publishedVersion, 7, 1, nil)
 	if err := e.cycle(); err != nil {
 		t.Fatalf("the check itself never restarts: %v", err)
 	}
@@ -202,7 +206,7 @@ func TestUpdateUpgradesConfirmsAndReports(t *testing.T) {
 	if err := e.cycle(); err != errRestartForUpdate {
 		t.Fatalf("expected a restart for the update, got %v", err)
 	}
-	if got, _ := os.ReadFile(e.staged("agent-new")); !bytes.Equal(got, e.cand) {
+	if got, _ := os.ReadFile(e.staged(publishedVersion)); !bytes.Equal(got, e.cand) {
 		t.Fatal("candidate not staged under releases/")
 	}
 	e.launcherUnchanged()
@@ -212,10 +216,10 @@ func TestUpdateUpgradesConfirmsAndReports(t *testing.T) {
 
 	// The service manager starts the launcher, which starts the candidate.
 	path, ver := e.launcher().choose()
-	if path != e.staged("agent-new") || ver != "agent-new" {
+	if path != e.staged(publishedVersion) || ver != publishedVersion {
 		t.Fatalf("launcher chose %q %q", path, ver)
 	}
-	e.u = e.updaterAs("agent-new", e.staged("agent-new"))
+	e.u = e.updaterAs(publishedVersion, e.staged(publishedVersion))
 	if err := e.cycle(); err != nil {
 		t.Fatal(err)
 	}
@@ -225,10 +229,10 @@ func TestUpdateUpgradesConfirmsAndReports(t *testing.T) {
 	e.cycle()
 	e.cycle()
 	got := e.lastUpdate()
-	if got["state"] != updUpdated || got["target_version"] != "agent-new" || got["running_sequence"] != float64(7) {
+	if got["state"] != updUpdated || got["target_version"] != publishedVersion || got["running_sequence"] != float64(7) {
 		t.Fatalf("after confirmation: %v", got)
 	}
-	if path, ver := e.launcher().choose(); path != e.staged("agent-new") || ver != "agent-new" {
+	if path, ver := e.launcher().choose(); path != e.staged(publishedVersion) || ver != publishedVersion {
 		t.Fatalf("after confirmation the launcher must run the new release, chose %q", path)
 	}
 	before := e.cp.downloads
@@ -334,6 +338,7 @@ func TestUpdateTamperedOrInterruptedDownloadKeepsCurrent(t *testing.T) {
 }
 
 func TestUpdateRefusesUntrustedOrIncompatibleReleases(t *testing.T) {
+	const publishedVersion = "v0.1.0"
 	cases := map[string]struct {
 		setup      func(e *updateEnv)
 		want       string
@@ -342,10 +347,10 @@ func TestUpdateRefusesUntrustedOrIncompatibleReleases(t *testing.T) {
 		"unsigned key": {func(e *updateEnv) {
 			_, other, _ := ed25519.GenerateKey(rand.Reader)
 			e.key = other
-			e.publish("agent-new", 7, 1, nil)
+			e.publish(publishedVersion, 7, 1, nil)
 		}, "signature does not match", false},
 		"no build for platform": {func(e *updateEnv) {
-			e.publish("agent-new", 7, 1, func(r *release.Record) {
+			e.publish(publishedVersion, 7, 1, func(r *release.Record) {
 				other := "windows-arm64"
 				if testPlatform == other {
 					other = "linux-arm64"
@@ -356,20 +361,21 @@ func TestUpdateRefusesUntrustedOrIncompatibleReleases(t *testing.T) {
 			})
 		}, "no build for", false},
 		"older than the running release": {func(e *updateEnv) {
-			e.publish("agent-new", 1, 1, nil)
+			e.publish(publishedVersion, 1, 1, nil)
 		}, "not newer", false},
 		"candidate reports another version": {func(e *updateEnv) {
 			e.t.Setenv("CCPROXY_FAKE_AGENT_VERSION", "agent-something-else")
-			e.publish("agent-new", 7, 1, nil)
-		}, "expected version agent-new", true},
+			e.publish(publishedVersion, 7, 1, nil)
+		}, "expected version " + publishedVersion, true},
 		"candidate rejects the command line": {func(e *updateEnv) {
 			e.t.Setenv("CCPROXY_FAKE_AGENT_ARGS_FAIL", "1")
-			e.publish("agent-new", 7, 1, nil)
+			e.publish(publishedVersion, 7, 1, nil)
 		}, "command line", true},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := newUpdateEnv(t)
+			t.Setenv("CCPROXY_FAKE_AGENT_VERSION", publishedVersion)
 			c.setup(e)
 			if err := e.cycle(); err != nil {
 				t.Fatalf("must not restart: %v", err)
@@ -385,7 +391,7 @@ func TestUpdateRefusesUntrustedOrIncompatibleReleases(t *testing.T) {
 			if got["state"] != updRejected || !strings.Contains(fmt.Sprint(got["error"]), c.want) {
 				t.Fatalf("got %v, want rejected with %q", got, c.want)
 			}
-			if _, err := os.Stat(e.staged("agent-new")); err == nil {
+			if _, err := os.Stat(e.staged(publishedVersion)); err == nil {
 				t.Fatal("refused candidate left staged")
 			}
 			downloads := e.cp.downloads
@@ -511,13 +517,15 @@ func TestUpdatePausedRolloutDoesNotActivate(t *testing.T) {
 }
 
 func TestUpdateRollsBackUnhealthyCandidate(t *testing.T) {
+	const publishedVersion = "v0.1.0"
 	e := newUpdateEnv(t)
-	e.publish("agent-new", 7, 1, nil)
+	t.Setenv("CCPROXY_FAKE_AGENT_VERSION", publishedVersion)
+	e.publish(publishedVersion, 7, 1, nil)
 	if err := e.activate(); err != errRestartForUpdate {
 		t.Fatal(err)
 	}
 	e.launcher().choose()
-	e.u = e.updaterAs("agent-new", e.staged("agent-new"))
+	e.u = e.updaterAs(publishedVersion, e.staged(publishedVersion))
 	e.cp.mu.Lock()
 	e.cp.reportFailFor = version // the candidate's heartbeats fail
 	e.cp.mu.Unlock()
@@ -538,7 +546,7 @@ func TestUpdateRollsBackUnhealthyCandidate(t *testing.T) {
 	e.u = e.updaterAs("agent-old", e.self)
 	e.cycle()
 	got := e.lastUpdate()
-	if got["state"] != updRolledBack || got["target_version"] != "agent-new" || !strings.Contains(fmt.Sprint(got["error"]), "heartbeat failed") {
+	if got["state"] != updRolledBack || got["target_version"] != publishedVersion || !strings.Contains(fmt.Sprint(got["error"]), "heartbeat failed") {
 		t.Fatalf("after rollback: %v", got)
 	}
 	e.cycle()
@@ -546,7 +554,7 @@ func TestUpdateRollsBackUnhealthyCandidate(t *testing.T) {
 		t.Fatal("rolled-back target tried again without a new rollout")
 	}
 	// The operator retries (a new rollout id): the staged candidate is used again.
-	e.publish("agent-new", 7, 2, nil)
+	e.publish(publishedVersion, 7, 2, nil)
 	if err := e.activate(); err != errRestartForUpdate {
 		t.Fatalf("retry after a new rollout id: %v", err)
 	}

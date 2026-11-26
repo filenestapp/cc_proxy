@@ -65,7 +65,7 @@ rm -rf "$OUT" && mkdir -p "$OUT/tls" "$OUT/frp" "$OUT/dist"
 chmod 700 "$OUT"
 
 echo "== build: agent dist and signed test releases, control-plane image, test images"
-V1=agent-e2e-v1 V2=agent-e2e-v2 V3=agent-e2e-v3-broken
+V1=agent-0a37adb7da36 V2=v0.1.0 V3=v0.1.1
 (
   cd "$REPO/egress/agent"
   go run ./cmd/agent-release keygen "$OUT/release.key" > "$OUT/release-keys.txt"
@@ -369,7 +369,7 @@ check "$V2 runs from its release directory and the $V1 launcher is unchanged" \
   "[ \"\$(running_version)\" = $V2 ] && [ \"\$(launcher_version)\" = $V1 ] && [ \"\$(staged_version $V2)\" = $V2 ]"
 check "systemd restarted the agent once (exit 75, Restart=always)" "[ \"\$(agent_restarts)\" = $((RESTARTS + 1)) ]"
 check "the new agent confirmed itself healthy and adopted sing-box's config without a reload" \
-  "agent_logged 'update: agent-e2e-v2 (sequence 2) confirmed healthy' && agent_logged 'adopted it without a reload'"
+  "agent_logged 'update: $V2 (sequence 2) confirmed healthy' && agent_logged 'adopted it without a reload'"
 check "sing-box and frpc were not restarted (MainPIDs unchanged)" "[ \"\$(unit_pid ccproxy-exit-singbox)\" = '$SB_PID' ] && [ \"\$(unit_pid ccproxy-exit-frpc)\" = '$FRPC_PID' ]"
 check "both XTCP ports are still ready" "[ \"\$(port_status)\" = '20443=ready 20444=ready' ] && [ \"\$(sync_state)\" = ready ]"
 check "enrollment and configuration are untouched (token, install.conf, frpc.toml)" \

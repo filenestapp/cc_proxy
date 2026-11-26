@@ -45,7 +45,7 @@ func newKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 }
 
 func TestRecordRoundTripAndSignature(t *testing.T) {
-	dir := fakeDist(t, "agent-0123456789ab")
+	dir := fakeDist(t, "v0.1.0")
 	r, err := FromDist(dir, 42, "0123456789abcdef", "2026-11-25T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestRecordRoundTripAndSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back.Version != "agent-0123456789ab" || back.Sequence != 42 || len(back.Binaries) != len(Platforms) {
+	if back.Version != "v0.1.0" || back.Sequence != 42 || len(back.Binaries) != len(Platforms) {
 		t.Fatalf("round trip lost data: %+v", back)
 	}
 	if err := CheckDist(dir, back); err != nil {

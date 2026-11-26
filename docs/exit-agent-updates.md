@@ -13,12 +13,15 @@ sing-box and frpc executables, their configuration, egress IP assignments, and u
 
 An exit-agent release is the `dist/` directory produced by `egress/agent/build.sh`, plus:
 
-- `release.json`, containing the Agent version, monotonic workflow sequence, source commit, and
+- `release.json`, containing the semantic Agent version, monotonic workflow sequence, source commit, and
   every supported binary's filename, size, and SHA-256.
 - `release.json.sig`, an Ed25519 signature over the exact `release.json` bytes.
 
-Agent versions are content hashes and do not establish an order. The release sequence does. The
-exit-agent workflow uses its run number as the sequence, and an Agent accepts a target only when
+Published Agent versions use `vMAJOR.MINOR.PATCH`, such as `v0.1.0`. The version is stored in
+`egress/agent/RELEASE_VERSION` and its `exit-agent/<version>` Git tag must point at the released source commit.
+Treat a published version's tag as immutable. Existing `agent-<hash>` versions remain supported for installed
+nodes and historical signed releases. The exit-agent workflow uses its run number as the sequence.
+An Agent accepts a target only when
 its signed sequence is greater than the sequence of its current release.
 
 The public keys in `egress/agent/release_keys.txt` are compiled into the Agent. The control plane
@@ -35,7 +38,7 @@ Set `CP_AGENT_RELEASES` to the directory that contains one published subdirector
 
 ```text
 CP_AGENT_RELEASES/
-  agent-<version>/
+  <version>/
     VERSION
     SHA256SUMS
     ccproxy-exit-agent-<platform>[.exe]
@@ -63,8 +66,8 @@ Administrators use these existing commands:
 ```bash
 cpctl.py agent-releases
 cpctl.py agent-rollout
-cpctl.py agent-rollout-set agent-<version> macmini-sg-208
-cpctl.py agent-rollout-set agent-<version> --all
+cpctl.py agent-rollout-set v<version> macmini-sg-208
+cpctl.py agent-rollout-set v<version> --all
 cpctl.py agent-rollout-pause
 cpctl.py agent-rollout-resume
 cpctl.py agent-rollout-clear
@@ -120,7 +123,9 @@ publishes the matching signed installed release before beginning a managed rollo
 1. Generate a release key on an owner-controlled machine and add its public key to
    `egress/agent/release_keys.txt` before building the Agent that will trust it.
 2. Store the private key as `AGENT_RELEASE_SIGNING_KEY` in the protected release environment.
-3. Run **Actions → exit-agent → Run workflow** on `main`.
+3. Bump `egress/agent/RELEASE_VERSION`, merge it, and create the matching `exit-agent/<version>` tag on that commit.
+   For example, tag the release commit with `git tag exit-agent/v0.1.0 <commit>`, then push that tag and
+   run **Actions → exit-agent → Run workflow** on `main` at the same commit.
 4. Download the `aifree-exit-agent` artifact and place its complete signed contents in
    `CP_AGENT_RELEASES/<version>/`.
 5. Verify the copied artifact before changing any rollout:
@@ -134,7 +139,7 @@ publishes the matching signed installed release before beginning a managed rollo
 6. Ensure the installed release is also published, then create a one-host pilot:
 
    ```bash
-   cpctl.py agent-rollout-set agent-<new-version> macmini-sg-208
+   cpctl.py agent-rollout-set v<new-version> macmini-sg-208
    cpctl.py agent-rollout
    ```
 
