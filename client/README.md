@@ -36,7 +36,7 @@ cd src-tauri && npx @tauri-apps/cli@2.12.6 build --bundles app    # macOS；Wind
 
 安装包里，`ccproxy` 和 `sing-box` 放在主程序旁边。[.github/workflows/desktop.yml](../.github/workflows/desktop.yml) 分别在 macOS（Apple 芯片）、Windows、Linux 上构建并上传安装包。没有签名：macOS 公证和 Windows 代码签名需要证书，还没配。
 
-The desktop app shows the control plane URL, username, password, and optional device name at sign-in. The home screen shows the tunnel state, connection control, verified public exit IP, account, and device. While connected, the app checks its public IPv4 over HTTPS through the active exit using ident.me or ipify.
+Sign in with your username or account email, password, and an optional device name. The desktop app uses the saved endpoint for an active session and defaults to `https://cp.aifree.sg` for a fresh sign-in. To use a different control plane for sign-in, launch the app with `AIFREE_CONTROL_PLANE_URL` set. The home screen shows the tunnel state, connection control, verified public exit IP, login username, and device. While connected, the app checks its public IPv4 over HTTPS through the active exit using ident.me or ipify.
 
 Use the globe and flag in the header to choose **System**, **English**, or **Simplified Chinese**. Use the adjacent appearance icon to choose **System**, **Light**, or **Dark**. System is the default for both. The app uses the first supported system language and falls back to English. It remembers both choices across restarts.
 

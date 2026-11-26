@@ -480,6 +480,14 @@ func TestStripeWebhookReplayOrderAndProvisioning(t *testing.T) {
 	if login.Code != http.StatusOK || session.Token == "" {
 		t.Fatalf("desktop entitled login: %d %s", login.Code, login.Body.String())
 	}
+	meRequest := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	meRequest.Header.Set("Authorization", "Bearer "+session.Token)
+	me := httptest.NewRecorder()
+	h.ServeHTTP(me, meRequest)
+	identity := decodeJSON[userSummary](t, me)
+	if me.Code != http.StatusOK || identity.LoginUsername != c.Email || identity.User != user {
+		t.Fatalf("desktop account identity: %d %s", me.Code, me.Body.String())
+	}
 	devices := accountRequest(t, h, http.MethodGet, "/v1/account/devices", "", cookie, "")
 	if !strings.Contains(devices.Body.String(), `"active":true`) || !strings.Contains(devices.Body.String(), `"last_seen_at":`) {
 		t.Fatalf("unexpected device contract: %s", devices.Body.String())

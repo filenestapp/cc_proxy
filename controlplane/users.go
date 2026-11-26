@@ -28,19 +28,23 @@ type entryAddress struct {
 }
 
 type userSummary struct {
-	User     string        `json:"user"`
-	EgressIP *string       `json:"egress_ip"`
-	Host     string        `json:"host,omitempty"`
-	Entry    *entryAddress `json:"entry"`
+	User          string        `json:"user"`
+	LoginUsername string        `json:"login_username,omitempty"`
+	EgressIP      *string       `json:"egress_ip"`
+	Host          string        `json:"host,omitempty"`
+	Entry         *entryAddress `json:"entry"`
 }
 
 func userInfo(ctx context.Context, db database, name string) (userSummary, error) {
 	var u userSummary
 	var host, publicHost *string
 	var port *int
-	err := db.QueryRow(ctx, `SELECT u.name, host(u.egress_ip), u.host, `+publicEntryHostSQL+`, u.port
-		FROM users u LEFT JOIN hosts h ON h.name = u.host WHERE u.name = $1`, name).
-		Scan(&u.User, &u.EgressIP, &host, &publicHost, &port)
+	err := db.QueryRow(ctx, `SELECT u.name, COALESCE(c.email, u.name), host(u.egress_ip), u.host, `+publicEntryHostSQL+`, u.port
+		FROM users u LEFT JOIN hosts h ON h.name = u.host
+		LEFT JOIN customer_proxy cp ON cp.user_name = u.name
+		LEFT JOIN customers c ON c.id = cp.customer_id
+		WHERE u.name = $1`, name).
+		Scan(&u.User, &u.LoginUsername, &u.EgressIP, &host, &publicHost, &port)
 	if err == nil && host != nil {
 		u.Host = *host
 		if *publicHost != "" {

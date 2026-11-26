@@ -1,7 +1,7 @@
 //! On-disk state: the signed-in session and the files shared with the privileged supervisor.
 //!
 //! Layout of the state directory (default: the OS config dir + `cc-proxy`):
-//!   session.json      server, user, device, token (mode 0600 on Unix)
+//!   session.json      server, proxy user, optional login username, device, token (mode 0600 on Unix)
 //!   sing-box.json     current sing-box config (0600), written by the unprivileged side
 //!   config.etag       ETag of sing-box.json
 //!   stop              presence tells the supervisor to stop
@@ -28,6 +28,8 @@ use std::sync::{Mutex, MutexGuard};
 pub struct Session {
     pub server: String,
     pub user: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_username: Option<String>,
     pub device: String,
     pub token: String,
     /// Changes with every sign-in. A network result is applied only if it belongs to the current session
@@ -108,7 +110,7 @@ impl Session {
 
     /// A new session from a sign-in; gets its own id.
     pub fn new(server: String, user: String, device: String, token: String) -> Session {
-        Session { server, user, device, token, id: new_session_id() }
+        Session { server, user, login_username: None, device, token, id: new_session_id() }
     }
 
     /// Replace the stored session (sign-in). The config and visitor files of any previous session go with it.
@@ -117,6 +119,17 @@ impl Session {
         for p in [paths.config(), paths.etag()].into_iter().chain(crate::visitor::files(paths)) {
             let _ = fs::remove_file(p);
         }
+        self.write(paths)
+    }
+
+    /// Save a recovered username while holding [`lock`] after checking that this session is still current.
+    pub fn save_login_username_locked(&self, paths: &Paths, username: String) -> Result<()> {
+        let mut updated = self.clone();
+        updated.login_username = Some(username);
+        updated.write(paths)
+    }
+
+    fn write(&self, paths: &Paths) -> Result<()> {
         write_atomic(&paths.session(), &serde_json::to_vec_pretty(self)?, true)
     }
 

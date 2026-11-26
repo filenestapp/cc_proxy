@@ -267,8 +267,7 @@ mod tests {
     fn view(signed_in: bool, tunnel: &str, want_connected: bool) -> View {
         View {
             signed_in,
-            server: None,
-            user: None,
+            login_username: None,
             device: String::new(),
             has_assignment: false,
             public_exit: PublicExit::NotConnected,

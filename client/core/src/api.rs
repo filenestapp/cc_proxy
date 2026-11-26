@@ -24,6 +24,8 @@ pub struct LoginResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Me {
     pub user: String,
+    #[serde(default)]
+    pub login_username: Option<String>,
     pub device: String,
     pub egress_ip: Option<String>,
     pub entry: Option<Entry>,
