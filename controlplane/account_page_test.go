@@ -36,13 +36,57 @@ func TestAccountPageRoutes(t *testing.T) {
 					t.Fatalf("%s %s = %q, want %q", path, header, got, want)
 				}
 			}
-			if csp := h.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") || !strings.Contains(csp, "frame-ancestors 'none'") {
+			if csp := h.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") ||
+				!strings.Contains(csp, "connect-src 'self' https://downloads.aifree.sg") || !strings.Contains(csp, "frame-ancestors 'none'") {
 				t.Fatalf("%s CSP = %q", path, csp)
 			}
 			if method == http.MethodGet && !bytes.Equal(rec.Body.Bytes(), accountPage) {
 				t.Fatalf("%s did not serve account.html", path)
 			}
 		}
+	}
+}
+
+func TestAccountPageDesktopDownloadLinks(t *testing.T) {
+	_, panel, found := strings.Cut(string(accountPage), `aria-labelledby="h-download">`)
+	if !found {
+		t.Fatal("account dashboard is missing the download panel")
+	}
+	panel, _, found = strings.Cut(panel, "</article>")
+	if !found || strings.Contains(panel, "data-site=") {
+		t.Fatal("download panel is malformed")
+	}
+
+	const base = "https://downloads.aifree.sg/desktop/0.2.0/"
+	installers := []string{
+		"darwin-aarch64/aifree_0.2.0_aarch64.dmg",
+		"windows-x86_64/aifree_0.2.0_x64-setup.exe",
+		"windows-aarch64/aifree_0.2.0_arm64-setup.exe",
+		"linux-x86_64-deb/aifree_0.2.0_amd64.deb",
+		"linux-x86_64-appimage/aifree_0.2.0_amd64.AppImage",
+		"linux-aarch64-deb/aifree_0.2.0_arm64.deb",
+		"linux-aarch64-appimage/aifree_0.2.0_aarch64.AppImage",
+	}
+	if count := strings.Count(panel, "<a "); count != len(installers)+1 {
+		t.Fatalf("download panel has %d links, want %d", count, len(installers)+1)
+	}
+	for _, installer := range installers {
+		if count := strings.Count(panel, `href="`+base+installer+`"`); count != 1 {
+			t.Errorf("download panel has %d links to %s, want 1", count, installer)
+		}
+	}
+	for _, platform := range []string{"macos", "windows", "linux"} {
+		if !strings.Contains(panel, `details class="dl-group" data-platform="`+platform+`"`) {
+			t.Errorf("download panel does not group %s installers", platform)
+		}
+	}
+	if !strings.Contains(panel, `data-installer="darwin-universal"`) ||
+		!strings.Contains(panel, `data-arch="universal"`) ||
+		!strings.Contains(panel, `data-download-badge`) {
+		t.Fatal("download panel has no universal macOS release placeholder or recommendation badge")
+	}
+	if !strings.Contains(string(accountPage), "aifreeEnhanceDownloads") {
+		t.Fatal("account page does not use the shared desktop download chooser")
 	}
 }
 

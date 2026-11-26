@@ -134,7 +134,12 @@ table.list td.act{text-align:right}
   table.list td.act{justify-content:flex-end}
   table.list td.act::before{content:none}
 }
-.dl-links{display:flex;gap:10px;flex-wrap:wrap}
+.dl-groups{display:grid;gap:8px}
+.dl-group{border:1px solid var(--mist);border-radius:12px;padding:8px 12px}
+.dl-group summary{cursor:pointer;font-weight:700}
+.dl-options{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.dl-options .btn{white-space:normal;text-align:center}
+.dl-recommended{flex-basis:100%;margin:0;font-size:.84rem;font-weight:700;color:var(--ok)}
 
 footer{background:var(--navy-deep);color:var(--muted-on-navy);padding:24px 0;font-size:.87rem}
 footer a{color:var(--muted-on-navy)}
@@ -272,13 +277,34 @@ footer .row-between{gap:8px 20px}
         <div id="orders"><p class="empty" data-t="loading">加载中…</p></div>
       </article>
 
-      <article class="card panel" aria-labelledby="h-download">
+      <article class="card panel" id="panel-download" aria-labelledby="h-download">
         <h2 id="h-download" data-t="download_title">下载客户端</h2>
         <p data-t="download_lead">在电脑上安装 aifree 桌面客户端，用本账号的邮箱和密码登录即可使用。</p>
-        <div class="dl-links">
-          <a class="btn btn-outline btn-sm" data-site="download#macos" href="https://aifree.sg/download/#macos">macOS</a>
-          <a class="btn btn-outline btn-sm" data-site="download#windows" href="https://aifree.sg/download/#windows">Windows</a>
-          <a class="btn btn-outline btn-sm" data-site="download#linux" href="https://aifree.sg/download/#linux">Linux</a>
+        <p class="dl-recommended" data-download-badge data-t="download_recommended" hidden>Recommended for this device</p>
+        <div class="dl-groups">
+          <details class="dl-group" data-platform="macos" open>
+            <summary>macOS</summary>
+            <div class="dl-options">
+              <a class="btn btn-outline btn-sm" data-installer="darwin-universal" data-arch="universal" data-kind="dmg" data-t="download_mac_universal" hidden>Universal DMG (Apple silicon and Intel)</a>
+              <a class="btn btn-outline btn-sm" data-installer="darwin-aarch64" data-arch="arm64" data-kind="dmg" data-t="download_mac_apple" data-fallback href="https://downloads.aifree.sg/desktop/0.2.0/darwin-aarch64/aifree_0.2.0_aarch64.dmg">Apple silicon DMG</a>
+            </div>
+          </details>
+          <details class="dl-group" data-platform="windows" open>
+            <summary>Windows</summary>
+            <div class="dl-options">
+              <a class="btn btn-outline btn-sm" data-installer="windows-x86_64" data-arch="x64" data-kind="exe" href="https://downloads.aifree.sg/desktop/0.2.0/windows-x86_64/aifree_0.2.0_x64-setup.exe">x64</a>
+              <a class="btn btn-outline btn-sm" data-installer="windows-aarch64" data-arch="arm64" data-kind="exe" href="https://downloads.aifree.sg/desktop/0.2.0/windows-aarch64/aifree_0.2.0_arm64-setup.exe">ARM64</a>
+            </div>
+          </details>
+          <details class="dl-group" data-platform="linux" open>
+            <summary>Linux</summary>
+            <div class="dl-options">
+              <a class="btn btn-outline btn-sm" data-installer="linux-x86_64-deb" data-arch="x64" data-kind="deb" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-deb/aifree_0.2.0_amd64.deb">x64 DEB</a>
+              <a class="btn btn-outline btn-sm" data-installer="linux-x86_64-appimage" data-arch="x64" data-kind="AppImage" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-appimage/aifree_0.2.0_amd64.AppImage">x64 AppImage</a>
+              <a class="btn btn-outline btn-sm" data-installer="linux-aarch64-deb" data-arch="arm64" data-kind="deb" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-deb/aifree_0.2.0_arm64.deb">ARM64 DEB</a>
+              <a class="btn btn-outline btn-sm" data-installer="linux-aarch64-appimage" data-arch="arm64" data-kind="AppImage" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-appimage/aifree_0.2.0_aarch64.AppImage">ARM64 AppImage</a>
+            </div>
+          </details>
         </div>
       </article>
 
@@ -313,6 +339,7 @@ footer .row-between{gap:8px 20px}
   </div>
 </footer>
 
+<script>/* embedded-desktop-downloads */</script>
 <script>
 "use strict";
 (function () {
@@ -370,6 +397,7 @@ footer .row-between{gap:8px 20px}
       revoke: "吊销", revoked: "已吊销", revoke_confirm: "吊销设备“{name}”？该设备会立即退出登录。",
       device_revoked: "设备“{name}”已吊销。", active_state: "使用中",
       orders_title: "订单与收据", orders_none: "还没有订单。", order_date: "日期", amount: "金额", receipt: "收据", view_receipt: "查看收据",
+      download_recommended: "推荐用于当前设备", download_mac_universal: "通用 DMG（Apple 芯片与 Intel）", download_mac_apple: "Apple 芯片 DMG",
       download_title: "下载客户端", download_lead: "在电脑上安装 aifree 桌面客户端，用本账号的邮箱和密码登录即可使用。",
       mail_title: "企业邮箱", mail_none: "订阅后可联系客服申请 @aifree.sg 邮箱。",
       mail_address: "地址", open_webmail: "打开网页邮箱", mail_disabled_note: "如需恢复邮箱访问，请联系客服。",
@@ -454,6 +482,7 @@ footer .row-between{gap:8px 20px}
       revoke: "Revoke", revoked: "Revoked", revoke_confirm: "Revoke “{name}”? It will be signed out right away.",
       device_revoked: "“{name}” has been revoked.", active_state: "Active",
       orders_title: "Orders & receipts", orders_none: "No orders yet.", order_date: "Date", amount: "Amount", receipt: "Receipt", view_receipt: "View receipt",
+      download_recommended: "Recommended for this device", download_mac_universal: "Universal DMG (Apple silicon and Intel)", download_mac_apple: "Apple silicon DMG",
       download_title: "Download the client", download_lead: "Install the aifree desktop client and sign in with this account's email and password.",
       mail_title: "Business email", mail_none: "Subscribers can contact support to request an @aifree.sg mailbox.",
       mail_address: "Address", open_webmail: "Open webmail", mail_disabled_note: "Contact support if you need help restoring access.",
@@ -878,6 +907,7 @@ footer .row-between{gap:8px 20px}
     var cb = document.getElementById("checkout-banner");
     if (!state.polling) cb.hidden = true;
     show("dash");
+    window.aifreeEnhanceDownloads(document.getElementById("panel-download"));
     renderSubscription(me.subscription);
     renderMailbox(me.mailbox);
     loadDevices();
