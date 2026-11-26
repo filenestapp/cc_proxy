@@ -28,8 +28,10 @@ pub enum SyncOutcome {
 /// and applied under [`session::lock`] (review finding CC-07).
 pub fn sync_once(paths: &Paths, session: &Session, mode: &str) -> Result<SyncOutcome> {
     let api = Api::new(&session.server)?;
-    // Only send the ETag if the file it describes is still there.
-    let etag = if paths.config().exists() { read_etag(paths) } else { None };
+    // Refresh an unreadable or missing config, including a copy left by the legacy privileged client.
+    let readable_config = crate::fsguard::open_no_follow(&paths.config())
+        .is_ok_and(|file| file.metadata().is_ok_and(|metadata| metadata.is_file()));
+    let etag = if readable_config { read_etag(paths) } else { None };
     let reply = api.config(&session.token, mode, etag.as_deref())?;
     let _g = session::lock(paths)?;
     if !Session::is_current(paths, &session.id) {

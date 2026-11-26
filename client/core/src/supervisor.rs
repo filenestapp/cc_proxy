@@ -136,14 +136,14 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(unix)]
 extern "C" fn on_signal(_: libc::c_int) {
-    INTERRUPTED.store(true, Ordering::SeqCst);
+    interrupt();
 }
 
 #[cfg(windows)]
 unsafe extern "system" fn on_console_signal(kind: u32) -> i32 {
     use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT};
     if matches!(kind, CTRL_C_EVENT | CTRL_BREAK_EVENT) {
-        INTERRUPTED.store(true, Ordering::SeqCst);
+        interrupt();
         return 1;
     }
     0
@@ -152,6 +152,11 @@ unsafe extern "system" fn on_console_signal(kind: u32) -> i32 {
 /// Whether Ctrl-C / SIGTERM arrived since [`install_signal_handlers`].
 pub fn interrupted() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
+}
+
+/// Request shutdown for a supervisor running in this process.
+pub fn interrupt() {
+    INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
 /// Stop cleanly on Ctrl-C, Ctrl-Break on Windows, or SIGTERM on Unix.
@@ -210,10 +215,21 @@ impl Supervisor {
         }
     }
 
-    fn publish_ready_routes(&mut self, message: &str) {
-        settle_then_apply_dns(&self.o.config());
-        self.route_generation += 1;
-        self.status("running", message);
+    fn publish_ready_routes(&mut self, message: &str) -> Result<()> {
+        // Let sing-box bring the TUN up before pointing the resolver at it.
+        std::thread::sleep(Duration::from_millis(1500));
+        if self.stop_reason().is_some() {
+            return Ok(());
+        }
+        let child = self.child.as_mut().context("missing sing-box process")?;
+        if child.try_wait()?.is_none() {
+            sysdns::apply(&self.o.config());
+            if child.try_wait()?.is_none() {
+                self.route_generation += 1;
+                self.status("running", message);
+            }
+        }
+        Ok(())
     }
 
     /// Re-verify the runtime directory before writing into it with privileges.
@@ -290,6 +306,9 @@ impl Supervisor {
 
     fn stop_child(&mut self) {
         if let Some(mut child) = self.child.take() {
+            if !matches!(child.try_wait(), Ok(None)) {
+                return;
+            }
             #[cfg(unix)]
             unsafe {
                 libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
@@ -317,11 +336,13 @@ impl Supervisor {
 
     fn reload(&mut self) -> Result<()> {
         #[cfg(unix)]
-        if let Some(child) = &self.child {
-            unsafe {
-                libc::kill(child.id() as libc::pid_t, libc::SIGHUP);
+        if let Some(child) = &mut self.child {
+            if child.try_wait()?.is_none() {
+                unsafe {
+                    libc::kill(child.id() as libc::pid_t, libc::SIGHUP);
+                }
+                return Ok(());
             }
-            return Ok(());
         }
         self.stop_child();
         self.start()
@@ -357,13 +378,6 @@ impl Supervisor {
     }
 }
 
-/// Give sing-box a moment to bring the TUN up / load new rules, then point the OS resolver at it. Applying
-/// earlier lets a query slip out to the real DNS and its answer (often NXDOMAIN) gets cached by the OS.
-fn settle_then_apply_dns(config: &Path) {
-    std::thread::sleep(Duration::from_millis(1500));
-    sysdns::apply(config);
-}
-
 /// Run until told to stop. Returns Err only when sing-box cannot be kept running.
 pub fn run(o: Options) -> Result<()> {
     runtime::prepare_protected_dir(&o.runtime_dir, o.require_privileged)?;
@@ -383,7 +397,9 @@ pub fn run(o: Options) -> Result<()> {
         s.status("failed", &format!("{e:#}"));
         return Err(e);
     }
-    s.publish_ready_routes("");
+    if let Err(error) = s.publish_ready_routes("") {
+        return Err(s.failed(error));
+    }
 
     loop {
         std::thread::sleep(s.o.poll);
@@ -402,7 +418,9 @@ pub fn run(o: Options) -> Result<()> {
                     if let Err(error) = s.reload() {
                         return Err(s.failed(error));
                     }
-                    s.publish_ready_routes("config reloaded");
+                    if let Err(error) = s.publish_ready_routes("config reloaded") {
+                        return Err(s.failed(error));
+                    }
                 }
                 Ok(false) => {}
                 Err(e) => s.status("running", &format!("new config rejected, still on the previous one: {e:#}")),
@@ -428,7 +446,9 @@ pub fn run(o: Options) -> Result<()> {
             if let Err(error) = s.start() {
                 return Err(s.failed(error));
             }
-            s.publish_ready_routes(&format!("sing-box exited ({code}) and was restarted"));
+            if let Err(error) = s.publish_ready_routes(&format!("sing-box exited ({code}) and was restarted")) {
+                return Err(s.failed(error));
+            }
         }
     }
 }

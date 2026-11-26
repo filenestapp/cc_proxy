@@ -126,9 +126,9 @@ pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// Write the current time into a signal file (heartbeat, stop).
-pub fn touch(path: &Path) {
-    let _ = fs::write(path, now().to_string());
+/// Write the current time into a signal file.
+pub fn touch(path: &Path) -> Result<()> {
+    fs::write(path, now().to_string()).with_context(|| format!("writing {}", path.display()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,6 +197,7 @@ pub fn connect(paths: &Paths, tunnel: &Tunnel, fx: &dyn Effects) -> Result<Conne
     if session::read_file_trimmed(&paths.stop()) != previous_stop {
         return Err(ConnectError::Canceled);
     }
+    touch(&paths.heartbeat()).map_err(state_error)?;
     let connection_id = session::new_session_id();
     session::write_atomic(&paths.connection_id(), connection_id.as_bytes(), false).map_err(state_error)?;
     match fs::remove_file(paths.stop()) {
@@ -204,7 +205,6 @@ pub fn connect(paths: &Paths, tunnel: &Tunnel, fx: &dyn Effects) -> Result<Conne
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(state_error(error.into())),
     }
-    touch(&paths.heartbeat());
     *tunnel.owner.lock().unwrap() = Some(Connection { _lock: lock, session_id: session.id, started: Instant::now() });
     tunnel.want_connected.store(true, Ordering::SeqCst);
     if let Err(error) = fx.launch_supervisor(paths, &connection_id) {

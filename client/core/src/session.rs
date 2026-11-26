@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,8 +58,27 @@ fn open_lock(path: &Path) -> Result<File> {
     options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        if unsafe { libc::geteuid() } == 0 {
+            // A legacy privileged client may be the first to open an older user's state.
+            // Give a newly created lock to that user so they can take it on the next connection.
+            let directory = fs::metadata(path.parent().context("lock has no state directory")?)?;
+            if directory.uid() != 0 {
+                match options.clone().create_new(true).open(path) {
+                    Ok(file) => {
+                        if unsafe { libc::fchown(file.as_raw_fd(), directory.uid(), directory.gid()) } != 0 {
+                            return Err(std::io::Error::last_os_error())
+                                .with_context(|| format!("setting the owner of {}", path.display()));
+                        }
+                        return Ok(file);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error).with_context(|| format!("opening {}", path.display())),
+                }
+            }
+        }
     }
     let file = options.open(path).with_context(|| format!("opening {}", path.display()))?;
     anyhow::ensure!(file.metadata()?.is_file(), "{} must be a regular file", path.display());
@@ -107,21 +125,7 @@ impl Paths {
 
 /// Write via a temp file + rename, so readers never see half a file. `private` sets 0600 on Unix.
 pub fn write_atomic(path: &Path, data: &[u8], private: bool) -> Result<()> {
-    let tmp = path.with_extension("tmp");
-    {
-        let mut f = fs::File::create(&tmp).with_context(|| format!("writing {}", tmp.display()))?;
-        #[cfg(unix)]
-        if private {
-            use std::os::unix::fs::PermissionsExt;
-            f.set_permissions(fs::Permissions::from_mode(0o600))?;
-        }
-        #[cfg(not(unix))]
-        let _ = private;
-        f.write_all(data)?;
-        f.sync_all()?;
-    }
-    fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
-    Ok(())
+    crate::fsguard::replace_file(path, data, if private { 0o600 } else { 0o644 })
 }
 
 impl Session {

@@ -107,6 +107,25 @@ fn a_delayed_supervisor_cannot_start_for_a_replaced_connection() {
 }
 
 #[test]
+fn an_exiting_sing_box_is_never_reported_as_ready() {
+    let env = Env::new("unready-child");
+    env.write_client(&fixture());
+    let options = env.options(None);
+    fs::write(&options.singbox, format!(
+        "#!/bin/sh\n[ \"$1\" = check ] && exit 0\nprintf 'start\\n' >> '{}'\nexit 1\n",
+        env.calls.display(),
+    )).unwrap();
+    let worker = std::thread::spawn(move || supervisor::run(options));
+
+    env.wait("a retry after sing-box exits", |env| {
+        assert!(!env.status().is_some_and(|status| status.state == "running"));
+        env.calls().lines().count() >= 2
+    });
+    fs::write(env.user.join("stop"), b"").unwrap();
+    worker.join().unwrap().unwrap();
+}
+
+#[test]
 fn supervisor_runs_only_the_protected_copy_and_refuses_tampering() {
     let env = Env::new("main");
     let good = fixture();

@@ -282,10 +282,15 @@ impl Effects for CliEffects {
     }
 }
 
-fn wait_for_stop(paths: &Paths) -> Result<()> {
+fn wait_for_stop(paths: &Paths, wait_for_controller: bool) -> Result<()> {
     let deadline = Instant::now() + STOP_TIMEOUT;
-    while paths.stop().exists() && Status::for_paths(paths).is_some_and(|status| status.is_active())
-    {
+    while paths.stop().exists() {
+        let supervisor_running = Status::for_paths(paths).is_some_and(|status| status.is_active());
+        let controller_running =
+            wait_for_controller && commands::try_connection_lock(paths)?.is_none();
+        if !supervisor_running && !controller_running {
+            break;
+        }
         anyhow::ensure!(
             Instant::now() < deadline,
             "the tunnel is still stopping; check aifree status"
@@ -308,7 +313,7 @@ fn main() -> Result<()> {
         Cmd::Status => show_status(&paths),
         Cmd::Disconnect => {
             Tunnel::default().request_stop(&paths)?;
-            wait_for_stop(&paths)?;
+            wait_for_stop(&paths, true)?;
             println!("disconnected");
             Ok(())
         }
@@ -327,7 +332,7 @@ fn main() -> Result<()> {
             if outcome == LoggedOut::Superseded {
                 bail!("The session was replaced during sign-out.");
             }
-            wait_for_stop(&paths)?;
+            wait_for_stop(&paths, true)?;
             println!("signed out");
             Ok(())
         }
@@ -394,18 +399,18 @@ fn run_client(
         &fx,
         Duration::from_secs(interval),
     );
-    if tunnel.owns_connection() {
-        tunnel.request_stop(paths)?;
-        wait_for_stop(paths)?;
-    }
+    let cleanup = tunnel
+        .request_stop(paths)
+        .and_then(|_| wait_for_stop(paths, false));
     if let Some(mut child) = fx.supervisor.into_inner() {
-        if child.try_wait()?.is_none() {
+        if !matches!(child.try_wait(), Ok(Some(_))) {
             // The stop request also covers a supervisor that starts after authorization completes.
-            let _ = child.kill();
-            let _ = child.wait();
+            if child.kill().is_ok() {
+                let _ = child.wait();
+            }
         }
     }
-    result
+    result.and(cleanup)
 }
 
 fn monitor(
@@ -430,7 +435,8 @@ fn monitor(
         if let Some(status) = &status {
             match status.state.as_str() {
                 "failed" => bail!("{}", status.message),
-                "stopped" => return Ok(()),
+                "stopped" if supervisor::interrupted() || paths.stop().exists() => return Ok(()),
+                "stopped" => bail!("the tunnel stopped: {}", status.message),
                 _ => {}
             }
         }
@@ -443,7 +449,7 @@ fn monitor(
             }
         }
         if last_beat.elapsed() >= HEARTBEAT_EVERY {
-            commands::touch(&paths.heartbeat());
+            commands::touch(&paths.heartbeat())?;
             last_beat = Instant::now();
         }
         visitor.ensure(paths, launcher, status.as_ref())?;
@@ -532,11 +538,38 @@ fn legacy_up(paths: &Paths, interval: u64, singbox: Option<PathBuf>) -> Result<(
         next = Instant::now() + Duration::from_secs(interval);
         match sync_once(paths, &session, DEFAULT_MODE) {
             Ok(SyncOutcome::Updated | SyncOutcome::Unchanged) => {}
-            Ok(_) => commands::touch(&paths.stop()),
+            Ok(_) => supervisor::interrupt(),
             Err(error) => eprintln!("config check failed (keeping the current config): {error:#}"),
         }
     }
     supervisor
         .join()
         .map_err(|_| anyhow!("tunnel supervisor panicked"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::mpsc;
+
+    #[test]
+    fn disconnect_waits_for_the_other_frontend_to_release_its_connection() {
+        let paths = Paths::new(Some(std::env::temp_dir().join(session::new_session_id()))).unwrap();
+        fs::write(paths.connection_id(), session::new_session_id()).unwrap();
+        let lease = commands::try_connection_lock(&paths).unwrap().unwrap();
+        Tunnel::default().request_stop(&paths).unwrap();
+
+        let (send, receive) = mpsc::channel();
+        let observer = paths.clone();
+        let waiter = std::thread::spawn(move || send.send(wait_for_stop(&observer, true)).unwrap());
+        assert!(receive.recv_timeout(Duration::from_millis(400)).is_err());
+        drop(lease);
+        receive
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        waiter.join().unwrap();
+        fs::remove_dir_all(&paths.dir).unwrap();
+    }
 }

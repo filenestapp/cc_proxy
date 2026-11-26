@@ -330,7 +330,10 @@ fn background(app: Arc<App>) {
             continue;
         }
         if last_beat.elapsed() >= HEARTBEAT_EVERY {
-            touch(&app.paths.heartbeat());
+            if let Err(error) = touch(&app.paths.heartbeat()) {
+                let _ = app.request_stop();
+                app.set_message(Some(AppMessage::OperationFailed(error.to_string())));
+            }
             last_beat = Instant::now();
         }
         if last_sync.elapsed() >= SYNC_EVERY {

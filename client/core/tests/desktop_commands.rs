@@ -85,7 +85,7 @@ impl Effects for Fx {
 fn signed_in(paths: &Paths, server: &str) -> Session {
     let s = Session::new(server.into(), "alice".into(), "mac".into(), "alice-token".into());
     s.save(paths).unwrap();
-    commands::touch(&paths.stop());
+    commands::touch(&paths.stop()).unwrap();
     s
 }
 
@@ -130,6 +130,24 @@ fn ordinary_connect_starts_the_tunnel() {
     assert!(tunnel.wants_connection());
     assert!(paths.connection_id().is_file());
     assert_eq!(fx.launches.load(Ordering::SeqCst), 1);
+    fs::remove_dir_all(&paths.dir).unwrap();
+}
+
+#[test]
+fn an_unwritable_heartbeat_aborts_before_launch() {
+    let paths = state("unwritable-heartbeat");
+    signed_in(&paths, "http://127.0.0.1:9");
+    fs::create_dir(paths.heartbeat()).unwrap();
+    let tunnel = Tunnel::default();
+    let mut fx = Fx::new();
+    fx.sync = Box::new(|_, _| Ok(SyncOutcome::Unchanged));
+
+    let error = commands::connect(&paths, &tunnel, &fx).unwrap_err();
+
+    assert!(matches!(error, ConnectError::Configuration(message) if message.contains("heartbeat")));
+    assert_eq!(fx.launches.load(Ordering::SeqCst), 0);
+    assert!(!paths.connection_id().exists());
+    assert!(paths.stop().exists());
     fs::remove_dir_all(&paths.dir).unwrap();
 }
 

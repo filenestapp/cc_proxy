@@ -78,6 +78,7 @@ V1=agent-e2e-v1 V2=agent-e2e-v2 V3=agent-e2e-v3-broken
     go run ./cmd/agent-release sign -dist "$OUT/releases/$2" -key-file "$OUT/release.key" >/dev/null
     go run ./cmd/agent-release verify -dist "$OUT/releases/$2" -keys "$OUT/release-keys.txt"
   }
+  publish "$OUT/dist" "$V1" 1
   ./build.sh "$V2" >/dev/null 2>&1
   publish dist "$V2" 2
   # A broken release: its agent exits right after starting (the rollback rehearsal).

@@ -176,6 +176,21 @@ dx sh -c 'cd /home/cust/.config/cc-proxy && rm -f stop connection-id; touch hear
 check "stale heartbeat stops the supervisor" "ux aifree status | grep 'heartbeats' >/dev/null"
 check "and leaves no sing-box behind" "! dx pgrep -x sing-box >/dev/null"
 
+echo "-- first launch from legacy user state, followed by the unprivileged CLI"
+legacy_state=/home/cust/old-client-state
+ux sh -c 'umask 077; mkdir "$1" && cp ~/.config/cc-proxy/session.json "$1/session.json"' sh "$legacy_state"
+dx sh -c 'nohup aifree --state-dir "$1" up --interval 2 >/tmp/legacy-up.log 2>&1 &' sh "$legacy_state"
+for _ in $(seq 1 20); do ux aifree --state-dir "$legacy_state" status | grep -q 'tunnel: running' && break; sleep 1; done
+check "legacy up uses the saved session" "ux aifree --state-dir '$legacy_state' status | grep -q 'tunnel: running'"
+check "the logged-in user owns the new locks" \
+  "[ \"\$(dx stat -c '%U' '$legacy_state/session.lock' '$legacy_state/connection.lock' | sort -u)\" = cust ]"
+ux aifree --state-dir "$legacy_state" disconnect || status=1
+ux sh -c 'nohup aifree --state-dir "$1" connect --interval 2 >/tmp/new-up.log 2>&1 &' sh "$legacy_state"
+for _ in $(seq 1 20); do ux aifree --state-dir "$legacy_state" status | grep -q 'tunnel: running' && break; sleep 1; done
+check "the regular CLI reconnects and refreshes the legacy root-owned configuration" \
+  "ux aifree --state-dir '$legacy_state' status | grep -q 'tunnel: running' && [ \"\$(dx stat -c '%U' '$legacy_state/sing-box.json')\" = cust ]"
+ux aifree --state-dir "$legacy_state" disconnect || status=1
+
 echo "== phase 4: alerts reach the webhook"
 wait_alert() {  # STATUS RULE SUBJECT
   for _ in $(seq 1 40); do
