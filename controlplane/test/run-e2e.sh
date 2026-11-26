@@ -141,17 +141,18 @@ cpctl ips
 echo "== phase 3: health data behind the dashboard"
 compose exec -T -e CP_ADMIN_TOKEN -e CP_URL=http://cp:8443 probe python /src/controlplane/test/check_topology.py || status=1
 
-echo "== phase 3b: the ccproxy client (Linux TUN, app mode)"
+echo "== phase 3b: the aifree client (Linux TUN, app mode)"
 cpctl ip-add hk-1 10.99.0.7 >/dev/null
 cpctl ip-add jp-1 10.99.0.15 >/dev/null
 cpctl user-add hana --password pw-hana-0123 >/dev/null
 cpctl assign hana 10.99.0.7 >/dev/null
 compose --profile desktop up -d desktop 2>&1 | tail -n 1
 dx() { compose exec -T desktop "$@"; }
-dx sh -c 'CCPROXY_PASSWORD=pw-hana-0123 ccproxy login --server http://10.88.0.5:8443 --user hana --device hana-linux' || status=1
-dx sh -c 'nohup ccproxy up --interval 2 > /tmp/up.log 2>&1 &'
-for _ in $(seq 1 20); do dx ccproxy status 2>/dev/null | grep 'tunnel: running' >/dev/null && break; sleep 1; done
-dx ccproxy status
+ux() { compose exec -T -u cust -e HOME=/home/cust desktop "$@"; }
+ux sh -c 'AIFREE_PASSWORD=pw-hana-0123 aifree login --server http://10.88.0.5:8443 --user hana --device hana-linux' || status=1
+ux sh -c 'nohup aifree connect --interval 2 > /tmp/up.log 2>&1 &'
+for _ in $(seq 1 20); do ux aifree status 2>/dev/null | grep 'tunnel: running' >/dev/null && break; sleep 1; done
+ux aifree status
 wait_for_agent egress-hk "$HK_TOKEN" || status=1
 dx python3 /app/desktop_probe.py 10.99.0.7 10.88.0.60 --routing-groups || status=1
 
@@ -162,25 +163,40 @@ for _ in $(seq 1 20); do dx grep 'config updated' /tmp/up.log >/dev/null && brea
 sleep 2
 dx python3 /app/desktop_probe.py 10.99.0.15 10.88.0.60 --routing-groups || status=1
 check "client stayed up through the move (never saw an unassigned user)" \
-  "dx pgrep -x ccproxy >/dev/null && ! dx grep -E 'stopping|no exit' /tmp/up.log >/dev/null"
+  "dx pgrep -x aifree >/dev/null && ! dx grep -E 'stopping|no exit' /tmp/up.log >/dev/null"
 
 echo "-- admin revokes the device; the client signs out and takes the tunnel down"
 cpctl revoke hana hana-linux >/dev/null
 # pgrep -x: exact process name (pgrep -f would match the sh -c running it)
-for _ in $(seq 1 20); do dx pgrep -x ccproxy >/dev/null || break; sleep 1; done
-check "ccproxy up exited after revocation" "! dx pgrep -x ccproxy >/dev/null"
+for _ in $(seq 1 20); do dx pgrep -x aifree >/dev/null || break; sleep 1; done
+check "aifree connect exited after revocation" "! dx pgrep -x aifree >/dev/null"
 check "no sing-box left running" "! dx pgrep -x sing-box >/dev/null"
-check "session forgotten" "dx ccproxy status | grep 'not signed in' >/dev/null"
+check "session forgotten" "ux aifree status | grep 'not signed in' >/dev/null"
 check "TUN interface removed" "! dx sh -c 'ip -o link | grep -E \": tun[0-9]+:\"' >/dev/null"
 dx cat /tmp/up.log | tail -n 4
 
 echo "-- supervisor exits on its own: stop file, and stale heartbeat (the desktop app's two off-switches)"
-dx sh -c 'CCPROXY_PASSWORD=pw-hana-0123 ccproxy login --server http://10.88.0.5:8443 --user hana --device hana-linux >/dev/null && ccproxy sync >/dev/null'
-dx sh -c 'rm -f ~/.config/cc-proxy/stop; touch ~/.config/cc-proxy/heartbeat; (ccproxy tunnel --heartbeat-timeout 0 >/tmp/t1.log 2>&1 &); sleep 3; touch ~/.config/cc-proxy/stop; sleep 2'
-check "stop file stops the supervisor" "dx ccproxy status | grep 'tunnel: stopped stopped by the app' >/dev/null"
-dx sh -c 'rm -f ~/.config/cc-proxy/stop; touch ~/.config/cc-proxy/heartbeat; (ccproxy tunnel --heartbeat-timeout 3 >/tmp/t2.log 2>&1 &); sleep 7'
-check "stale heartbeat stops the supervisor" "dx ccproxy status | grep 'heartbeats' >/dev/null"
+ux sh -c 'AIFREE_PASSWORD=pw-hana-0123 aifree login --server http://10.88.0.5:8443 --user hana --device hana-linux >/dev/null && aifree sync >/dev/null'
+dx sh -c 'cd /home/cust/.config/cc-proxy && rm -f stop connection-id; touch heartbeat; (aifree --state-dir /home/cust/.config/cc-proxy tunnel --heartbeat-timeout 0 >/tmp/t1.log 2>&1 &); sleep 3; touch stop; sleep 2'
+check "stop file stops the supervisor" "ux aifree status | grep 'tunnel: stopped stopped by the app' >/dev/null"
+dx sh -c 'cd /home/cust/.config/cc-proxy && rm -f stop connection-id; touch heartbeat; (aifree --state-dir /home/cust/.config/cc-proxy tunnel --heartbeat-timeout 3 >/tmp/t2.log 2>&1 &); sleep 7'
+check "stale heartbeat stops the supervisor" "ux aifree status | grep 'heartbeats' >/dev/null"
 check "and leaves no sing-box behind" "! dx pgrep -x sing-box >/dev/null"
+
+echo "-- first launch from legacy user state, followed by the unprivileged CLI"
+legacy_state=/home/cust/old-client-state
+ux sh -c 'umask 077; mkdir "$1" && cp ~/.config/cc-proxy/session.json "$1/session.json"' sh "$legacy_state"
+dx sh -c 'nohup aifree --state-dir "$1" up --interval 2 >/tmp/legacy-up.log 2>&1 &' sh "$legacy_state"
+for _ in $(seq 1 20); do ux aifree --state-dir "$legacy_state" status | grep -q 'tunnel: running' && break; sleep 1; done
+check "legacy up uses the saved session" "ux aifree --state-dir '$legacy_state' status | grep -q 'tunnel: running'"
+check "the logged-in user owns the new locks" \
+  "[ \"\$(dx stat -c '%U' '$legacy_state/session.lock' '$legacy_state/connection.lock' | sort -u)\" = cust ]"
+ux aifree --state-dir "$legacy_state" disconnect || status=1
+ux sh -c 'nohup aifree --state-dir "$1" connect --interval 2 >/tmp/new-up.log 2>&1 &' sh "$legacy_state"
+for _ in $(seq 1 20); do ux aifree --state-dir "$legacy_state" status | grep -q 'tunnel: running' && break; sleep 1; done
+check "the regular CLI reconnects and refreshes the legacy root-owned configuration" \
+  "ux aifree --state-dir '$legacy_state' status | grep -q 'tunnel: running' && [ \"\$(dx stat -c '%U' '$legacy_state/sing-box.json')\" = cust ]"
+ux aifree --state-dir "$legacy_state" disconnect || status=1
 
 echo "== phase 4: alerts reach the webhook"
 wait_alert() {  # STATUS RULE SUBJECT

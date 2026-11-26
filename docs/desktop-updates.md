@@ -19,9 +19,9 @@ The following are external release inputs and are intentionally absent from the 
    Its public R2 bucket CORS policy must permit `GET` from both `https://aifree.sg` and
    `https://app.aifree.sg`; the browser download chooser reads only the public manifest with no
    credentials. Purge the custom-domain cache after changing that policy.
-4. macOS builds need an Apple Developer signing identity and notarization. Do not expose the DMG on
-   the website or in `stable.json` until the app and all nested helpers have been signed and the
-   notarized DMG has passed `stapler validate`. Windows builds use Azure
+4. macOS distribution uses a Developer ID Application identity for the app and helpers, a Developer ID Installer
+   identity for the package inside the DMG, and notarization for the final distribution. Publish the DMG after
+   verifying the package signature and the stapled notarization ticket. Windows builds use Azure
    Artifact Signing through OIDC in the main-only GitHub `release` environment. The signing principal
    needs the Certificate Profile Signer role on the selected profile. The workflow verifies the
    Windows Authenticode signatures before signing the installer for updates. Linux packages rely on
@@ -33,7 +33,7 @@ installation of an updater-capable release before later releases can update them
 ## Publishing
 
 Run **desktop-release** on `main` with a new SemVer version. The workflow builds each supported
-platform, bundles the CLI helper and sing-box with the application, signs the updater package, and
+platform, bundles `aifree`, sing-box and frpc with the application, signs the updater package, and
 creates `stable.json`. macOS is a universal `arm64` + `x86_64` application: the app and all three
 helpers are checked for both architectures. The same signed application archive is registered for
 both `darwin-aarch64` and `darwin-x86_64` updater keys; its first-install DMG is published as
@@ -42,9 +42,11 @@ signature. The release configuration sets `requireSignedVersion`, so the updater
 whose signed version differs from the manifest version. The workflow binds any manually produced
 Debian signature to the same release version.
 
-Download `aifree-stable-update-<version>`. If the CI macOS artifacts were built without Developer ID
-signing, rebuild the same universal release with the production updater key and Apple signing and
-notarization credentials. Replace its DMG, `.app.tar.gz`, and `.sig` together, then rerun
+Download `aifree-stable-update-<version>`. Rebuild unsigned macOS artifacts with the production updater key
+and Developer ID Application identity. Run `client/desktop/scripts/package-macos-installer.sh` with the signed app,
+DMG destination and `AIFREE_MAC_INSTALLER_IDENTITY` set to the Developer ID Installer identity. The DMG opens Installer,
+which installs the app and registers `/usr/local/bin/aifree`. Submit the DMG to the notary service, then staple and
+validate it. Replace its DMG, `.app.tar.gz`, and `.sig` together, then rerun
 `release-manifest.mjs` against the final artifacts. Do not reuse the manifest or signatures from an
 unsigned macOS build. Upload every versioned installer and updater artifact before replacing
 `stable.json`, and verify every published object URL, including `installers`, before that replacement.
@@ -52,6 +54,11 @@ The manifest references AppImage and Debian packages on Linux, NSIS on Windows, 
 macOS application-bundle archive. The release artifact also includes the universal `.dmg` and `.deb`
 first-install packages. Windows uses Tauri's passive installer mode and may show installer progress
 while it applies the update.
+
+The same workflow produces separate `aifree-cli-<version>-linux-x86_64` and `aifree-cli-<version>-linux-arm64`
+artifacts. Publish their archives and checksum files together at versioned HTTPS URLs under `/cli/`. Link those
+URLs from the server CLI download entry. The [client instructions](../client/README.md) describe the SSH install
+and service setup.
 
 On Linux, Tauri selects the updater payload that matches the installed bundle type. An AppImage
 replaces the AppImage. A Debian installation uses `pkexec` to run `dpkg`, so the desktop user may
@@ -70,8 +77,9 @@ next launch.
 
 Before replacing the stable manifest, test it through a separate update feed. Confirm that an
 updater-capable earlier build detects the new manifest, installs it after disconnecting, restarts,
-and reconnects with the existing device session. Repeat this verification for macOS, Windows, and
-Linux.
+and reconnects with the existing device session. Open a fresh terminal and confirm `aifree --version` matches the
+updated app. On a Mac originally installed through a drag-and-drop DMG, run the Installer once to register the
+command. Repeat package and command verification for macOS, Windows, and Linux.
 
 ## Validation history
 

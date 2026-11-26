@@ -7,7 +7,7 @@
 #   clients   lan 10.88.0.30  signs every device in, keeps its config current, one SOCKS port per device
 #   probe     lan 10.88.0.40  egress/test/probe.py helpers; also prober.py as vantage point "user-lan"
 #   sink      lan 10.88.0.50  webhook receiver for alerts
-#   desktop   lan 10.88.0.60  the ccproxy client (client/cli) running a TUN, default route via egress-hk
+#   desktop   lan 10.88.0.60  the aifree client (client/cli) running a TUN, default route via egress-hk
 #   echo      wan 10.99.0.10  target site; /strict refuses 10.99.0.6     decoy wan 10.99.0.20  Reality handshake
 name: cp-e2e
 
@@ -104,7 +104,7 @@ services:
     healthcheck: { test: ["CMD", "test", "-f", "/tmp/ready"], interval: 1s, retries: 30 }
     networks: { lan: { ipv4_address: 10.88.0.30 } }
 
-  # The real client: ccproxy (client/cli) built for Linux, running a TUN in app mode as root.
+  # The Linux aifree client with a privileged TUN supervisor.
   desktop:
     build: { context: ../../client, dockerfile: test/Dockerfile }
     image: cp-e2e-ccproxy
@@ -112,7 +112,7 @@ services:
     cap_add: [NET_ADMIN]
     devices: ["/dev/net/tun:/dev/net/tun"]
     extra_hosts: ["other.test:10.99.0.10", "child.gemini-route.test:10.99.0.10"]
-    init: true   # reap exited ccproxy processes so pgrep sees them gone
+    init: true   # reap exited aifree processes so pgrep sees them gone
     # Like a real OS: the system resolver is an upstream server reached via the default route (here an off-link
     # address), so the TUN can hijack its queries. Docker's 127.0.0.11 is loopback and would bypass the TUN.
     command: ["/bin/sh", "-c", "ip route replace default via 10.88.0.2 && echo 'nameserver 192.0.2.53' > /etc/resolv.conf && exec sleep infinity"]

@@ -6,14 +6,15 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CLIENT="$(cd "$HERE/../.." && pwd)"
 INSTALL_PINS="$CLIENT/../controlplane/install"
-BIN="$HERE/../src-tauri/binaries"
+BIN="${AIFREE_SIDECAR_DIR:-$HERE/../src-tauri/binaries}"
+BUILD_DIR="${CARGO_TARGET_DIR:-$CLIENT/target}"
 TARGET="${1:-$(rustc -vV | awk '/^host:/ {print $2}')}"
 
 case "$TARGET" in
   universal-apple-darwin)
     "$HERE/fetch-binaries.sh" aarch64-apple-darwin
     "$HERE/fetch-binaries.sh" x86_64-apple-darwin
-    for executable in ccproxy sing-box frpc; do
+    for executable in aifree sing-box frpc; do
       lipo -create -output "$BIN/$executable-$TARGET" \
         "$BIN/$executable-aarch64-apple-darwin" "$BIN/$executable-x86_64-apple-darwin"
       for arch in arm64 x86_64; do lipo "$BIN/$executable-$TARGET" -verify_arch "$arch"; done
@@ -21,17 +22,17 @@ case "$TARGET" in
     exit 0 ;;
   aarch64-apple-darwin)        asset="darwin-arm64";   exe="" ;;
   x86_64-apple-darwin)         asset="darwin-amd64";   exe="" ;;
-  x86_64-unknown-linux-gnu)    asset="linux-amd64";    exe="" ;;
-  aarch64-unknown-linux-gnu)   asset="linux-arm64";    exe="" ;;
+  x86_64-unknown-linux-gnu|x86_64-unknown-linux-musl)   asset="linux-amd64"; exe="" ;;
+  aarch64-unknown-linux-gnu|aarch64-unknown-linux-musl) asset="linux-arm64"; exe="" ;;
   x86_64-pc-windows-msvc)      asset="windows-amd64";  exe=".exe" ;;
   aarch64-pc-windows-msvc)     asset="windows-arm64";  exe=".exe" ;;
   *) echo "unsupported target $TARGET" >&2; exit 2 ;;
 esac
 mkdir -p "$BIN"
 
-echo "== ccproxy for $TARGET"
-(cd "$CLIENT" && cargo build --locked --release -p ccproxy --target "$TARGET")
-cp "$CLIENT/target/$TARGET/release/ccproxy$exe" "$BIN/ccproxy-$TARGET$exe"
+echo "== aifree for $TARGET"
+(cd "$CLIENT" && cargo build --locked --release -p aifree-cli --target "$TARGET" --target-dir "$BUILD_DIR")
+cp "$BUILD_DIR/$TARGET/release/aifree$exe" "$BIN/aifree-$TARGET$exe"
 
 PY="$(command -v python3 || command -v python)"
 if command -v sha256sum >/dev/null; then hash=(sha256sum); else hash=(shasum -a 256); fi

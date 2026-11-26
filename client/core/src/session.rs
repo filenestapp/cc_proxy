@@ -17,12 +17,10 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -38,12 +36,53 @@ pub struct Session {
     pub id: String,
 }
 
-static SESSION_LOCK: Mutex<()> = Mutex::new(());
+/// Serializes session changes across the CLI and desktop app. The open file releases the lock on drop.
+pub fn lock(paths: &Paths) -> Result<File> {
+    let path = paths.dir.join("session.lock");
+    let file = open_lock(&path)?;
+    file.lock().with_context(|| format!("locking {}", path.display()))?;
+    Ok(file)
+}
 
-/// Serialises sign-in, sign-out and the commit of network results within this process. Hold it across "is this
-/// still the current session?" and the change that depends on the answer.
-pub fn lock() -> MutexGuard<'static, ()> {
-    SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+pub(crate) fn try_lock(path: &Path) -> Result<Option<File>> {
+    let file = open_lock(path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(error)) => Err(error).with_context(|| format!("locking {}", path.display())),
+    }
+}
+
+fn open_lock(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        if unsafe { libc::geteuid() } == 0 {
+            // A legacy privileged client may be the first to open an older user's state.
+            // Give a newly created lock to that user so they can take it on the next connection.
+            let directory = fs::metadata(path.parent().context("lock has no state directory")?)?;
+            if directory.uid() != 0 {
+                match options.clone().create_new(true).open(path) {
+                    Ok(file) => {
+                        if unsafe { libc::fchown(file.as_raw_fd(), directory.uid(), directory.gid()) } != 0 {
+                            return Err(std::io::Error::last_os_error())
+                                .with_context(|| format!("setting the owner of {}", path.display()));
+                        }
+                        return Ok(file);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error).with_context(|| format!("opening {}", path.display())),
+                }
+            }
+        }
+    }
+    let file = options.open(path).with_context(|| format!("opening {}", path.display()))?;
+    anyhow::ensure!(file.metadata()?.is_file(), "{} must be a regular file", path.display());
+    Ok(file)
 }
 
 /// A fresh session id (not a secret; it only has to differ between sign-ins).
@@ -73,6 +112,7 @@ impl Paths {
     pub fn etag(&self) -> PathBuf { self.dir.join("config.etag") }
     pub fn stop(&self) -> PathBuf { self.dir.join("stop") }
     pub fn heartbeat(&self) -> PathBuf { self.dir.join("heartbeat") }
+    pub fn connection_id(&self) -> PathBuf { self.dir.join("connection-id") }
     pub fn visitor_toml(&self) -> PathBuf { self.dir.join("frpc-visitor.toml") }
     pub fn visitor_ca(&self) -> PathBuf { self.dir.join("frp-ca.pem") }
     pub fn visitor_token(&self) -> PathBuf { self.dir.join("frp-token") }
@@ -85,21 +125,7 @@ impl Paths {
 
 /// Write via a temp file + rename, so readers never see half a file. `private` sets 0600 on Unix.
 pub fn write_atomic(path: &Path, data: &[u8], private: bool) -> Result<()> {
-    let tmp = path.with_extension("tmp");
-    {
-        let mut f = fs::File::create(&tmp).with_context(|| format!("writing {}", tmp.display()))?;
-        #[cfg(unix)]
-        if private {
-            use std::os::unix::fs::PermissionsExt;
-            f.set_permissions(fs::Permissions::from_mode(0o600))?;
-        }
-        #[cfg(not(unix))]
-        let _ = private;
-        f.write_all(data)?;
-        f.sync_all()?;
-    }
-    fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))?;
-    Ok(())
+    crate::fsguard::replace_file(path, data, if private { 0o600 } else { 0o644 })
 }
 
 impl Session {
@@ -115,11 +141,15 @@ impl Session {
 
     /// Replace the stored session (sign-in). The config and visitor files of any previous session go with it.
     pub fn save(&self, paths: &Paths) -> Result<()> {
-        let _g = lock();
+        let _g = lock(paths)?;
+        if paths.session().exists() {
+            crate::commands::stop_locked(paths)?;
+        }
+        self.write(paths)?;
         for p in [paths.config(), paths.etag()].into_iter().chain(crate::visitor::files(paths)) {
             let _ = fs::remove_file(p);
         }
-        self.write(paths)
+        Ok(())
     }
 
     /// Save a recovered username while holding [`lock`] after checking that this session is still current.
@@ -134,9 +164,10 @@ impl Session {
     }
 
     /// Forget the session and the config and visitor files derived from it.
-    pub fn clear(paths: &Paths) {
-        let _g = lock();
+    pub fn clear(paths: &Paths) -> Result<()> {
+        let _g = lock(paths)?;
         Session::clear_locked(paths);
+        Ok(())
     }
 
     /// [`Session::clear`] for callers already holding [`lock`].

@@ -71,7 +71,7 @@ impl Effects for Fx {
     fn sync(&self, paths: &Paths, session: &Session) -> Result<SyncOutcome> {
         (self.sync)(paths, session)
     }
-    fn launch_supervisor(&self, paths: &Paths) -> Result<()> {
+    fn launch_supervisor(&self, paths: &Paths, _connection_id: &str) -> Result<()> {
         self.launches.fetch_add(1, Ordering::SeqCst);
         (self.launch)(paths)
     }
@@ -85,7 +85,7 @@ impl Effects for Fx {
 fn signed_in(paths: &Paths, server: &str) -> Session {
     let s = Session::new(server.into(), "alice".into(), "mac".into(), "alice-token".into());
     s.save(paths).unwrap();
-    commands::touch(&paths.stop());
+    commands::touch(&paths.stop()).unwrap();
     s
 }
 
@@ -102,7 +102,7 @@ fn assert_untouched_by_connect(paths: &Paths, tunnel: &Tunnel, fx: &Fx) {
     assert!(paths.stop().exists(), "stop file left as it was");
     assert!(!paths.heartbeat().exists(), "no heartbeat written");
     assert!(!tunnel.wants_connection(), "connection state unchanged");
-    assert_eq!(tunnel.connected_at(), 0);
+    assert!(!tunnel.owns_connection());
     assert_eq!(fx.launches.load(Ordering::SeqCst), 0, "supervisor never launched");
 }
 
@@ -128,8 +128,26 @@ fn ordinary_connect_starts_the_tunnel() {
     assert!(!paths.stop().exists());
     assert!(paths.heartbeat().exists());
     assert!(tunnel.wants_connection());
-    assert!(tunnel.connected_at() > 0);
+    assert!(paths.connection_id().is_file());
     assert_eq!(fx.launches.load(Ordering::SeqCst), 1);
+    fs::remove_dir_all(&paths.dir).unwrap();
+}
+
+#[test]
+fn an_unwritable_heartbeat_aborts_before_launch() {
+    let paths = state("unwritable-heartbeat");
+    signed_in(&paths, "http://127.0.0.1:9");
+    fs::create_dir(paths.heartbeat()).unwrap();
+    let tunnel = Tunnel::default();
+    let mut fx = Fx::new();
+    fx.sync = Box::new(|_, _| Ok(SyncOutcome::Unchanged));
+
+    let error = commands::connect(&paths, &tunnel, &fx).unwrap_err();
+
+    assert!(matches!(error, ConnectError::Configuration(message) if message.contains("heartbeat")));
+    assert_eq!(fx.launches.load(Ordering::SeqCst), 0);
+    assert!(!paths.connection_id().exists());
+    assert!(paths.stop().exists());
     fs::remove_dir_all(&paths.dir).unwrap();
 }
 
@@ -231,10 +249,30 @@ fn connect_errors_preserve_their_reason_and_diagnostics() {
 fn ordinary_disconnect_stops_the_tunnel() {
     let paths = state("disconnect");
     let tunnel = Tunnel::default();
-    tunnel.want_connected.store(true, Ordering::SeqCst);
-    tunnel.request_stop(&paths);
+    tunnel.request_stop(&paths).unwrap();
     assert!(!tunnel.wants_connection());
     assert!(paths.stop().exists());
+    fs::remove_dir_all(&paths.dir).unwrap();
+}
+
+#[test]
+fn another_frontend_can_disconnect_but_cannot_start_a_second_tunnel() {
+    let paths = state("shared-tunnel");
+    signed_in(&paths, "http://127.0.0.1:9");
+    let desktop = Tunnel::default();
+    let terminal = Tunnel::default();
+    let mut fx = Fx::new();
+    fx.sync = Box::new(|_, _| Ok(SyncOutcome::Unchanged));
+    assert_eq!(commands::connect(&paths, &desktop, &fx), Ok(Connected::Started));
+    assert!(commands::connection_requested(&paths, None));
+    assert_eq!(commands::connect(&paths, &terminal, &fx), Err(ConnectError::Busy));
+
+    terminal.request_stop(&paths).unwrap();
+    desktop.poll(&paths);
+    assert!(!desktop.wants_connection());
+    desktop.release_if_stopped(&paths);
+    assert_eq!(commands::connect(&paths, &terminal, &fx), Ok(Connected::Started));
+    assert_eq!(fx.launches.load(Ordering::SeqCst), 2);
     fs::remove_dir_all(&paths.dir).unwrap();
 }
 
@@ -248,9 +286,8 @@ fn ordinary_logout_signs_out_and_stops() {
     fs::remove_file(paths.stop()).unwrap();
     fs::write(paths.config(), b"{}").unwrap();
     let tunnel = Tunnel::default();
-    tunnel.want_connected.store(true, Ordering::SeqCst);
     go.send(()).unwrap();
-    assert_eq!(commands::logout(&paths, &tunnel, &Fx::new()), LoggedOut::SignedOut);
+    assert_eq!(commands::logout(&paths, &tunnel, &Fx::new()).unwrap(), LoggedOut::SignedOut);
     assert!(seen.recv().unwrap().contains("Bearer alice-token"), "the token is revoked on the server");
     server.join().unwrap();
     assert!(Session::load(&paths).is_none());
@@ -269,7 +306,7 @@ fn delayed_logout_reply_leaves_the_replacement_session_alone() {
     let fx = Arc::new(Fx::new());
     let call = {
         let (paths, tunnel, fx) = (paths.clone(), tunnel.clone(), fx.clone());
-        std::thread::spawn(move || commands::logout(&paths, &tunnel, &*fx))
+        std::thread::spawn(move || commands::logout(&paths, &tunnel, &*fx).unwrap())
     };
     seen.recv().unwrap(); // alice's logout request is in flight
     let bob = replace_with_bob(&paths);
@@ -292,10 +329,10 @@ fn logout_stops_and_takes_its_session_snapshot_together_under_the_lock() {
         fx
     });
     // While a sign-in (or any session change) holds the lock, logout neither stops nor picks a session.
-    let held = ccproxy_core::session::lock();
+    let held = ccproxy_core::session::lock(&paths).unwrap();
     let call = {
         let (paths, fx) = (paths.clone(), fx.clone());
-        std::thread::spawn(move || commands::logout(&paths, &Tunnel::default(), &*fx))
+        std::thread::spawn(move || commands::logout(&paths, &Tunnel::default(), &*fx).unwrap())
     };
     std::thread::sleep(Duration::from_millis(300));
     assert!(!paths.stop().exists(), "no stop before the snapshot");
@@ -318,7 +355,7 @@ fn failed_logout_call_still_signs_out_locally() {
     signed_in(&paths, "http://127.0.0.1:9");
     let mut fx = Fx::new();
     fx.logout = Box::new(|_| Err(anyhow!("offline")));
-    assert_eq!(commands::logout(&paths, &Tunnel::default(), &fx), LoggedOut::SignedOut);
+    assert_eq!(commands::logout(&paths, &Tunnel::default(), &fx).unwrap(), LoggedOut::SignedOut);
     assert!(Session::load(&paths).is_none());
     fs::remove_dir_all(&paths.dir).unwrap();
 }
@@ -328,7 +365,7 @@ fn logout_without_a_session_clears_leftovers() {
     let paths = state("logout-none");
     fs::write(paths.config(), b"{}").unwrap();
     let fx = Fx::new();
-    assert_eq!(commands::logout(&paths, &Tunnel::default(), &fx), LoggedOut::NotSignedIn);
+    assert_eq!(commands::logout(&paths, &Tunnel::default(), &fx).unwrap(), LoggedOut::NotSignedIn);
     assert!(!paths.config().exists());
     assert!(fx.logouts.lock().unwrap().is_empty(), "no server call without a session");
     fs::remove_dir_all(&paths.dir).unwrap();

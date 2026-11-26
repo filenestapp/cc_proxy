@@ -1,161 +1,124 @@
-# 客户端
+# aifree client
 
-用户在桌面端用控制端分配的用户名和密码登录。登录后客户端自动取到出口 IP 和入口 `IP:端口`，配好隧道；命中规则的域名走代理，其他流量保持本机网络。
+The GUI and terminal client sign in with a customer email or proxy username, receive the device's assigned exit, and apply the control plane's routing policy. Matching traffic uses the exit. Other traffic keeps using the local network.
 
-```text
-client/
-  core/     Rust 库：登录与订阅 API、会话存储、配置同步、sing-box 守护、按系统提权
-  cli/      ccproxy 命令行：无界面客户端，同时也是桌面端提权后运行的守护程序
-  desktop/  Tauri 2 桌面端（macOS、Windows、Linux），界面在 desktop/ui
-  macos/    文件式流程时代的 /etc/resolver 脚本（域名模式），桌面端不再使用
+| Directory | Purpose |
+| --- | --- |
+| `core/` | Sign-in, session storage, config sync, elevation, and supervision shared by both frontends |
+| `cli/` | The `aifree` command and the tunnel and XTCP visitor helpers |
+| `desktop/` | Tauri GUI, desktop installers, and their updater |
+| `macos/` | Legacy domain-mode resolver scripts |
+
+## Install on a headless Linux host
+
+Download the versioned Linux CLI archive and its checksum from the release. Choose `linux-x86_64` or `linux-arm64`. The archive contains the CLI and pinned `sing-box` and `frpc` executables. Use a glibc-based Linux distribution such as Debian 12 with the corresponding CPU architecture and `/dev/net/tun`. The bundled sing-box uses the system glibc loader. Install `sudo` and authorize TUN setup for the client user.
+
+```sh
+package=aifree-cli-0.2.3-linux-x86_64   # Use the name of the downloaded release.
+sha256sum -c "$package.tar.gz.sha256"
+sudo mkdir -p /opt/aifree-cli
+sudo tar -oxzf "$package.tar.gz" -C /opt/aifree-cli
+sudo ln -s "/opt/aifree-cli/$package/aifree" /usr/local/bin/aifree
+aifree --version
 ```
 
-## 工作方式
+For an upgrade, verify and extract the new archive into its versioned directory. Disconnect the client and repoint the installed link to that directory before reconnecting.
 
-- **登录**：客户端用用户名、密码和设备名（默认为本机名）调用 `POST /v1/login`，拿到这台设备的令牌。本地只保存令牌（在用户配置目录下的 `cc-proxy/session.json`，Unix 上权限 0600），不保存密码。管理员可以单独吊销这台设备。
-- **配置**：用令牌请求 `GET /v1/config?mode=app`，得到指向用户专属入口（`主机:端口`）的 sing-box 配置。之后每 30 秒带 ETag 检查一次：配置没变时只有一个 304，变了就写入新文件。管理员把用户换到另一台出口机时，客户端会自己跟上。
-- **macOS 的 DNS**：mDNSResponder 把查询绑定在物理网卡上直接发出，不经过 TUN，所以单靠劫持 DNS 不起作用。为此，守护进程会为每个规则域名写一个 `/etc/resolver/<域名>`，指向 TUN 内的 DNS `172.19.0.2`，只改变这些域名的解析；断开时删除这些文件。域名来自服务端下发的配置，而这些文件是以 root 身份写入的，所以只接受规范的域名，`../` 之类会被丢弃；不是本程序写的同名文件也不会动。
-- **DNS 缓存**：连接、每次配置重载、断开之后，都会刷新系统 DNS 缓存（macOS 用 `dscacheutil`/mDNSResponder，Windows 用 `ipconfig /flushdns`，Linux 用 `resolvectl`）。否则连接前缓存的真实地址或「不存在」会绕过规则，断开后残留的 fake-ip 又会让这些域名打不开。重载后会先等 1.5 秒，让 sing-box 加载完新规则，再改解析和刷新缓存。
-- **分流**：app 模式，即 TUN 接管默认路由并劫持 DNS。控制端 `client_policy.domain_suffix` 里的域名解析成 fake-ip，通过隧道从用户的出口 IP 出去；其他域名用 `direct_dns` 解析后直连。命中域名的 UDP 443（QUIC）被拦截，迫使应用回落到 TCP。发往本地网段的流量不进 TUN。
-- **提权**：TUN 需要管理员权限。点击「连接」时弹一次系统授权（macOS 输入密码，Linux 走 polkit，Windows 走 UAC），以管理员身份启动随包附带的 `ccproxy tunnel`。之后界面进程只写文件：配置、每 5 秒一次心跳、断开时的 stop 文件。守护进程只读这些文件，各个系统用同一套机制：
-  - 配置文件变了，先 `sing-box check`，再重载（Unix 发 SIGHUP，Windows 重启进程）。检查不通过就继续用旧配置。
-  - 配置文件被删除（已退出登录或出口被收回），停止。
-  - 出现 stop 文件，停止。
-  - 心跳超过 30 秒没更新（界面崩溃或被强制退出），停止。所以不会留下一个以 root 身份运行的 sing-box。
-  - sing-box 意外退出，自动重启；一分钟内超过 5 次就停止，并在状态里报失败。
-- **权限边界**：守护进程以 root 或管理员身份运行，只把用户目录当作输入。它从客户端配置里提取有限的几项参数并逐项校验，自己重新生成配置，要求客户端文件与生成结果完全一致，有任何多余字段就拒绝。生成的配置、工作目录、日志、状态都放在只有 root 能写的目录里：macOS 是 `/Library/Application Support/CCProxy`，Linux 是 `/var/lib/ccproxy`，Windows 是 `%ProgramData%\CCProxy`（会重设 ACL）。启动、重载、重启用的都是这份校验过的配置。
-- **被下线**：令牌失效（管理员吊销、重置密码、在别处退出）后，下一次检查拿到 401，客户端清掉会话和配置，隧道随之关闭。出口被收回（409）也一样。
+## Use the terminal client
 
-## 桌面端
+Run the client as the OS user that owns the device session. On macOS and Linux, `connect` invokes `sudo` for the tunnel supervisor. On Windows it prompts through UAC. The signed-in user retains ownership of config sync and the XTCP visitor.
 
-```bash
-cd client/desktop
-scripts/fetch-binaries.sh                     # 编译 ccproxy，下载 sing-box 1.14.4（按 GitHub 公布的 SHA-256 校验）和 frpc 0.72.0（按 controlplane/install/frpc.json 校验）
-cd src-tauri && npx @tauri-apps/cli@2.12.6 build --bundles app    # macOS；Windows 用 nsis，Linux 用 deb/appimage
+```sh
+aifree login --user user@example.com
+aifree connect
+# In another terminal:
+aifree status
+aifree disconnect
+aifree logout
 ```
 
-安装包里，`ccproxy` 和 `sing-box` 放在主程序旁边。[.github/workflows/desktop.yml](../.github/workflows/desktop.yml) 分别在 macOS（Apple 芯片）、Windows、Linux 上构建并上传安装包。没有签名：macOS 公证和 Windows 代码签名需要证书，还没配。
+The login command prompts without echoing the password. In a script, pipe the password through standard input or provide `AIFREE_PASSWORD` from the environment. The default control plane is `https://cp.aifree.sg`. Use `--server` to select a different endpoint for sign-in, or set `AIFREE_CONTROL_PLANE_URL` for both frontends. The saved session uses its original endpoint.
 
-Sign in with your username or account email, password, and an optional device name. The desktop app uses the saved endpoint for an active session and defaults to `https://cp.aifree.sg` for a fresh sign-in. To use a different control plane for sign-in, launch the app with `AIFREE_CONTROL_PLANE_URL` set. The home screen shows the tunnel state, connection control, verified public exit IP, login username, and device. While connected, the app checks its public IPv4 over HTTPS through the active exit using ident.me or ipify.
+`connect` runs in the foreground and supports both public and XTCP exits. Stop it with Ctrl-C or `aifree disconnect` from another terminal. An XTCP connection reports running after its visitor establishes the direct path. A revoked device loses its session and the tunnel stops. Existing scripts can switch to the `aifree` executable and retain `login --server`, `up`, `sync`, `status`, and `logout` syntax. `up` retains the legacy privileged, manually managed tunnel behavior. `CCPROXY_PASSWORD` remains an accepted login environment variable.
 
-Use the globe and flag in the header to choose **System**, **English**, or **Simplified Chinese**. Use the adjacent appearance icon to choose **System**, **Light**, or **Dark**. System is the default for both. The app uses the first supported system language and falls back to English. It remembers both choices across restarts.
+### Run with systemd
 
-The system tray icon shows connection status. Close the window to keep the app and tunnel running in a supported tray. Select **Open aifree** to bring the window back or **Quit aifree** to exit and stop the tunnel. The macOS and Windows hover tooltip shows the current status and verified public exit IP. On Linux, open the tray menu for this information.
+Use a dedicated, unprivileged service account and a state directory owned by that account. Use the same state directory for login and service commands.
 
-The desktop bundle identifier is `sg.aifree.desktop`. macOS treats aifree as a new app, so CC Proxy keychain entries and login items are not carried over.
-
-Open **Environment check** to compare the current device's HTTPS exits, DNS, UDP and STUN observations, TLS measurements, and local network settings. The Rust implementation uses Netcheck's public report interface for IP reputation and findings. It sends observed addresses, system language, time zone, OS version, and timings. Routes, adapters, configured proxies, and certificate details are included in the local result. [Netcheck CLI reference](https://netcheck.wenbo.io/cli)
-
-## 命令行（ccproxy）
-
-```bash
-ccproxy login --server https://cp.example.com --user alice     # 密码从标准输入或 CCPROXY_PASSWORD 读取
-sudo ccproxy up                                                # 前台运行：保持配置最新，运行 sing-box；Ctrl-C 停止
-ccproxy status
-ccproxy logout                                                 # 在服务端吊销这台设备，并清掉本地会话
+```sh
+sudo install -d -m 0700 -o aifree -g aifree /var/lib/aifree-client
+sudo -u aifree /usr/local/bin/aifree --state-dir /var/lib/aifree-client login --user user@example.com
 ```
 
-`ccproxy up` 把同步和守护放在同一个进程里，适合 Linux 服务器或排查问题。`ccproxy tunnel` 是桌面端提权后运行的那一半，不需要手动执行。
+Authorize the exact supervisor command in `sudoers` so the service can start without a terminal. With sudo 1.9.10 or newer, the argument regex below allows the generated connection ID while pinning the paths and the supervisor mode. Use `visudo -f /etc/sudoers.d/aifree-client` and substitute the version, architecture, and state directory for your installation.
 
-## XTCP visitor (exit hosts behind NAT)
+```sudoers
+aifree ALL=(root) NOPASSWD: /opt/aifree-cli/aifree-cli-0.2.3-linux-x86_64/aifree ^--state-dir /var/lib/aifree-client tunnel --singbox /opt/aifree-cli/aifree-cli-0[.]2[.]3-linux-x86_64/sing-box --heartbeat-timeout 60 --connection-id [0-9a-f]{32}$
+```
 
-When the user's exit host uses the XTCP transport ([egress/install/README.md](../egress/install/README.md#xtcp-transport-hosts-behind-nat)),
-the desktop app runs the frpc visitor itself. The customer needs no manual frpc. Hosts on the public entry are
-unaffected.
+Save the unit as `/etc/systemd/system/aifree-client.service`.
 
-- **Bundle.** `scripts/fetch-binaries.sh` adds frpc 0.72.0 next to `ccproxy` and `sing-box`. It verifies each asset
-  against the SHA-256 pin the exit installer uses (`controlplane/install/frpc.json`) and stops when the pin is
-  missing or differs. `TestFrpcPinMatchesTheDesktopBuild` keeps the script, the pin file and `tauri.conf.json` in
-  step.
-- **Settings.** With the sing-box config, the app polls `GET /v1/xtcp-visitor` (ETag, every 30 s while connected). It
-  renders the frpc configuration itself from validated fields and keeps `frpc-visitor.toml`, `frp-ca.pem`,
-  `frp-token` and `visitor.json` in the state directory, each mode 0600. A 204 (public-entry host), a 409, a 401 and
-  sign-out remove them. The connect fails with its own message when the tunnel config does not dial the
-  visitor's `127.0.0.1:<port>`.
-- **Lifecycle.** frpc does not need privileges, so the privileged supervisor never runs it. Once the supervisor reports
-  the TUN running, the app starts `ccproxy visitor` (the guard), which starts frpc. Starting frpc after the TUN
-  matters: with `auto_route`, frpc's own packets go through sing-box's direct outbound, and a path punched before the
-  TUN existed would change its source port. The token reaches frpc through the `FRP_AUTH_TOKEN` environment
-  variable, never its command line. frpc's log is redacted into `frpc.log` and classified into
-  `visitor-status.json`.
-  - The tunnel shows **Connected** only once frpc listens and the first direct path to the exit host is open
-    (`keepTunnelOpen`).
-  - The guard stops frpc when its stdin closes (Disconnect, sign-out, app exit, or a crashed app), when the
-    configuration is removed, or when frpc fails. On Windows frpc also sits in a kill-on-close job object; on Linux
-    it gets a parent-death signal. Once it holds the single-instance lock (a second launch ends before this), the app
-    removes an frpc that a killed guard left behind. `frpc.pid` records frpc's pid and identity (start time and
-    command line) and its guard's pid. Only a process with exactly that identity whose guard is gone is signalled. A
-    live visitor, a reused pid (even another frpc) and anything that cannot be verified are left alone.
-  - The guard refuses to run as root or Administrator.
-- **Failures.** frps unreachable, a refused token, a rejected CA, an exit host not online, failed hole punching and a
-  busy local port each produce their own message and leave the tunnel `failed`. A failed configuration is not
-  restarted until it changes (for example a rotated token arrives) or the user connects again. An unreachable frps is
-  retried after a minute. frpc's own hole-punching retries are capped at 8 an hour. Nothing falls back to a relay.
-- **Older control planes.** A control plane without `/v1/xtcp-visitor` answers 404. The app then connects as before
-  the feature: directly on a public-entry host, through a hand-run visitor on an XTCP host. A 401 and real service
-  errors keep their usual handling.
-- **CLI.** `sudo ccproxy up` never runs a visitor; on an XTCP exit it expects a hand-run frpc, as before. To run the
-  visitor from the command line, split it the way the app does. As the signed-in user, run
-  `ccproxy headless [--frpc PATH]` (sync, heartbeat, visitor; it refuses root). Then, as root, run
-  `ccproxy --state-dir <the user's state dir> tunnel`, which starts only sing-box, from its own validated copy of
-  the config. Do not combine it with a hand-run frpc on the same port.
+```ini
+[Unit]
+Description=aifree client
+Wants=network-online.target
+After=network-online.target
 
-## 测试
+[Service]
+User=aifree
+ExecStart=/usr/local/bin/aifree --state-dir /var/lib/aifree-client connect
+Restart=on-failure
+RestartSec=5
 
-- 控制面的端到端测试 [controlplane/test/run-e2e.sh](../controlplane/test/run-e2e.sh) 第 3b 段，在 Docker 里的 Linux TUN 上运行真实的 `ccproxy`（`client/test/Dockerfile` 编译）。2026-11-22 全部通过：
-  - 用密码登录；
-  - 规则域名拿到 fake-ip，并从用户的出口 IP 出去；其他域名经劫持的 DNS 正常解析，并且直连；默认路由走 TUN；
-  - 管理员把用户换到另一台出口机后，客户端在下一次检查时拿到新配置，出口 IP 随之切换，客户端无需任何操作；
-  - 管理员吊销设备后，`ccproxy up` 退出，sing-box 和 TUN 网卡都清理干净，本地会话被清除；
-  - stop 文件和心跳超时都能让守护进程自己停下，不留 sing-box 进程。
-- `cargo clippy -D warnings` 通过（core、cli、desktop）。
-- macOS 应用（Apple 芯片）能构建、打包，两个附带程序都能运行。界面的登录页和主页在浏览器里用模拟接口检查过显示效果。
+[Install]
+WantedBy=multi-user.target
+```
 
-- **macOS 真机**（2026-11-22，Apple 芯片，用 `client/test/local-demo/up.sh` 搭建本地控制端和 Docker 出口机）：
-  - 登录、授权提示、以 root 运行守护进程，全部正常；
-  - 规则域名 `echo.example.com` 经系统解析得到 fake-ip，从出口 IP `10.99.0.3` 出去；
-  - 其他域名照常解析和直连，公网 IP 不变；
-  - 控制端修改规则后，客户端自动重载；
-  - 退出 App 后，隧道在 1 秒内停止，路由被清理。
+Start with `sudo systemctl enable --now aifree-client`, stop with `sudo systemctl stop aifree-client`, and read the service log with `journalctl -u aifree-client`. Run `status` as the service user with `--state-dir /var/lib/aifree-client`.
 
-  真机测试中发现并修复了三个问题：
-  - 界面每 1.5 秒刷新一次时，会把出口信息清空；
-  - macOS 的 DNS 查询绕过了 TUN；
-  - DNS 缓存的问题。
+## Use the desktop build
 
-  另外，`.test` 域名在 macOS 上会被系统本地直接判为「不存在」，规则域名不要用 `.test`。
+On macOS, open **Install aifree.pkg** inside the DMG to install the app and register `/usr/local/bin/aifree`. The Windows installer adds the app directory to the current user's PATH. Debian packages install `/usr/bin/aifree`. Open a fresh terminal after installation and run `aifree --help`.
 
-**XTCP visitor (issue #61), 2026-11-25:**
+The portable Linux AppImage exposes the same CLI through its `cli` entry point. Extract-and-run also makes the bundled executables available to the privileged supervisor.
 
-- Docker e2e [controlplane/test/xtcp/run-e2e.sh](../controlplane/test/xtcp/run-e2e.sh) (desktop phase in
-  `desktop-phase.sh`): real frps and frpc 0.72.0, and the real client on a Linux TUN in app mode with a non-primary
-  mapping, split as the app is (`ccproxy headless` as a regular user, `ccproxy tunnel` as root). 65 checks passed,
-  0 failed (on 3cc2091). They cover:
-  - as root, `ccproxy up` has no visitor option, and the visitor guard and `ccproxy headless` refuse to run;
-    frpc and its guard run as the signed-in user;
-  - a busy port and a blocked hole punch each reported, and never shown as connected;
-  - frpc started after sing-box;
-  - traffic leaves via the exit's egress IPv4, and the exit-probe path agrees;
-  - 20 MB transferred with 0 bytes through frps;
-  - 0600 files, and the token on no command line and in no log;
-  - Ctrl-C, SIGKILL of the client, frps token rotation (recovered) and device revocation, each leaving no frpc
-    and no visitor files.
-- macOS (Apple silicon), real frpc/frps 0.72.0 darwin-arm64 with the real `ccproxy visitor` guard against a local
-  frps: exit not online, refused token, CA mismatch, frps unreachable and busy port each produced their own status;
-  no frpc was left behind and the token was in no log. The GUI and the TUN path were not exercised on macOS.
-- Rust: visitor unit tests, sync tests against a local HTTP server, guard and controller lifecycle tests with a fake
-  frpc (Unix), and `frpc verify` on the rendered configuration (`FRPC_TEST_BIN`). Go: `TestDeviceXTCPVisitorScope`
-  on PostgreSQL.
-- Observed: in one run the first request sent right after the visitor reported ready got an empty reply; requests a
-  moment later worked. The e2e waits for the first successful request.
+```sh
+APPIMAGE_EXTRACT_AND_RUN=1 ./aifree.AppImage cli --help
+APPIMAGE_EXTRACT_AND_RUN=1 ./aifree.AppImage cli connect
+```
 
-**未验证**：
+The GUI and terminal share the current OS user's device session and tunnel state. Connect from either surface and disconnect from either. An active or stopping connection holds the connection lock until cleanup completes. Closing a GUI that is observing a CLI connection leaves the CLI in control.
 
-- XTCP visitor on Windows: compilation of the job-object code (no Windows toolchain here; the desktop CI workflow runs
-  clippy on Windows), runtime behaviour, and whether `frpc.exe` needs a firewall rule for hole punching.
-- XTCP visitor in the desktop GUI itself on any OS (the same core code ran through `ccproxy`), and with a TUN on macOS.
+The desktop home screen shows the account, device, connection state, and verified public exit IPv4. Choose **System**, **English**, or **Simplified Chinese** for language and **System**, **Light**, or **Dark** for appearance. The tray keeps the app running when the window closes on a supported desktop. Select **Quit aifree** to stop a GUI-owned connection and exit.
 
-- Linux 的 pkexec、Windows 的 UAC 提权（macOS 的 osascript 已在真机验证）。
-- Windows 和 Linux 的安装包：已写好 CI 构建流程，没有实际运行过。
-- Windows 和 Linux 桌面上的 DNS 行为。Linux 上的 systemd-resolved 也按网卡发送查询，可能需要和 macOS 类似的按域名设置解析服务器。
-- Windows 版 sing-box 运行 TUN 所需的 wintun 驱动是否已包含在 release 里。
+The bundle identifier is `sg.aifree.desktop`. macOS treats it as a new app relative to the old CC Proxy bundle. Open **Environment check** for exit, DNS, network, and TLS measurements. The Rust client uses the [Netcheck report interface](https://netcheck.wenbo.io/cli) for reputation and findings. It submits observed addresses, language, time zone, OS version, and timings. Local routes, adapters, configured proxies, and certificates appear in the local result.
+
+## Connection behavior
+
+- The control plane issues a revocable token per device. The client stores it in the existing `cc-proxy/session.json` user config directory with mode 0600 on Unix.
+- The frontend fetches app-mode sing-box settings and uses ETags for subsequent config checks. A changed assignment reloads the tunnel. Revocation, a lost assignment, and sign-out stop it.
+- The privileged supervisor validates and re-renders the user-side settings into its protected runtime directory before running sing-box. It stops on the stop request, missing config, or a stale frontend heartbeat. It uses the same boundary for reloads and restarts.
+- The supervisor keeps its logs and validated configuration in `/Library/Application Support/CCProxy` on macOS, `/var/lib/ccproxy` on Linux, and `%ProgramData%\CCProxy` on Windows.
+- The TUN handles routing and DNS. Rule domains use fake IPs, local networks stay direct, and rule traffic falls back to TCP when QUIC is blocked. On macOS the supervisor sets per-domain resolvers after TUN setup and restores them on stop. The client refreshes the DNS cache when the tunnel starts, reloads, and stops.
+
+### XTCP exits
+
+For an exit behind NAT, the CLI and GUI fetch device-scoped visitor settings from `/v1/xtcp-visitor`. The unprivileged frontend starts the bundled frpc after TUN routes are ready, because the UDP path must be established with the active routes. It reports running after frpc opens the direct path. The visitor receives the token through its environment and redacts it from logs. Disconnect, sign-out, or frontend exit stops the guard and frpc.
+
+The privileged supervisor manages sing-box. The unprivileged visitor handles XTCP. Both frontends use the same validation and retry behavior. A control plane from before the visitor endpoint returns 404 and continues to support public exits and manually configured visitors.
+
+## Build and verify
+
+```sh
+cd client
+cargo test --locked -p aifree-cli -p ccproxy-core
+desktop/scripts/fetch-binaries.sh                 # Build aifree and verify the pinned sidecars.
+cd desktop/src-tauri
+npx --yes @tauri-apps/cli@2.12.6 build --bundles app  # macOS. Windows uses nsis, Linux uses deb/appimage.
+```
+
+The desktop release workflow builds the platform installers and the standalone Linux x86_64 and ARM64 archives. See [desktop release and update instructions](../docs/desktop-updates.md) for packaging and publication.
+
+The Linux [direct exit suite](../controlplane/test/run-e2e.sh) exercises the CLI sign-in and TUN, routing, assignment changes, and revocation. Run the [XTCP suite](../controlplane/test/xtcp/run-e2e.sh) with `AIFREE_CLIENT_ONLY=1` to test CLI connect with real frpc, routed traffic, duplicate connection prevention, disconnect and crash cleanup, token rotation, and revocation.
+
+Earlier Apple silicon GUI acceptance exercised authorization, rule-domain traffic through the assigned exit, direct traffic, configuration reload, and cleanup after quitting. Use a domain such as `echo.example.com` for macOS DNS tests because the platform resolves the special-use `.test` suffix locally. Windows UAC, Linux polkit, and the desktop routes for XTCP remain platform acceptance checks.
