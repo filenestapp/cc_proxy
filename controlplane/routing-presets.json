@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "reviewed_on": "2026-11-26",
+  "groups": {
+    "claude": {
+      "domain": ["clau.de"],
+      "domain_suffix": [
+        "anthropic.com",
+        "claude.ai",
+        "claude.com",
+        "claudemcpcontent.com",
+        "claudeusercontent.com"
+      ]
+    },
+    "openai": {
+      "domain": [],
+      "domain_suffix": ["chatgpt.com", "oaistatic.com", "oaiusercontent.com", "openai.com"]
+    },
+    "gemini": {
+      "domain": ["aistudio.google.com", "gemini.google.com", "generativelanguage.googleapis.com"],
+      "domain_suffix": []
+    }
+  }
+}

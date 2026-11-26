@@ -27,7 +27,14 @@ trap cleanup EXIT
 rm -rf "$OUT" && mkdir -p "$OUT/creds"
 cat > "$OUT/settings.json" <<'JSON'
 {
-  "client_policy": {"domain_suffix": ["target.test"], "direct_dns": "127.0.0.11"},
+  "client_policy": {
+    "domain_suffix": ["target.test"], "direct_dns": "127.0.0.11",
+    "domain_groups": {
+      "claude": {"enabled": true, "domain_suffix": ["claude-route.test"]},
+      "openai": {"enabled": true, "domain_suffix": ["openai-route.test"]},
+      "gemini": {"enabled": true, "domain": ["gemini-route.test"]}
+    }
+  },
   "cooldown_seconds": 3600,
   "monitor": {"egress_targets": ["http://target.test:8080/strict"],
               "entries": [{"name": "backup", "host": "10.88.0.5", "port": 9}]},
@@ -147,14 +154,14 @@ ux sh -c 'nohup aifree connect --interval 2 > /tmp/up.log 2>&1 &'
 for _ in $(seq 1 20); do ux aifree status 2>/dev/null | grep 'tunnel: running' >/dev/null && break; sleep 1; done
 ux aifree status
 wait_for_agent egress-hk "$HK_TOKEN" || status=1
-dx python3 /app/desktop_probe.py 10.99.0.7 10.88.0.60 || status=1
+dx python3 /app/desktop_probe.py 10.99.0.7 10.88.0.60 --routing-groups || status=1
 
 echo "-- admin moves hana to jp-1 in one step; the client follows without doing anything"
 cpctl reassign hana 10.99.0.15 >/dev/null
 wait_for_agent egress-jp "$JP_TOKEN" || status=1
 for _ in $(seq 1 20); do dx grep 'config updated' /tmp/up.log >/dev/null && break; sleep 1; done
 sleep 2
-dx python3 /app/desktop_probe.py 10.99.0.15 10.88.0.60 || status=1
+dx python3 /app/desktop_probe.py 10.99.0.15 10.88.0.60 --routing-groups || status=1
 check "client stayed up through the move (never saw an unassigned user)" \
   "dx pgrep -x aifree >/dev/null && ! dx grep -E 'stopping|no exit' /tmp/up.log >/dev/null"
 

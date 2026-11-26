@@ -2,7 +2,7 @@ FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY *.go schema.sql console.html account.html account_email.html desktop_downloads.js sqlite_export.py ./
+COPY *.go schema.sql console.html account.html account_email.html desktop_downloads.js sqlite_export.py routing-presets.json ./
 COPY install ./install
 COPY locales ./locales
 RUN CGO_ENABLED=0 go build -trimpath -o /out/cc-controlplane .

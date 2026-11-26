@@ -79,7 +79,7 @@ services:
     networks:
       wan:
         ipv4_address: 10.99.0.10
-        aliases: [target.test, other.test]
+        aliases: [target.test, other.test, api.claude-route.test, openai-route.test, gemini-route.test]
 
   egress-hk:
     <<: *agent
@@ -104,14 +104,14 @@ services:
     healthcheck: { test: ["CMD", "test", "-f", "/tmp/ready"], interval: 1s, retries: 30 }
     networks: { lan: { ipv4_address: 10.88.0.30 } }
 
-  # The real client: aifree (client/cli) built for Linux, running a TUN in app mode as root.
+  # The Linux aifree client with a privileged TUN supervisor.
   desktop:
     build: { context: ../../client, dockerfile: test/Dockerfile }
     image: cp-e2e-ccproxy
     profiles: [desktop]
     cap_add: [NET_ADMIN]
     devices: ["/dev/net/tun:/dev/net/tun"]
-    extra_hosts: ["other.test:10.99.0.10"]   # a non-rule name the client must leave alone
+    extra_hosts: ["other.test:10.99.0.10", "child.gemini-route.test:10.99.0.10"]
     init: true   # reap exited aifree processes so pgrep sees them gone
     # Like a real OS: the system resolver is an upstream server reached via the default route (here an off-link
     # address), so the TUN can hijack its queries. Docker's 127.0.0.11 is loopback and would bypass the TUN.

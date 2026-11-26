@@ -2,7 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +31,171 @@ func TestSettingsStoreWebURLsAsProxiedDomains(t *testing.T) {
 		_, err := normalizeProxiedDomains([]string{rule})
 		wantStatus(t, err, 400)
 	}
+}
+
+func TestRoutingGroupNormalization(t *testing.T) {
+	groups, err := normalizeRoutingGroups(json.RawMessage(`{
+		"claude":{"enabled":true,"domain":["https://Clau.de/","clau.de"],
+		          "domain_suffix":[".Claude.AI","claude.ai"]},
+		"gemini":{"enabled":false,"domain":["gemini.google.com"]}
+	}`))
+	require(t, err)
+	if !groups["claude"].Enabled ||
+		!slices.Equal(groups["claude"].Domain, []string{"clau.de"}) ||
+		!slices.Equal(groups["claude"].DomainSuffix, []string{"claude.ai"}) ||
+		groups["gemini"].Enabled {
+		t.Fatalf("unexpected grouped rules: %+v", groups)
+	}
+	for _, raw := range []string{
+		`null`,
+		`{"other":{"enabled":true}}`,
+		`{"claude":null}`,
+		`{"claude":{"domain":["invalid host"]}}`,
+		`{"claude":{"domain_keyword":["claude"]}}`,
+	} {
+		_, err := normalizeRoutingGroups(json.RawMessage(raw))
+		wantStatus(t, err, http.StatusBadRequest)
+	}
+}
+
+func TestRoutingGroupsPreserveLegacySettingsAndNegotiateExactHosts(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	testHost(t, s, "exit", "203.0.113", 20443)
+	require(t, s.addUser(ctx, "alice", testPassword, "shared", 5))
+	_, err := s.assign(ctx, "alice", assignment{Host: "exit"}, false)
+	require(t, err)
+	token, err := s.addDevice(ctx, "alice", "client", "macos")
+	require(t, err)
+	handler := newAPI(s, testAdminToken, "", nil)
+	request := func(method, path, credential, body, etag string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+credential)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if etag != "" {
+			req.Header.Set("If-None-Match", etag)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Fatalf("%s %s returned %d, want %d (%s)", method, path, rec.Code, want, rec.Body)
+		}
+		return rec
+	}
+	put := func(body string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		return request("PUT", "/admin/settings", testAdminToken, body, "", want)
+	}
+	config := func(query, etag string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		return request("GET", "/v1/config?"+query, token, "", etag, want)
+	}
+	legacy := `{"client_policy":{"domain_suffix":["custom.example","claude.ai"],"block_quic":true}}`
+	put(legacy, http.StatusOK)
+	previous := config("mode=app", "", http.StatusOK)
+	put(`{"client_policy":{"domain_suffix":["custom.example","claude.ai"],"block_quic":true,
+		"domain_groups":{"claude":{"enabled":false,"domain":["clau.de"]}}}}`, http.StatusOK)
+	config("mode=app&exact_domains=1", previous.Header().Get("ETag"), http.StatusNotModified)
+
+	put(`{"client_policy":{"domain_suffix":["custom.example","claude.ai"],"block_quic":true,"domain_groups":{
+		"claude":{"enabled":true,"domain":["clau.de"],"domain_suffix":["claude.ai","anthropic.com"]},
+		"openai":{"enabled":true,"domain_suffix":["chatgpt.com"]},
+		"gemini":{"enabled":true,"domain":["gemini.google.com"]}
+	}}}`, http.StatusOK)
+	// An older settings client still submits only the flat policy.
+	put(legacy, http.StatusOK)
+	current := config("mode=app&exact_domains=1", "", http.StatusOK)
+	oldClient := config("mode=app", "", http.StatusOK)
+	type dnsRule struct {
+		Server string   `json:"server"`
+		Suffix []string `json:"domain_suffix"`
+		Domain []string `json:"domain"`
+	}
+	fakeIP := func(rec *httptest.ResponseRecorder) (suffix, exact []string) {
+		t.Helper()
+		var cfg struct {
+			DNS struct{ Rules []dnsRule }
+		}
+		require(t, json.Unmarshal(rec.Body.Bytes(), &cfg))
+		for _, rule := range cfg.DNS.Rules {
+			if rule.Server == "fakeip" {
+				suffix = append(suffix, rule.Suffix...)
+				exact = append(exact, rule.Domain...)
+			}
+		}
+		return suffix, exact
+	}
+	for _, rec := range []*httptest.ResponseRecorder{current, oldClient} {
+		suffixes, exact := fakeIP(rec)
+		if !slices.Equal(suffixes, []string{"custom.example", "claude.ai", "anthropic.com", "chatgpt.com"}) {
+			t.Fatalf("unexpected generated suffix rules: %v", suffixes)
+		}
+		if rec == oldClient && len(exact) != 0 || rec == current && !slices.Equal(exact, []string{"clau.de", "gemini.google.com"}) {
+			t.Fatalf("wrong exact-rule capability behavior: %v", exact)
+		}
+	}
+	put(`{"client_policy":{"domain_groups":{"claude":{"domain":["invalid host"]}}}}`, http.StatusBadRequest)
+	config("mode=app&exact_domains=1", current.Header().Get("ETag"), http.StatusNotModified)
+	unchangedProxy := config("mode=proxy", "", http.StatusOK)
+	config("mode=proxy&exact_domains=1", unchangedProxy.Header().Get("ETag"), http.StatusNotModified)
+
+	put(`{"client_policy":{"domain_suffix":["custom.example","claude.ai"],"block_quic":true,"domain_groups":{
+		"claude":{"enabled":false,"domain":["clau.de"],"domain_suffix":["claude.ai","anthropic.com"]},
+		"openai":{"enabled":true,"domain_suffix":["chatgpt.com"]},
+		"gemini":{"enabled":true,"domain":["gemini.google.com"]}
+	}}}`, http.StatusOK)
+	changed := config("mode=app&exact_domains=1", current.Header().Get("ETag"), http.StatusOK)
+	suffixes, exact := fakeIP(changed)
+	if !slices.Equal(suffixes, []string{"custom.example", "claude.ai", "chatgpt.com"}) ||
+		!slices.Equal(exact, []string{"gemini.google.com"}) {
+		t.Fatalf("disabling a group changed other rules: suffixes %v, exact %v", suffixes, exact)
+	}
+
+	longDomains := func(prefix string) []string {
+		domains := make([]string, 500)
+		for i := range domains {
+			domains[i] = fmt.Sprintf("%s%03d%s.%s.%s.%s", prefix, i, strings.Repeat("a", 59),
+				strings.Repeat("b", 63), strings.Repeat("c", 63), strings.Repeat("d", 61))
+		}
+		return domains
+	}
+	largeGroups, err := json.Marshal(map[string]routingGroup{"claude": {
+		Enabled: true, Domain: longDomains("e"), DomainSuffix: longDomains("s"),
+	}})
+	require(t, err)
+	rejected := put(`{"client_policy":{"domain_groups":`+string(largeGroups)+`}}`, http.StatusBadRequest)
+	if !strings.Contains(rejected.Body.String(), "1 MiB size limit") {
+		t.Fatalf("expected the config size limit, got %s", rejected.Body)
+	}
+	config("mode=app&exact_domains=1", changed.Header().Get("ETag"), http.StatusNotModified)
+
+	put(`{"client_policy":{"domain_suffix":[],"domain_groups":{
+		"gemini":{"enabled":true,"domain":["gemini.google.com"]}
+	}}}`, http.StatusOK)
+	for _, mode := range []string{"app", "domain"} {
+		query := "mode=" + mode
+		compatible := config(query, oldClient.Header().Get("ETag"), http.StatusOK)
+		suffixes, exact := fakeIP(compatible)
+		var legacyConfig struct {
+			Route struct{ Final string }
+		}
+		require(t, json.Unmarshal(compatible.Body.Bytes(), &legacyConfig))
+		if len(suffixes)+len(exact) != 0 || legacyConfig.Route.Final != "direct" {
+			t.Fatalf("exact-only policy should keep suffix-only %s clients connected with direct routing", mode)
+		}
+		config(query, compatible.Header().Get("ETag"), http.StatusNotModified)
+		suffixes, exact = fakeIP(config(query+"&exact_domains=1", compatible.Header().Get("ETag"), http.StatusOK))
+		if len(suffixes) != 0 || !slices.Equal(exact, []string{"gemini.google.com"}) {
+			t.Fatalf("exact-capable %s client lost its exact rule", mode)
+		}
+	}
+
+	put(`{"client_policy":{"domain_groups":{"gemini":{"enabled":false,"domain":["gemini.google.com"]}}}}`, http.StatusOK)
+	config("mode=app", "", http.StatusConflict)
+	config("mode=domain&exact_domains=1", "", http.StatusConflict)
 }
 
 func TestDefaultHandshakeFollowsSNIAndPreservesAnOverride(t *testing.T) {

@@ -197,6 +197,7 @@ type settings struct {
 	Alerts            json.RawMessage `json:"alerts"`
 	SubscriptionGrace float64         `db:"subscription_grace_seconds" json:"subscription_grace_seconds"`
 	MailboxQuota      int             `db:"mailbox_quota" json:"mailbox_quota"`
+	RoutingPresets    json.RawMessage `db:"-" json:"routing_presets,omitempty"`
 }
 
 func loadSettings(ctx context.Context, db database) (settings, error) {
@@ -252,9 +253,19 @@ func settingsPatch(body fields) (map[string]any, error) {
 				if err != nil {
 					return nil, err
 				}
-				values[key] = policy
-				continue
 			}
+			if rawGroups, ok := policy["domain_groups"]; ok {
+				groups, err := normalizeRoutingGroups(rawGroups)
+				if err != nil {
+					return nil, err
+				}
+				policy["domain_groups"], err = json.Marshal(groups)
+				if err != nil {
+					return nil, err
+				}
+			}
+			values[key] = policy
+			continue
 		case "monitor":
 			var monitor monitorSettings
 			if err := json.Unmarshal(raw, &monitor); err != nil {
@@ -279,6 +290,13 @@ func settingsPatch(body fields) (map[string]any, error) {
 
 func setSettings(ctx context.Context, db database, values map[string]any) error {
 	for key, value := range values {
+		if key == "client_policy" {
+			if policy, ok := value.(fields); ok {
+				if err := validateRoutingPolicyChange(ctx, db, policy); err != nil {
+					return err
+				}
+			}
+		}
 		if _, err := db.Exec(ctx, `INSERT INTO settings(key, value) VALUES ($1, $2)
 			ON CONFLICT (key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
 			return err
