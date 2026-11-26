@@ -179,6 +179,21 @@ fn a_crashed_app_takes_frpc_down() {
 }
 
 #[test]
+fn the_stop_request_takes_frpc_down_while_the_controller_is_busy() {
+    let e = env("requested-stop");
+    let mut guard = guard(&e, Stdio::piped());
+    wait_for("ready", || state_of(&e.paths).as_deref() == Some("ready"));
+    let pid = launches(&e.paths)[0];
+
+    ccproxy_core::commands::Tunnel::default().request_stop(&e.paths).unwrap();
+
+    assert!(exited_within(&mut guard, Duration::from_secs(5)).unwrap().success());
+    assert!(!alive(pid));
+    assert_eq!(state_of(&e.paths).as_deref(), Some("stopped"));
+    cleanup(&e);
+}
+
+#[test]
 fn sign_out_removes_the_files_and_stops_the_visitor() {
     let e = env("signout");
     let mut g = guard(&e, Stdio::piped());

@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 
 const POLL: Duration = Duration::from_millis(250);
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(5);
-const STOP_TIMEOUT: Duration = Duration::from_secs(12);
+// The other frontend may have two control-plane requests in flight before it releases the connection.
+const STOP_TIMEOUT: Duration = Duration::from_secs(50);
 
 #[derive(Parser)]
 #[command(name = "aifree", version = option_env!("AIFREE_RELEASE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
@@ -403,11 +404,9 @@ fn run_client(
         .request_stop(paths)
         .and_then(|_| wait_for_stop(paths, false));
     if let Some(mut child) = fx.supervisor.into_inner() {
-        if !matches!(child.try_wait(), Ok(Some(_))) {
-            // The stop request also covers a supervisor that starts after authorization completes.
-            if child.kill().is_ok() {
-                let _ = child.wait();
-            }
+        // The stop request also covers a supervisor that starts after authorization completes.
+        if !matches!(child.try_wait(), Ok(Some(_))) && child.kill().is_ok() {
+            let _ = child.wait();
         }
     }
     result.and(cleanup)

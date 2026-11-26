@@ -637,7 +637,7 @@ pub fn run_guard(paths: &Paths, frpc: &Path, stdin_eof: Arc<AtomicBool>, route_k
                 break Err(anyhow!(message));
             }
         }
-        if stdin_eof.load(Ordering::SeqCst) {
+        if stdin_eof.load(Ordering::SeqCst) || fs::symlink_metadata(paths.stop()).is_ok() {
             terminate(&mut child);
             g.status("stopped", None, "stopped by the app");
             break Ok(());
