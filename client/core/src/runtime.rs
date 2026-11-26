@@ -51,6 +51,7 @@ pub struct TunnelSpec {
     pub public_key: String,
     pub short_id: String,
     pub domains: Vec<String>,
+    pub exact_domains: Vec<String>,
     pub process_names: Vec<String>,
     pub process_paths: Vec<String>,
     pub block_quic: bool,
@@ -197,12 +198,17 @@ pub fn extract(v: &Value) -> Result<TunnelSpec> {
 
     // Rules: domains from the fake-IP DNS rule, processes and QUIC blocking from the route rules.
     let mut domains = Vec::new();
+    let mut exact_domains = Vec::new();
     for rule in v.pointer("/dns/rules").and_then(|r| r.as_array()).into_iter().flatten() {
         if rule.get("server").and_then(|x| x.as_str()) == Some("fakeip") {
-            domains = string_list(rule.get("domain_suffix"), "domain_suffix")?;
+            domains.extend(string_list(rule.get("domain_suffix"), "domain_suffix")?);
+            exact_domains.extend(string_list(rule.get("domain"), "domain")?);
         }
     }
-    for d in &domains {
+    if domains.len() > MAX_RULE_ITEMS || exact_domains.len() > MAX_RULE_ITEMS {
+        bail!("config: too many domain rules");
+    }
+    for d in domains.iter().chain(&exact_domains) {
         if !valid_domain(d) {
             bail!("config: a rule domain is not a plain domain name");
         }
@@ -246,6 +252,7 @@ pub fn extract(v: &Value) -> Result<TunnelSpec> {
         public_key,
         short_id,
         domains,
+        exact_domains,
         process_names,
         process_paths,
         block_quic,
@@ -304,14 +311,14 @@ pub fn render_exit_probe(client_config: &[u8], active_egress: &str) -> Result<Va
 /// The sing-box config for a spec. `cache_path` is set only for the protected copy the supervisor runs.
 pub fn render(spec: &TunnelSpec, cache_path: Option<&Path>) -> Value {
     let mut dns_rules = Vec::new();
-    if !spec.domains.is_empty() {
-        dns_rules.push(json!({"domain_suffix": spec.domains, "query_type": ["AAAA"], "action": "predefined",
-                              "rcode": "NOERROR"}));
-        dns_rules.push(json!({"domain_suffix": spec.domains, "server": "fakeip"}));
-    }
     let mut matchers = Vec::new();
-    if !spec.domains.is_empty() {
-        matchers.push(json!({"domain_suffix": spec.domains}));
+    for (kind, domains) in [("domain_suffix", &spec.domains), ("domain", &spec.exact_domains)] {
+        if domains.is_empty() {
+            continue;
+        }
+        dns_rules.push(json!({(kind): domains, "query_type": ["AAAA"], "action": "predefined", "rcode": "NOERROR"}));
+        dns_rules.push(json!({(kind): domains, "server": "fakeip"}));
+        matchers.push(json!({(kind): domains}));
     }
     matchers.push(json!({"ip_cidr": [FAKEIP_RANGE]}));
     if !spec.process_names.is_empty() {

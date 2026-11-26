@@ -18,7 +18,7 @@ use std::process::Command;
 pub const TUN_DNS: &str = "172.19.0.2";
 const MARK: &str = "# managed by ccproxy";
 
-/// Rule domains of a sing-box client config: the domain_suffix lists of DNS rules answered by the fake-IP server.
+/// DNS names that need a scoped resolver for the client config's fake-IP rules.
 pub fn rule_domains(config: &serde_json::Value) -> Vec<String> {
     let mut out = Vec::new();
     let rules = config.pointer("/dns/rules").and_then(|r| r.as_array()).cloned().unwrap_or_default();
@@ -26,10 +26,12 @@ pub fn rule_domains(config: &serde_json::Value) -> Vec<String> {
         if rule.get("server").and_then(|s| s.as_str()) != Some("fakeip") {
             continue;
         }
-        for d in rule.get("domain_suffix").and_then(|d| d.as_array()).into_iter().flatten() {
-            if let Some(name) = d.as_str().map(|s| s.trim_start_matches('.').to_ascii_lowercase()) {
-                if valid_domain(&name) && !out.contains(&name) {
-                    out.push(name);
+        for kind in ["domain_suffix", "domain"] {
+            for d in rule.get(kind).and_then(|d| d.as_array()).into_iter().flatten() {
+                if let Some(name) = d.as_str().map(|s| s.trim_start_matches('.').to_ascii_lowercase()) {
+                    if valid_domain(&name) && !out.contains(&name) {
+                        out.push(name);
+                    }
                 }
             }
         }
@@ -161,9 +163,10 @@ mod tests {
         let cfg = serde_json::json!({"dns": {"rules": [
             {"domain_suffix": ["echo.example.com"], "query_type": ["AAAA"], "action": "predefined"},
             {"domain_suffix": ["echo.example.com", ".Other.example.org", "../../etc/passwd", "localhost"], "server": "fakeip"},
+            {"domain": ["echo.example.com", "Gemini.example.net"], "server": "fakeip"},
             {"domain_suffix": ["direct.example.net"], "server": "direct-dns"}
         ]}});
-        assert_eq!(rule_domains(&cfg), vec!["echo.example.com", "other.example.org"]);
+        assert_eq!(rule_domains(&cfg), vec!["echo.example.com", "other.example.org", "gemini.example.net"]);
     }
 
     #[test]

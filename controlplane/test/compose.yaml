@@ -79,7 +79,7 @@ services:
     networks:
       wan:
         ipv4_address: 10.99.0.10
-        aliases: [target.test, other.test]
+        aliases: [target.test, other.test, api.claude-route.test, openai-route.test, gemini-route.test]
 
   egress-hk:
     <<: *agent
@@ -111,7 +111,7 @@ services:
     profiles: [desktop]
     cap_add: [NET_ADMIN]
     devices: ["/dev/net/tun:/dev/net/tun"]
-    extra_hosts: ["other.test:10.99.0.10"]   # a non-rule name the client must leave alone
+    extra_hosts: ["other.test:10.99.0.10", "child.gemini-route.test:10.99.0.10"]
     init: true   # reap exited ccproxy processes so pgrep sees them gone
     # Like a real OS: the system resolver is an upstream server reached via the default route (here an off-link
     # address), so the TUN can hijack its queries. Docker's 127.0.0.11 is loopback and would bypass the TUN.
