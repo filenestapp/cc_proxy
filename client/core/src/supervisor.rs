@@ -257,8 +257,14 @@ impl Supervisor {
     fn load(&mut self) -> Result<bool> {
         let raw = runtime::read_client_config(&self.o.client_config)?;
         let (spec, mut protected) = runtime::accept(&raw, &self.o.cache())?;
-        if spec.stun.is_some() && spec.server == visitor::BIND_ADDR {
-            if let Some(frpc) = self.o.bundled_frpc.as_deref().and_then(Path::to_str) {
+        if spec.stun.is_some() {
+            // Linux policy routes alone miss sockets bound to a physical IPv6 address.
+            if cfg!(target_os = "linux") {
+                protected["inbounds"][0]["auto_redirect"] = Value::Bool(true);
+            }
+            if let Some(frpc) = self.o.bundled_frpc.as_deref().and_then(Path::to_str)
+                .filter(|_| spec.server == visitor::BIND_ADDR)
+            {
                 // The XTCP visitor uses IPv4 STUN before it can carry traffic. The
                 // supervisor grants that exception by exact path in its protected copy.
                 protected["route"]["rules"].as_array_mut().expect("rendered route rules").insert(

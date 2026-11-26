@@ -6,15 +6,17 @@ import socket
 import sys
 
 ECHO_V4 = "10.99.0.10"
-ECHO_V6 = "fd10:99::10"
+ECHO_V6 = "2001:db8:99::10"
 CLIENT_V4 = "10.88.0.60"
-CLIENT_V6 = "fd10:88::60"
+CLIENT_V6 = "2001:db8:88::60"
 COOKIE = bytes.fromhex("2112a442")
 
 
-def exchange(host, port, packet):
+def exchange(host, port, packet, source=None):
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
     with socket.socket(family, socket.SOCK_DGRAM) as sock:
+        if source:
+            sock.bind((source, 0))
         sock.settimeout(3)
         try:
             sock.connect((host, port))
@@ -28,9 +30,9 @@ def exchange(host, port, packet):
             return None
 
 
-def stun_address(host, port):
+def stun_address(host, port, source=None):
     request = b"\x00\x01\x00\x00" + COOKIE + secrets.token_bytes(12)
-    reply = exchange(host, port, request)
+    reply = exchange(host, port, request, source)
     if reply is None:
         return None
     if reply[:2] != b"\x01\x01" or reply[4:20] != request[4:20] or reply[20:22] != b"\x00\x20":
@@ -51,7 +53,9 @@ def main():
     checks = [
         (f"{case}: unmatched IPv4 STUN", stun_address(ECHO_V4, 3478), expected_v4),
         (f"{case}: unmatched IPv4 STUN on UDP 443", stun_address(ECHO_V4, 443), expected_v4),
+        (f"{case}: IPv4 STUN bound to the LAN address", stun_address(ECHO_V4, 3478, CLIENT_V4), expected_v4),
         (f"{case}: IPv6 STUN", stun_address(ECHO_V6, 3478), expected_v6),
+        (f"{case}: IPv6 STUN bound to the LAN address", stun_address(ECHO_V6, 3478, CLIENT_V6), expected_v6),
         (f"{case}: unmatched plain IPv4 UDP 443", exchange(ECHO_V4, 443, b"ping"), CLIENT_V4.encode()),
         (f"{case}: unmatched plain IPv6 UDP", exchange(ECHO_V6, 9090, b"ping"),
          None if case == "direct" else CLIENT_V6.encode()),

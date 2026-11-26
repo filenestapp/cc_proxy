@@ -103,7 +103,7 @@ The bundle identifier is `sg.aifree.desktop`. macOS treats it as a new app relat
 
 ### WebRTC and STUN
 
-In app mode, compatible clients request `stun=1` from the control plane. The default policy sends new UDP flows that start with an RFC 5389 STUN message through the exit, regardless of process or destination port. STUN on UDP 443 takes precedence over the QUIC block. The dual-stack TUN captures IPv6 internet traffic, and the IPv4-only exit refuses IPv6 destinations.
+In app mode, compatible clients request `stun=1` from the control plane. The default policy sends new UDP flows that start with an RFC 5389 STUN message through the exit, regardless of destination port. STUN on UDP 443 takes precedence over the QUIC block. The dual-stack TUN captures IPv6 internet traffic, and the IPv4-only exit refuses IPv6 destinations. The Linux supervisor enables sing-box's native packet redirection so sockets bound to an interface address also reach the TUN.
 
 An administrator can update `client_policy.stun` in the console under **Settings → Client routing policy → WebRTC (STUN)** or via `PUT /admin/settings` with `{"client_policy":{"stun":"reject"}}` (substitute the desired value). The client applies the policy during config sync.
 

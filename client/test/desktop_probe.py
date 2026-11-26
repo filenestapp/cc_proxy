@@ -38,9 +38,9 @@ def http(host):
         return "ERR(%s)" % e.__class__.__name__
 
 
-def route_dev(dst):
-    parts = subprocess.run(["ip", "route", "get", dst], capture_output=True, text=True).stdout.split()
-    return parts[parts.index("dev") + 1] if "dev" in parts else "?"
+def tunnel_interfaces():
+    lines = subprocess.check_output(["ip", "-o", "link", "show"], text=True).splitlines()
+    return [line.split()[1].rstrip(":") for line in lines if line.split()[1].startswith("tun")]
 
 
 egress, me = sys.argv[1], sys.argv[2]
@@ -49,7 +49,8 @@ check("target.test (rule domain) gets a fake IP", a, not a.startswith("ERR") and
 check("other names still resolve (DNS hijacked, sent direct)", resolve("cp"), resolve("cp") == "10.88.0.5")
 check("target.test leaves via the user's exit IP", http("target.test"), http("target.test") == egress)
 check("other.test is not proxied", http("other.test"), http("other.test") == me)
-check("default route goes through the TUN (app mode)", route_dev("1.1.1.1"), route_dev("1.1.1.1").startswith("tun"))
+interfaces = tunnel_interfaces()
+check("TUN interface is present in app mode", interfaces, bool(interfaces))
 if "--routing-groups" in sys.argv[3:]:
     for host in ("api.claude-route.test", "openai-route.test", "gemini-route.test"):
         address = resolve(host)

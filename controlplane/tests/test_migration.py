@@ -111,8 +111,10 @@ class MigrationTest(tc.ServerFixture):
         self.assertEqual(self.req("GET", "/healthz")[2]["version"], 42)
         self.assertEqual(self.req("GET", "/admin/session", headers={"Cookie": "cp_session=" + COOKIE})[2]["csrf"], "old-csrf")
         configs = [("/agent/server-config", AGENT, gen.build_server(self.inventory))]
-        configs.extend(("/v1/config?mode=" + mode, DEVICE, gen.build_client(self.inventory, "desk&<>", mode=mode))
+        legacy = {**self.inventory, "client_policy": {**self.inventory["client_policy"], "stun": "direct"}}
+        configs.extend(("/v1/config?mode=" + mode, DEVICE, gen.build_client(legacy, "desk&<>", mode=mode))
                        for mode in ("proxy", "domain", "app"))
+        configs.append(("/v1/config?mode=app&stun=1", DEVICE, gen.build_client(self.inventory, "desk&<>", mode="app")))
         for path, token, cfg in configs:
             with self.subTest(path=path):
                 expected = config_bytes(cfg)

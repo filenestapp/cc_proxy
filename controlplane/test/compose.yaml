@@ -70,16 +70,16 @@ services:
 
   echo:
     image: python:3.12-alpine
-    environment: { BLOCK_IPS: 10.99.0.6, ECHO_IPV6: "fd10:99::10" }   # /strict refuses frank's IP
+    environment: { BLOCK_IPS: 10.99.0.6, ECHO_IPV6: "2001:db8:99::10" }   # /strict refuses frank's IP
     cap_add: [NET_ADMIN]
     entrypoint: ["/bin/sh", "-c"]
     # Route back to the user LAN through egress-hk, which doubles as the LAN's internet router (direct traffic).
-    command: ["ip route add 10.88.0.0/24 via 10.99.0.2 && ip -6 route add fd10:88::/64 via fd10:99::2 && exec python -u /app/echo.py"]
+    command: ["ip route add 10.88.0.0/24 via 10.99.0.2 && ip -6 route add 2001:db8:88::/64 via 2001:db8:99::2 && exec python -u /app/echo.py"]
     volumes: ["../../egress/test/echo.py:/app/echo.py:ro"]
     networks:
       wan:
         ipv4_address: 10.99.0.10
-        ipv6_address: "fd10:99::10"
+        ipv6_address: "2001:db8:99::10"
         aliases: [target.test, other.test, api.claude-route.test, openai-route.test, gemini-route.test]
 
   egress-hk:
@@ -88,8 +88,8 @@ services:
     # Also the LAN's router to the WAN for the desktop client's direct traffic.
     sysctls: { net.ipv4.ip_forward: 1, net.ipv6.conf.all.forwarding: 1 }
     networks:
-      lan: { ipv4_address: 10.88.0.2, ipv6_address: "fd10:88::2" }
-      wan: { ipv4_address: 10.99.0.2, ipv6_address: "fd10:99::2" }
+      lan: { ipv4_address: 10.88.0.2, ipv6_address: "2001:db8:88::2" }
+      wan: { ipv4_address: 10.99.0.2, ipv6_address: "2001:db8:99::2" }
 
   egress-jp:
     <<: *agent
@@ -117,11 +117,11 @@ services:
     init: true   # reap exited aifree processes so pgrep sees them gone
     # Like a real OS: the system resolver is an upstream server reached via the default route (here an off-link
     # address), so the TUN can hijack its queries. Docker's 127.0.0.11 is loopback and would bypass the TUN.
-    command: ["/bin/sh", "-c", "ip route replace default via 10.88.0.2 && ip -6 route replace default via fd10:88::2 && echo 'nameserver 192.0.2.53' > /etc/resolv.conf && exec sleep infinity"]
+    command: ["/bin/sh", "-c", "ip route replace default via 10.88.0.2 && ip -6 route replace default via 2001:db8:88::2 && echo 'nameserver 192.0.2.53' > /etc/resolv.conf && exec sleep infinity"]
     volumes:
       - "../../client/test/desktop_probe.py:/app/desktop_probe.py:ro"
       - "../../client/test/stun_probe.py:/app/stun_probe.py:ro"
-    networks: { lan: { ipv4_address: 10.88.0.60, ipv6_address: "fd10:88::60" } }
+    networks: { lan: { ipv4_address: 10.88.0.60, ipv6_address: "2001:db8:88::60" } }
 
   sink:
     image: python:3.12-alpine
@@ -145,13 +145,13 @@ networks:
     ipam:
       config:
         - { subnet: 10.88.0.0/24, gateway: 10.88.0.1, ip_range: 10.88.0.128/25 }
-        - { subnet: "fd10:88::/64", gateway: "fd10:88::1", ip_range: "fd10:88:0:0:8000::/65" }
+        - { subnet: "2001:db8:88::/64", gateway: "2001:db8:88::1", ip_range: "2001:db8:88:0:8000::/65" }
   wan:
     enable_ipv6: true
     ipam:
       config:
         - { subnet: 10.99.0.0/24, gateway: 10.99.0.1, ip_range: 10.99.0.128/25 }
-        - { subnet: "fd10:99::/64", gateway: "fd10:99::1", ip_range: "fd10:99:0:0:8000::/65" }
+        - { subnet: "2001:db8:99::/64", gateway: "2001:db8:99::1", ip_range: "2001:db8:99:0:8000::/65" }
 
 volumes:
   db-data:

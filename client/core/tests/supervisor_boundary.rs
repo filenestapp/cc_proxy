@@ -100,7 +100,13 @@ fn only_the_protected_xtcp_config_exempts_bundled_frpc_stun() {
     env.write_client(&public);
     let handle = std::thread::spawn(move || supervisor::run(opts));
     env.wait("public route", |e| e.status().is_some_and(|s| s.state == "running"));
-    assert_eq!(env.protected()["route"]["rules"], public["route"]["rules"]);
+    let protected_public = env.protected();
+    assert_eq!(protected_public["route"]["rules"], public["route"]["rules"]);
+    if cfg!(target_os = "linux") {
+        assert_eq!(protected_public["inbounds"][0]["auto_redirect"], true);
+    } else {
+        assert!(protected_public["inbounds"][0].get("auto_redirect").is_none());
+    }
 
     env.write_client(&xtcp);
     env.wait("protected XTCP route", |e| e.status().is_some_and(|s| s.route_generation == 2));
