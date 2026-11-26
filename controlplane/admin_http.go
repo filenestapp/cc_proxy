@@ -153,7 +153,9 @@ func (a *api) auditList(r *apiRequest) (response, error) {
 }
 
 func (a *api) settingsGet(r *apiRequest) (response, error) {
-	return ok(loadSettings(r.Context(), a.store.pool))
+	settings, err := loadSettings(r.Context(), a.store.pool)
+	settings.RoutingPresets = routingPresets
+	return ok(settings, err)
 }
 
 func (a *api) settingsPut(r *apiRequest) (response, error) {

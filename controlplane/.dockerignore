@@ -4,6 +4,7 @@
 !go.sum
 !schema.sql
 !console.html
+!routing-presets.json
 !account.html
 !account_email.html
 !desktop_downloads.js

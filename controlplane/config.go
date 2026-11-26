@@ -157,11 +157,13 @@ func buildServerConfig(h host, users []boundUser, devices []credential) configOb
 }
 
 type clientPolicy struct {
-	DomainSuffix []string `json:"domain_suffix"`
-	ProcessName  []string `json:"process_name"`
-	ProcessPath  []string `json:"process_path"`
-	BlockQUIC    bool     `json:"block_quic"`
-	DirectDNS    string   `json:"direct_dns"`
+	DomainSuffix []string                `json:"domain_suffix"`
+	DomainGroups map[string]routingGroup `json:"domain_groups"`
+	DomainExact  []string                `json:"-"`
+	ProcessName  []string                `json:"process_name"`
+	ProcessPath  []string                `json:"process_path"`
+	BlockQUIC    bool                    `json:"block_quic"`
+	DirectDNS    string                  `json:"direct_dns"`
 }
 
 var proxiedDomainLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -196,7 +198,7 @@ func normalizeProxiedDomains(rules []string) ([]string, error) {
 	return domains, nil
 }
 
-func clientConfig(ctx context.Context, db database, identity deviceIdentity, mode string) (renderedConfig, error) {
+func clientConfig(ctx context.Context, db database, identity deviceIdentity, mode string, exactSupported bool) (renderedConfig, error) {
 	var u boundUser
 	var h host
 	var d credential
@@ -233,6 +235,9 @@ func clientConfig(ctx context.Context, db database, identity deviceIdentity, mod
 		if err != nil {
 			return renderedConfig{}, err
 		}
+		if err := policy.applyDomainGroups(exactSupported); err != nil {
+			return renderedConfig{}, err
+		}
 	}
 	cfg, err := buildClientConfig(h, u, d, policy, mode)
 	if err != nil {
@@ -258,10 +263,11 @@ func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy
 			{"outbounds", outbounds}, {"route", configObject{{"final", "egress"}}},
 		}, nil
 	}
-	if len(policy.DomainSuffix) == 0 && mode == "domain" {
+	domainCount := len(policy.DomainSuffix) + len(policy.DomainExact)
+	if domainCount == 0 && mode == "domain" {
 		return nil, failure(409, "client_policy.domain_suffix is empty; domain mode would tunnel nothing")
 	}
-	if len(policy.DomainSuffix)+len(policy.ProcessName)+len(policy.ProcessPath) == 0 {
+	if domainCount+len(policy.ProcessName)+len(policy.ProcessPath) == 0 {
 		return nil, failure(409, "client_policy has no process or domain rules; app mode would tunnel nothing")
 	}
 
@@ -271,11 +277,20 @@ func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy
 	} else {
 		tun = append(tun, configField{"strict_route", true})
 	}
-	dnsRules := make([]configObject, 0, 2)
-	if len(policy.DomainSuffix) != 0 {
+	dnsRules := make([]configObject, 0, 4)
+	matchers := make([]configField, 0, 5)
+	for _, domains := range []struct {
+		key   string
+		names []string
+	}{{"domain_suffix", policy.DomainSuffix}, {"domain", policy.DomainExact}} {
+		if len(domains.names) == 0 {
+			continue
+		}
+		match := configField{domains.key, domains.names}
 		dnsRules = append(dnsRules,
-			configObject{{"domain_suffix", policy.DomainSuffix}, {"query_type", []string{"AAAA"}}, {"action", "predefined"}, {"rcode", "NOERROR"}},
-			configObject{{"domain_suffix", policy.DomainSuffix}, {"server", "fakeip"}})
+			configObject{match, {"query_type", []string{"AAAA"}}, {"action", "predefined"}, {"rcode", "NOERROR"}},
+			configObject{match, {"server", "fakeip"}})
+		matchers = append(matchers, match)
 	}
 	directDNS := configObject{{"type", policy.DirectDNS}, {"tag", "direct-dns"}}
 	if policy.DirectDNS != "dhcp" && policy.DirectDNS != "local" {
@@ -286,10 +301,6 @@ func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy
 		{"rules", dnsRules}, {"final", "direct-dns"},
 	}
 	rules := []configObject{{{"action", "sniff"}}, {{"protocol", "dns"}, {"action", "hijack-dns"}}}
-	matchers := make([]configField, 0, 4)
-	if len(policy.DomainSuffix) != 0 {
-		matchers = append(matchers, configField{"domain_suffix", policy.DomainSuffix})
-	}
 	matchers = append(matchers, configField{"ip_cidr", []string{fakeIPRange}})
 	if mode == "app" && len(policy.ProcessName) != 0 {
 		matchers = append(matchers, configField{"process_name", policy.ProcessName})
