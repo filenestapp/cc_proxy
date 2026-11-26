@@ -19,7 +19,8 @@
 <meta property="og:url" content="https://aifree.sg/en/">
 <meta property="og:image" content="https://aifree.sg/assets/og.png">
 <meta property="og:locale" content="en_US">
-<link rel="stylesheet" href="/assets/site.css">
+<link rel="stylesheet" href="/assets/site.css?v=platform-downloads">
+<script defer src="/assets/site-session.js"></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -35,8 +36,9 @@
     </ul>
     <div class="actions">
       <a class="lang" href="/" hreflang="zh-CN" lang="zh-CN">中文</a>
-      <a class="btn btn-ghost btn-sm" href="https://app.aifree.sg/account/login">Log in</a>
-      <a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account/register">Sign up</a>
+      <a class="btn btn-ghost btn-sm" href="https://app.aifree.sg/account/login?lang=en" data-session-guest>Log in</a>
+      <a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account/register?lang=en" data-session-guest>Sign up</a>
+      <a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account?lang=en" data-session-account hidden>Account center</a>
     </div>
   </nav>
 </header>
@@ -205,7 +207,7 @@
       <details><summary>Does all my traffic go through you?</summary><p>No. The client sends only AI-related domains into the tunnel. Other sites go directly from your device and never reach our servers. Routing rules are maintained on our side and update automatically.</p></details>
       <details><summary>Can you guarantee my AI account won't be suspended?</summary><p>No, and no service can honestly promise that. AI providers manage accounts under their own terms. A stable, dedicated exit avoids the noise of sharing an IP with strangers, but you still need to follow the terms of the services you use and the law where you are.</p></details>
       <details><summary>How soon can I use it after paying?</summary><p>Residential IP plans are assigned automatically and usually connect within minutes. Standard and Premium get their residential IP the same way; the AI team-plan seat is set up by hand, and we'll email you when it's ready.</p></details>
-      <details><summary>Which systems are supported, and how many devices can I use?</summary><p>macOS (Apple silicon), Windows and Linux. The number of devices that can be signed in at once depends on your plan. You can see every device in the account center and sign any of them out.</p></details>
+      <details><summary>Which systems are supported, and how many devices can I use?</summary><p>macOS (Apple silicon and Intel), Windows and Linux. The number of devices that can be signed in at once depends on your plan. You can see every device in the account center and sign any of them out.</p></details>
       <details><summary>Can I get a different IP if mine has problems?</summary><p>Yes. If your exit IP stops working properly, email <a href="mailto:support@aifree.sg">support@aifree.sg</a>. Once we've checked, we'll replace it and the client switches over automatically.</p></details>
       <details><summary>How do I cancel? Can I get a refund?</summary><p>Select Manage subscription in the account center to cancel. You keep access until the end of the current period and won't be charged again. If we can't set up your service or it's unavailable for an extended time, contact support for a refund. See the <a href="/en/terms/">terms of service</a>.</p></details>
       <details><summary>What's the @aifree.sg mailbox?</summary><p>Paying customers can open a <code>yourname@aifree.sg</code> mailbox in the account center and use it on the web. It's disabled when your subscription ends.</p></details>
@@ -221,7 +223,7 @@
         <p>One client for three systems. Connection status, exit IP and device all live in one window, and it keeps running in the tray when you close it.</p>
       </div>
       <div class="oslist">
-        <a href="/en/download/#macos"><span>macOS</span><small>Apple silicon</small></a>
+        <a href="/en/download/#macos"><span>macOS</span><small>Apple silicon / Intel</small></a>
         <a href="/en/download/#windows"><span>Windows</span><small>Windows 10 / 11</small></a>
         <a href="/en/download/#linux"><span>Linux</span><small>deb / AppImage</small></a>
       </div>

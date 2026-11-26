@@ -308,8 +308,10 @@ func sendResponse(w http.ResponseWriter, resp response) {
 	}
 	if strings.HasPrefix(resp.contentType, "text/html") {
 		headers.Set("X-Frame-Options", "DENY")
-		headers.Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; "+
-			"style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
+		if headers.Get("Content-Security-Policy") == "" {
+			headers.Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; "+
+				"style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
+		}
 	}
 	headers.Set("Content-Type", resp.contentType)
 	headers.Set("Content-Length", strconv.Itoa(len(body)))

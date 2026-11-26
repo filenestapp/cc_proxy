@@ -24,7 +24,8 @@ jobs:
       matrix:
         include:
           - os: macos-15
-            target: aarch64-apple-darwin
+            target: universal-apple-darwin
+            rust-targets: aarch64-apple-darwin x86_64-apple-darwin
             bundles: app,dmg
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
@@ -48,7 +49,7 @@ jobs:
           SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: test -n "$UPDATER_PUBLIC_KEY" && test -n "$SIGNING_KEY"
       - name: Rust toolchain
-        run: rustup toolchain install stable --profile minimal && rustup target add ${{ matrix.target }}
+        run: rustup toolchain install stable --profile minimal && rustup target add ${{ matrix.rust-targets || matrix.target }}
       - name: Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -72,6 +73,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: npx --yes @tauri-apps/cli@2.12.6 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config tauri.release.conf.json -- --locked
+      - name: Verify the macOS app and sidecars run on both architectures
+        if: runner.os == 'macOS'
+        run: |
+          app="target/${{ matrix.target }}/release/bundle/macos/aifree.app/Contents"
+          main=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Info.plist")
+          for executable in "$main" ccproxy sing-box frpc; do
+            for arch in arm64 x86_64; do lipo -verify_arch "$arch" "$app/MacOS/$executable"; done
+          done
       - name: Sign Debian updater packages when Tauri does not create their signatures
         if: runner.os == 'Linux'
         env:
