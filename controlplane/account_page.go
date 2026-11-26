@@ -33,7 +33,7 @@ func (a *api) accountPageRoutes() {
 // one-time token, which must not leak through the Referer of any request or link.
 func serveAccountPage(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; "+
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; "+
 		"style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://downloads.aifree.sg; frame-ancestors 'none'")
 	sendResponse(w, response{status: 200, body: accountPage, contentType: "text/html; charset=utf-8"})
 }
