@@ -10,6 +10,15 @@ BIN="$HERE/../src-tauri/binaries"
 TARGET="${1:-$(rustc -vV | awk '/^host:/ {print $2}')}"
 
 case "$TARGET" in
+  universal-apple-darwin)
+    "$HERE/fetch-binaries.sh" aarch64-apple-darwin
+    "$HERE/fetch-binaries.sh" x86_64-apple-darwin
+    for executable in ccproxy sing-box frpc; do
+      lipo -create -output "$BIN/$executable-$TARGET" \
+        "$BIN/$executable-aarch64-apple-darwin" "$BIN/$executable-x86_64-apple-darwin"
+      for arch in arm64 x86_64; do lipo -verify_arch "$arch" "$BIN/$executable-$TARGET"; done
+    done
+    exit 0 ;;
   aarch64-apple-darwin)        asset="darwin-arm64";   exe="" ;;
   x86_64-apple-darwin)         asset="darwin-amd64";   exe="" ;;
   x86_64-unknown-linux-gnu)    asset="linux-amd64";    exe="" ;;

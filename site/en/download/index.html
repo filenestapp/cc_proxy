@@ -13,7 +13,9 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#14213D">
-<link rel="stylesheet" href="/assets/site.css?v=0.2.0-downloads">
+<link rel="stylesheet" href="/assets/site.css?v=platform-downloads">
+<script defer src="/assets/site-session.js"></script>
+<script defer src="/assets/desktop-downloads.js"></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -29,41 +31,43 @@
     </ul>
     <div class="actions">
       <a class="lang" href="/download/" hreflang="zh-CN" lang="zh-CN">中文</a>
-      <a class="btn btn-ghost btn-sm" href="https://app.aifree.sg/account/login">Log in</a>
-      <a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account/register">Sign up</a>
+      <a class="btn btn-ghost btn-sm" href="https://app.aifree.sg/account/login?lang=en" data-session-guest>Log in</a>
+      <a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account/register?lang=en" data-session-guest>Sign up</a>
+      <a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account?lang=en" data-session-account hidden>Account center</a>
     </div>
   </nav>
 </header>
 <main id="main">
 <div class="page-hero"><div class="wrap"><h1>Download aifree</h1><p>Install it, sign in with your account email and password, then select Connect.</p></div></div>
 <div class="prose">
-<p>Version 0.2.0. Choose the installer for your operating system and processor.</p>
+<div data-downloads-auto>
+<p>Version <span data-download-version>0.2.0</span>. Choose the installer for your operating system and processor.</p>
+<p class="dl-recommended" data-download-badge hidden>Recommended for this device</p>
 <div class="dl-grid">
-  <div class="node" id="macos">
-    <h2 style="margin:0;font-size:1.15rem">macOS</h2>
-    <p>Apple silicon (M1 or later)</p>
+  <details class="node dl-group" id="macos" data-platform="macos" open>
+    <summary>macOS</summary>
     <div class="dl-options">
-      <a class="btn btn-primary btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/darwin-aarch64/aifree_0.2.0_aarch64.dmg">Apple silicon DMG</a>
+      <a class="btn btn-outline btn-sm" data-installer="darwin-universal" data-arch="universal" data-kind="dmg" hidden>Universal DMG (Apple silicon and Intel)</a>
+      <a class="btn btn-outline btn-sm" data-installer="darwin-aarch64" data-arch="arm64" data-kind="dmg" data-fallback href="https://downloads.aifree.sg/desktop/0.2.0/darwin-aarch64/aifree_0.2.0_aarch64.dmg">Apple silicon DMG</a>
     </div>
-  </div>
-  <div class="node" id="windows">
-    <h2 style="margin:0;font-size:1.15rem">Windows</h2>
-    <p>Windows 10 or 11</p>
+  </details>
+  <details class="node dl-group" id="windows" data-platform="windows" open>
+    <summary>Windows</summary>
     <div class="dl-options">
-      <a class="btn btn-primary btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/windows-x86_64/aifree_0.2.0_x64-setup.exe">x64</a>
-      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/windows-aarch64/aifree_0.2.0_arm64-setup.exe">ARM64</a>
+      <a class="btn btn-outline btn-sm" data-installer="windows-x86_64" data-arch="x64" data-kind="exe" href="https://downloads.aifree.sg/desktop/0.2.0/windows-x86_64/aifree_0.2.0_x64-setup.exe">x64</a>
+      <a class="btn btn-outline btn-sm" data-installer="windows-aarch64" data-arch="arm64" data-kind="exe" href="https://downloads.aifree.sg/desktop/0.2.0/windows-aarch64/aifree_0.2.0_arm64-setup.exe">ARM64</a>
     </div>
-  </div>
-  <div class="node" id="linux">
-    <h2 style="margin:0;font-size:1.15rem">Linux</h2>
-    <p>x64 and ARM64</p>
+  </details>
+  <details class="node dl-group" id="linux" data-platform="linux" open>
+    <summary>Linux</summary>
     <div class="dl-options">
-      <a class="btn btn-primary btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-deb/aifree_0.2.0_amd64.deb">x64 DEB</a>
-      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-appimage/aifree_0.2.0_amd64.AppImage">x64 AppImage</a>
-      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-deb/aifree_0.2.0_arm64.deb">ARM64 DEB</a>
-      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-appimage/aifree_0.2.0_aarch64.AppImage">ARM64 AppImage</a>
+      <a class="btn btn-outline btn-sm" data-installer="linux-x86_64-deb" data-arch="x64" data-kind="deb" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-deb/aifree_0.2.0_amd64.deb">x64 DEB</a>
+      <a class="btn btn-outline btn-sm" data-installer="linux-x86_64-appimage" data-arch="x64" data-kind="AppImage" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-appimage/aifree_0.2.0_amd64.AppImage">x64 AppImage</a>
+      <a class="btn btn-outline btn-sm" data-installer="linux-aarch64-deb" data-arch="arm64" data-kind="deb" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-deb/aifree_0.2.0_arm64.deb">ARM64 DEB</a>
+      <a class="btn btn-outline btn-sm" data-installer="linux-aarch64-appimage" data-arch="arm64" data-kind="AppImage" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-appimage/aifree_0.2.0_aarch64.AppImage">ARM64 AppImage</a>
     </div>
-  </div>
+  </details>
+</div>
 </div>
 <h2>Install and connect</h2>
 <ol>

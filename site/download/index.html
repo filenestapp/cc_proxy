@@ -13,7 +13,9 @@
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="theme-color" content="#14213D">
-<link rel="stylesheet" href="/assets/site.css?v=0.2.0-downloads">
+<link rel="stylesheet" href="/assets/site.css?v=platform-downloads">
+<script defer src="/assets/site-session.js"></script>
+<script defer src="/assets/desktop-downloads.js"></script>
 </head>
 <body>
 <a class="skip" href="#main">跳到正文</a>
@@ -29,41 +31,43 @@
     </ul>
     <div class="actions">
       <a class="lang" href="/en/download/" hreflang="en" lang="en">EN</a>
-      <a class="btn btn-ghost btn-sm" href="https://app.aifree.sg/account/login">登录</a>
-      <a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account/register">注册</a>
+      <a class="btn btn-ghost btn-sm" href="https://app.aifree.sg/account/login" data-session-guest>登录</a>
+      <a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account/register" data-session-guest>注册</a>
+      <a class="btn btn-primary btn-sm" href="https://app.aifree.sg/account" data-session-account hidden>用户中心</a>
     </div>
   </nav>
 </header>
 <main id="main">
 <div class="page-hero"><div class="wrap"><h1>下载 aifree 客户端</h1><p>安装后用注册邮箱和密码登录，点“连接”即可。</p></div></div>
 <div class="prose">
-<p>版本 0.2.0。选择与你的操作系统和处理器匹配的安装包。</p>
+<div data-downloads-auto>
+<p>版本 <span data-download-version>0.2.0</span>。选择与你的操作系统和处理器匹配的安装包。</p>
+<p class="dl-recommended" data-download-badge hidden>推荐用于当前设备</p>
 <div class="dl-grid">
-  <div class="node" id="macos">
-    <h2 style="margin:0;font-size:1.15rem">macOS</h2>
-    <p>Apple 芯片（M1 及更新）</p>
+  <details class="node dl-group" id="macos" data-platform="macos" open>
+    <summary>macOS</summary>
     <div class="dl-options">
-      <a class="btn btn-primary btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/darwin-aarch64/aifree_0.2.0_aarch64.dmg">Apple silicon DMG</a>
+      <a class="btn btn-outline btn-sm" data-installer="darwin-universal" data-arch="universal" data-kind="dmg" hidden>通用 DMG（Apple 芯片与 Intel）</a>
+      <a class="btn btn-outline btn-sm" data-installer="darwin-aarch64" data-arch="arm64" data-kind="dmg" data-fallback href="https://downloads.aifree.sg/desktop/0.2.0/darwin-aarch64/aifree_0.2.0_aarch64.dmg">Apple 芯片 DMG</a>
     </div>
-  </div>
-  <div class="node" id="windows">
-    <h2 style="margin:0;font-size:1.15rem">Windows</h2>
-    <p>Windows 10 / 11</p>
+  </details>
+  <details class="node dl-group" id="windows" data-platform="windows" open>
+    <summary>Windows</summary>
     <div class="dl-options">
-      <a class="btn btn-primary btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/windows-x86_64/aifree_0.2.0_x64-setup.exe">x64</a>
-      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/windows-aarch64/aifree_0.2.0_arm64-setup.exe">ARM64</a>
+      <a class="btn btn-outline btn-sm" data-installer="windows-x86_64" data-arch="x64" data-kind="exe" href="https://downloads.aifree.sg/desktop/0.2.0/windows-x86_64/aifree_0.2.0_x64-setup.exe">x64</a>
+      <a class="btn btn-outline btn-sm" data-installer="windows-aarch64" data-arch="arm64" data-kind="exe" href="https://downloads.aifree.sg/desktop/0.2.0/windows-aarch64/aifree_0.2.0_arm64-setup.exe">ARM64</a>
     </div>
-  </div>
-  <div class="node" id="linux">
-    <h2 style="margin:0;font-size:1.15rem">Linux</h2>
-    <p>x64 和 ARM64</p>
+  </details>
+  <details class="node dl-group" id="linux" data-platform="linux" open>
+    <summary>Linux</summary>
     <div class="dl-options">
-      <a class="btn btn-primary btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-deb/aifree_0.2.0_amd64.deb">x64 DEB</a>
-      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-appimage/aifree_0.2.0_amd64.AppImage">x64 AppImage</a>
-      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-deb/aifree_0.2.0_arm64.deb">ARM64 DEB</a>
-      <a class="btn btn-outline btn-sm" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-appimage/aifree_0.2.0_aarch64.AppImage">ARM64 AppImage</a>
+      <a class="btn btn-outline btn-sm" data-installer="linux-x86_64-deb" data-arch="x64" data-kind="deb" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-deb/aifree_0.2.0_amd64.deb">x64 DEB</a>
+      <a class="btn btn-outline btn-sm" data-installer="linux-x86_64-appimage" data-arch="x64" data-kind="AppImage" href="https://downloads.aifree.sg/desktop/0.2.0/linux-x86_64-appimage/aifree_0.2.0_amd64.AppImage">x64 AppImage</a>
+      <a class="btn btn-outline btn-sm" data-installer="linux-aarch64-deb" data-arch="arm64" data-kind="deb" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-deb/aifree_0.2.0_arm64.deb">ARM64 DEB</a>
+      <a class="btn btn-outline btn-sm" data-installer="linux-aarch64-appimage" data-arch="arm64" data-kind="AppImage" href="https://downloads.aifree.sg/desktop/0.2.0/linux-aarch64-appimage/aifree_0.2.0_aarch64.AppImage">ARM64 AppImage</a>
     </div>
-  </div>
+  </details>
+</div>
 </div>
 <h2>安装与首次连接</h2>
 <ol>

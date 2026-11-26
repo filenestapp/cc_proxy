@@ -20,7 +20,12 @@ async function files(directory) {
 }
 
 const targets = {
-  "darwin-aarch64": { build: "aarch64-apple-darwin", package: /\.app\.tar\.gz$/ },
+  "darwin-universal": {
+    build: "universal-apple-darwin",
+    package: /\.app\.tar\.gz$/,
+    installer: /\.dmg$/,
+    updaterKeys: ["darwin-aarch64", "darwin-x86_64"],
+  },
   "windows-x86_64": { build: "x86_64-pc-windows-msvc", package: /\.exe$/ },
   "windows-aarch64": { build: "aarch64-pc-windows-msvc", package: /\.exe$/ },
   "linux-x86_64-appimage": { build: "x86_64-unknown-linux-gnu", package: /\.AppImage$/ },
@@ -30,14 +35,22 @@ const targets = {
 };
 const packages = await files(root);
 const platforms = {};
+const installers = {};
 for (const [target, specification] of Object.entries(targets)) {
-  const candidates = packages.filter((file) => file.includes(specification.build) && specification.package.test(file));
-  if (candidates.length !== 1) throw new Error(`${target} needs exactly one updater package, found ${candidates.length}`);
-  const packageFile = candidates[0];
+  const buildFiles = packages.filter((file) => relative(root, file).includes(specification.build));
+  function artifact(pattern, kind) {
+    const candidates = buildFiles.filter((file) => pattern.test(file));
+    if (candidates.length !== 1) throw new Error(`${target} needs exactly one ${kind}, found ${candidates.length}`);
+    return candidates[0];
+  }
+  const urlFor = (file) => `${baseUrl.replace(/\/$/, "")}/${version}/${target}/${encodeURIComponent(basename(file))}`;
+  const packageFile = artifact(specification.package, "updater package");
   const signatureFile = `${packageFile}.sig`;
   const signature = (await readFile(signatureFile, "utf8")).trim();
   if (!signature) throw new Error(`${relative(root, signatureFile)} is empty`);
-  const name = basename(packageFile);
-  platforms[target] = { url: `${baseUrl.replace(/\/$/, "")}/${version}/${target}/${encodeURIComponent(name)}`, signature };
+  for (const key of specification.updaterKeys || [target]) {
+    platforms[key] = { url: urlFor(packageFile), signature };
+  }
+  installers[target] = urlFor(specification.installer ? artifact(specification.installer, "installer") : packageFile);
 }
-await writeFile(output, `${JSON.stringify({ version, notes, platforms }, null, 2)}\n`);
+await writeFile(output, `${JSON.stringify({ version, notes, platforms, installers }, null, 2)}\n`);

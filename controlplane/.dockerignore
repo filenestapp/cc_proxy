@@ -5,6 +5,7 @@
 !schema.sql
 !console.html
 !account.html
+!desktop_downloads.js
 !install/
 !install/**
 !locales/
