@@ -2,7 +2,7 @@ name: Signed macOS Intel install and launch
 on: workflow_dispatch
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   install-and-launch:
