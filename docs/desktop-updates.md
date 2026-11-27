@@ -19,13 +19,16 @@ The following are external release inputs and are intentionally absent from the 
    Its public R2 bucket CORS policy must permit `GET` from both `https://aifree.sg` and
    `https://app.aifree.sg`; the browser download chooser reads only the public manifest with no
    credentials. Purge the custom-domain cache after changing that policy.
-4. macOS distribution uses a Developer ID Application identity for the app and helpers, a Developer ID Installer
-   identity for the package inside the DMG, and notarization for the final distribution. Publish the DMG after
-   verifying the package signature and the stapled notarization ticket. Windows builds use Azure
-   Artifact Signing through OIDC in the main-only GitHub `release` environment. The signing principal
-   needs the Certificate Profile Signer role on the selected profile. The workflow verifies the
-   Windows Authenticode signatures before signing the installer for updates. Linux packages rely on
-   the updater signature.
+4. macOS builds use the main-only GitHub `release` environment. Set `MACOS_TEAM_ID` as an environment
+   variable. Store the Developer ID Application and Developer ID Installer identities together in a
+   password-protected PKCS#12 archive using the `MACOS_SIGNING_CERTIFICATES_P12` (base64) and
+   `MACOS_SIGNING_CERTIFICATES_PASSWORD` environment secrets. Set `MACOS_NOTARY_PRIVATE_KEY` to the
+   App Store Connect `.p8` contents and provide the matching `MACOS_NOTARY_KEY_ID` and
+   `MACOS_NOTARY_ISSUER_ID` environment secrets.
+5. Windows builds use Azure Artifact Signing through OIDC in the same `release` environment. The
+   signing principal needs the Certificate Profile Signer role on the selected profile. The workflow
+   verifies the Windows Authenticode signatures before signing the installer for updates. Linux
+   packages rely on the updater signature.
 
 The existing 0.1.0 application did not contain an updater. Customers need a one-time manual
 installation of an updater-capable release before later releases can update themselves.
@@ -42,14 +45,13 @@ signature. The release configuration sets `requireSignedVersion`, so the updater
 whose signed version differs from the manifest version. The workflow binds any manually produced
 Debian signature to the same release version.
 
-Download `aifree-stable-update-<version>`. Rebuild unsigned macOS artifacts with the production updater key
-and Developer ID Application identity. Run `client/desktop/scripts/package-macos-installer.sh` with the signed app,
-DMG destination and `AIFREE_MAC_INSTALLER_IDENTITY` set to the Developer ID Installer identity. The DMG opens Installer,
-which installs the app and registers `/usr/local/bin/aifree`. Submit the DMG to the notary service, then staple and
-validate it. Replace its DMG, `.app.tar.gz`, and `.sig` together, then rerun
-`release-manifest.mjs` against the final artifacts. Do not reuse the manifest or signatures from an
-unsigned macOS build. Upload every versioned installer and updater artifact before replacing
-`stable.json`, and verify every published object URL, including `installers`, before that replacement.
+Download `aifree-stable-update-<version>`. The macOS job signs the universal app and its helpers
+with Developer ID Application and signs the package inside the DMG with Developer ID Installer.
+It notarizes and staples both the app and the DMG, signs the final app archive for Tauri, and
+checks the Installer signature before uploading. The DMG opens Installer, which installs the app
+and registers `/usr/local/bin/aifree`. Upload every versioned installer and updater artifact before
+replacing `stable.json`, and verify every published object URL, including `installers`, before
+that replacement.
 The manifest references AppImage and Debian packages on Linux, NSIS on Windows, and one universal
 macOS application-bundle archive. The release artifact also includes the universal `.dmg` and `.deb`
 first-install packages. Windows uses Tauri's passive installer mode and may show installer progress

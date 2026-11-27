@@ -31,6 +31,9 @@ args=(--root "$work/root" --component-plist "$work/components.plist"
   --scripts "$here/../src-tauri/installer/macos")
 if [[ -n "${AIFREE_MAC_INSTALLER_IDENTITY:-}" ]]; then
   args+=(--sign "$AIFREE_MAC_INSTALLER_IDENTITY")
+  if [[ -n "${AIFREE_MAC_INSTALLER_KEYCHAIN:-}" ]]; then
+    args+=(--keychain "$AIFREE_MAC_INSTALLER_KEYCHAIN")
+  fi
 fi
 pkgbuild "${args[@]}" "$work/image/Install aifree.pkg"
 hdiutil create -ov -fs HFS+ -format UDZO -volname aifree -srcfolder "$work/image" "$dmg"
