@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
+use tokio::sync::Notify;
 
 use crate::App;
 
@@ -27,6 +28,10 @@ struct Gate {
 }
 
 impl Gate {
+    fn can_check(&self) -> bool {
+        !self.checking && !self.installing && !self.deferred && !self.activation_claimed
+    }
+
     fn mark_presented(&mut self, now: Instant) {
         self.presented_at.get_or_insert(now);
     }
@@ -46,6 +51,7 @@ pub(crate) struct PendingUpdate {
     update: Mutex<Option<Update>>,
     failed: Mutex<bool>,
     gate: Mutex<Gate>,
+    check_requested: Notify,
 }
 
 impl Default for PendingUpdate {
@@ -54,6 +60,7 @@ impl Default for PendingUpdate {
             update: Mutex::new(None),
             failed: Mutex::new(false),
             gate: Mutex::new(Gate::default()),
+            check_requested: Notify::new(),
         }
     }
 }
@@ -101,11 +108,22 @@ impl PendingUpdate {
 
     fn begin_check(&self) -> bool {
         let mut gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
-        if gate.checking || gate.installing || gate.deferred || gate.activation_claimed {
+        if !gate.can_check() {
             return false;
         }
         gate.checking = true;
         true
+    }
+
+    pub(crate) fn request_check(&self) {
+        let gate = self.gate.lock().unwrap_or_else(|error| error.into_inner());
+        if gate.can_check() && self.cached().is_none() {
+            self.check_requested.notify_one();
+        }
+    }
+
+    async fn wait_for_check(&self, delay: Duration) {
+        let _ = tokio::time::timeout(delay, self.check_requested.notified()).await;
     }
 
     fn finish_check(&self, update: Option<Update>) {
@@ -346,16 +364,16 @@ pub(crate) fn start_automatic_updates(app_handle: AppHandle) {
                         Err(InstallResult::Connected) => tokio::time::sleep(CONNECTION_RETRY).await,
                         Err(InstallResult::Deferred) => tokio::time::sleep(CHECK_EVERY).await,
                         Err(InstallResult::Failed) => {
-                            tokio::time::sleep(backoff).await;
+                            pending.wait_for_check(backoff).await;
                             backoff = next_backoff(backoff);
                         }
                     }
                 }
-                Ok(CheckResult::Offer(None)) => tokio::time::sleep(CHECK_EVERY).await,
+                Ok(CheckResult::Offer(None)) => pending.wait_for_check(CHECK_EVERY).await,
                 Ok(CheckResult::Busy) => tokio::time::sleep(PRESENTATION_RETRY).await,
                 Err(error) => {
                     eprintln!("Update check failed: {error}");
-                    tokio::time::sleep(backoff).await;
+                    pending.wait_for_check(backoff).await;
                     backoff = next_backoff(backoff);
                 }
             }
@@ -401,8 +419,8 @@ pub(crate) fn defer_update(pending: State<'_, PendingUpdate>) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        next_backoff, Gate, InstallResult, PendingUpdate, INSTALL_GRACE, PRESENTATION_RETRY,
-        RETRY_MAX, RETRY_MIN,
+        next_backoff, Gate, InstallResult, PendingUpdate, CHECK_EVERY, INSTALL_GRACE,
+        PRESENTATION_RETRY, RETRY_MAX, RETRY_MIN,
     };
     use std::time::{Duration, Instant};
 
@@ -423,6 +441,50 @@ mod tests {
     fn retry_backoff_is_bounded() {
         assert_eq!(next_backoff(RETRY_MIN), Duration::from_secs(120));
         assert_eq!(next_backoff(RETRY_MAX), RETRY_MAX);
+    }
+
+    #[test]
+    fn reopening_wakes_the_scheduler_before_its_timer_expires() {
+        let pending = PendingUpdate::default();
+        tauri::async_runtime::block_on(async {
+            let mut waiting = Box::pin(pending.wait_for_check(CHECK_EVERY));
+            assert!(tokio::time::timeout(Duration::ZERO, &mut waiting)
+                .await
+                .is_err());
+            pending.request_check();
+            tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .expect("the reopen request should wake the update check");
+        });
+    }
+
+    #[test]
+    fn reopen_requests_coalesce_and_respect_the_gate() {
+        let pending = PendingUpdate::default();
+        tauri::async_runtime::block_on(async {
+            pending.request_check();
+            pending.request_check();
+            tokio::time::timeout(Duration::from_secs(1), pending.wait_for_check(CHECK_EVERY))
+                .await
+                .expect("an early reopen request should be retained");
+
+            assert!(pending.begin_check());
+            pending.request_check();
+            pending.finish_check(None);
+            assert!(
+                tokio::time::timeout(Duration::ZERO, pending.wait_for_check(CHECK_EVERY))
+                    .await
+                    .is_err()
+            );
+
+            assert!(pending.defer());
+            pending.request_check();
+            assert!(
+                tokio::time::timeout(Duration::ZERO, pending.wait_for_check(CHECK_EVERY))
+                    .await
+                    .is_err()
+            );
+        });
     }
 
     #[test]
