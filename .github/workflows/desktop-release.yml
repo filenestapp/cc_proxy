@@ -23,10 +23,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15
-            target: universal-apple-darwin
-            rust-targets: aarch64-apple-darwin x86_64-apple-darwin
-            bundles: app
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             bundles: deb,appimage
@@ -49,9 +45,8 @@ jobs:
           SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: test -n "$UPDATER_PUBLIC_KEY" && test -n "$SIGNING_KEY"
       - name: Rust toolchain
-        run: rustup toolchain install stable --profile minimal && rustup target add ${{ matrix.rust-targets || matrix.target }}
+        run: rustup toolchain install stable --profile minimal && rustup target add ${{ matrix.target }}
       - name: Linux build dependencies
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
@@ -75,20 +70,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: npx --yes @tauri-apps/cli@2.12.6 build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config tauri.release.conf.json -- --locked
-      - name: Verify the macOS app and sidecars run on both architectures
-        if: runner.os == 'macOS'
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          app="target/${{ matrix.target }}/release/bundle/macos/aifree.app/Contents"
-          main=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Info.plist")
-          for executable in "$main" aifree sing-box frpc; do
-            for arch in arm64 x86_64; do lipo "$app/MacOS/$executable" -verify_arch "$arch"; done
-          done
-          "$app/MacOS/aifree" --version | grep -Fx "aifree $RELEASE_VERSION"
-          desktop/scripts/package-macos-installer.sh "${app%/Contents}" "target/${{ matrix.target }}/release/bundle/dmg/aifree_${RELEASE_VERSION}_universal.dmg"
       - name: Sign Debian updater packages when Tauri does not create their signatures
-        if: runner.os == 'Linux'
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -107,6 +89,58 @@ jobs:
             client/target/${{ matrix.target }}/release/bundle/**/*.AppImage
             client/target/${{ matrix.target }}/release/bundle/**/*.deb
             client/target/${{ matrix.target }}/release/bundle/**/*.sig
+          if-no-files-found: error
+          retention-days: 30
+
+  macos:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    environment: release
+    timeout-minutes: 35
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    defaults:
+      run:
+        shell: bash
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Sidecars
+        env:
+          AIFREE_RELEASE_VERSION: ${{ inputs.version }}
+        run: desktop/scripts/fetch-binaries.sh universal-apple-darwin
+      - name: Render release-only updater configuration
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          AIFREE_UPDATER_PUBLIC_KEY: ${{ secrets.AIFREE_UPDATER_PUBLIC_KEY }}
+        run: node desktop/scripts/release-config.mjs desktop/src-tauri/tauri.conf.json desktop/src-tauri/tauri.release.conf.json "$RELEASE_VERSION" "$AIFREE_UPDATER_PUBLIC_KEY" https://downloads.aifree.sg/desktop/stable.json
+      - name: Build universal application
+        working-directory: client/desktop/src-tauri
+        run: npx --yes @tauri-apps/cli@2.12.6 build --target universal-apple-darwin --bundles app --no-sign --config tauri.release.conf.json -- --locked
+      - name: Sign and notarize the macOS release
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+          MACOS_SIGNING_CERTIFICATES_P12: ${{ secrets.MACOS_SIGNING_CERTIFICATES_P12 }}
+          MACOS_SIGNING_CERTIFICATES_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATES_PASSWORD }}
+          MACOS_NOTARY_PRIVATE_KEY: ${{ secrets.MACOS_NOTARY_PRIVATE_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: desktop/scripts/sign-macos-release.sh target/universal-apple-darwin/release/bundle "$RELEASE_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aifree-update-universal-apple-darwin
+          path: |
+            client/target/universal-apple-darwin/release/bundle/macos/aifree.app.tar.gz
+            client/target/universal-apple-darwin/release/bundle/macos/aifree.app.tar.gz.sig
+            client/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 30
 
@@ -299,7 +333,7 @@ jobs:
 
   manifest:
     if: ${{ github.ref == 'refs/heads/main' }}
-    needs: [build, windows]
+    needs: [build, macos, windows]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
