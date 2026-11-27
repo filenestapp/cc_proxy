@@ -218,7 +218,7 @@ func TestConcurrentAssignmentsAndSnapshots(t *testing.T) {
 		defer close(pollErrors)
 		for i := 0; i < 20; i++ {
 			err := s.snapshot(ctx, func(tx pgx.Tx) error {
-				cfg, err := clientConfig(ctx, tx, device, "proxy", false)
+				cfg, err := clientConfig(ctx, tx, device, "proxy", clientConfigCapabilities{})
 				if err != nil {
 					return err
 				}

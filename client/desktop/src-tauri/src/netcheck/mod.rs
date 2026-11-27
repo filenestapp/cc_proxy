@@ -4,13 +4,15 @@ mod http;
 mod local;
 mod packets;
 
+use crate::exit_probe::{PublicExit, Target};
+use crate::App;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::future::Future;
 use std::io;
-use std::net::IpAddr;
-use std::sync::{LazyLock, Mutex};
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::{JoinError, JoinSet};
@@ -148,6 +150,29 @@ struct NetworkReading {
     fake: bool,
     ms: Option<f64>,
     error: Option<Failure>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verdict: Option<StunVerdict>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum StunVerdict {
+    Exit,
+    Leak,
+    NoAnswer,
+}
+
+fn stun_verdict(observed: Option<IpAddr>, verified_exit: Option<Ipv4Addr>) -> Option<StunVerdict> {
+    match observed {
+        None => Some(StunVerdict::NoAnswer),
+        Some(address) => verified_exit.map(|exit| {
+            if address.to_canonical() == IpAddr::V4(exit) {
+                StunVerdict::Exit
+            } else {
+                StunVerdict::Leak
+            }
+        }),
+    }
 }
 
 #[derive(Serialize)]
@@ -190,8 +215,8 @@ enum ResultPart {
 }
 
 #[tauri::command]
-pub(crate) async fn run_environment_check() -> Result<Report, &'static str> {
-    run_check(&RUNNING, collect(&PROBES)).await
+pub(crate) async fn run_environment_check(app: tauri::State<'_, Arc<App>>) -> Result<Report, &'static str> {
+    run_check(&RUNNING, collect(&PROBES, app.inner())).await
 }
 
 async fn run_check(
@@ -209,7 +234,8 @@ async fn next_before<T: 'static>(
     timeout_at(deadline, jobs.join_next()).await.ok().flatten()
 }
 
-async fn collect(slots: &'static ProbeSlots) -> Report {
+async fn collect(slots: &'static ProbeSlots, app: &App) -> Report {
+    let active_route = Target::active(app);
     let deadline = Deadline::now() + CHECK_TIMEOUT;
     let direct = http::agent(false, None);
     let ipv6 = http::agent(true, None);
@@ -282,6 +308,17 @@ async fn collect(slots: &'static ProbeSlots) -> Report {
         Some(Err(_)) => report.server_error = Some(Failure::Network),
         None => report.server_error = Some(Failure::Timeout),
     }
+    // A refresh or reconnect can change the exit during the check. Compare only readings
+    // from the same route generation and keep verdicts in the local report.
+    if let Some(target) = active_route.filter(|target| Target::active(app).as_ref() == Some(target)) {
+        let exit = match target.public_exit(app) {
+            PublicExit::Verified(ip) => Some(ip),
+            _ => None,
+        };
+        for row in report.udp.iter_mut().filter(|row| row.method == "stun") {
+            row.verdict = stun_verdict(row.ip, exit);
+        }
+    }
     report
 }
 
@@ -347,6 +384,18 @@ async fn read_probes(
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn stun_verdict_compares_addresses_with_the_verified_exit() {
+        let exit = Ipv4Addr::new(203, 0, 113, 7);
+        let verified = Some(exit);
+        assert_eq!(stun_verdict(Some(exit.into()), verified), Some(StunVerdict::Exit));
+        assert_eq!(stun_verdict(Some(exit.to_ipv6_mapped().into()), verified), Some(StunVerdict::Exit));
+        assert_eq!(stun_verdict(Some([203, 0, 113, 8].into()), verified), Some(StunVerdict::Leak));
+        assert_eq!(stun_verdict(Some("2001:db8::1".parse().unwrap()), verified), Some(StunVerdict::Leak));
+        assert_eq!(stun_verdict(None, verified), Some(StunVerdict::NoAnswer));
+        assert_eq!(stun_verdict(Some(exit.into()), None), None);
+    }
 
     fn exit(last_octet: u8) -> ResultPart {
         ResultPart::Exit(

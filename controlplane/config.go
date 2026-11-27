@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	vlessFlow   = "xtls-rprx-vision"
-	fakeIPRange = "198.18.0.0/15"
-	tunAddress  = "172.19.0.1/30"
+	vlessFlow      = "xtls-rprx-vision"
+	fakeIPRange    = "198.18.0.0/15"
+	tunAddress     = "172.19.0.1/30"
+	tunIPv6Address = "fdcc:50b5:6f77::1/126"
 
 	maxHostnameBytes = 253
 	// Match the file size limit enforced by the client's tunnel supervisor.
@@ -168,6 +169,12 @@ type clientPolicy struct {
 	ProcessPath  []string                `json:"process_path"`
 	BlockQUIC    bool                    `json:"block_quic"`
 	DirectDNS    string                  `json:"direct_dns"`
+	STUN         string                  `json:"stun"`
+}
+
+type clientConfigCapabilities struct {
+	exactDomains bool
+	stun         bool
 }
 
 var proxiedDomainLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -202,7 +209,7 @@ func normalizeProxiedDomains(rules []string) ([]string, error) {
 	return domains, nil
 }
 
-func clientConfig(ctx context.Context, db database, identity deviceIdentity, mode string, exactSupported bool) (renderedConfig, error) {
+func clientConfig(ctx context.Context, db database, identity deviceIdentity, mode string, capabilities clientConfigCapabilities) (renderedConfig, error) {
 	var u boundUser
 	var h host
 	var d credential
@@ -243,11 +250,11 @@ func clientConfig(ctx context.Context, db database, identity deviceIdentity, mod
 			return renderedConfig{}, err
 		}
 	}
-	return renderClientConfig(h, u, d, policy, mode, exactSupported)
+	return renderClientConfig(h, u, d, policy, mode, capabilities)
 }
 
-func renderClientConfig(h host, user boundUser, d credential, policy clientPolicy, mode string, exactSupported bool) (renderedConfig, error) {
-	cfg, err := buildClientConfig(h, user, d, policy, mode, exactSupported)
+func renderClientConfig(h host, user boundUser, d credential, policy clientPolicy, mode string, capabilities clientConfigCapabilities) (renderedConfig, error) {
+	cfg, err := buildClientConfig(h, user, d, policy, mode, capabilities)
 	if err != nil {
 		return renderedConfig{}, err
 	}
@@ -258,7 +265,7 @@ func renderClientConfig(h host, user boundUser, d credential, policy clientPolic
 	return rendered, err
 }
 
-func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy, mode string, exactSupported bool) (configObject, error) {
+func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy, mode string, capabilities clientConfigCapabilities) (configObject, error) {
 	outbounds := []configObject{{
 		{"type", "vless"}, {"tag", "egress"}, {"server", h.PublicHost}, {"server_port", user.Port}, {"uuid", d.UUID},
 		{"flow", vlessFlow}, {"tls", configObject{
@@ -284,7 +291,23 @@ func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy
 		return nil, failure(409, "client_policy has no process or domain rules; app mode would tunnel nothing")
 	}
 
-	tun := configObject{{"type", "tun"}, {"tag", "tun-in"}, {"address", []string{tunAddress}}, {"auto_route", true}, {"stack", "mixed"}}
+	rules := []configObject{{{"action", "sniff"}}, {{"protocol", "dns"}, {"action", "hijack-dns"}}}
+	addresses := []string{tunAddress}
+	if mode == "app" && capabilities.stun {
+		switch policy.STUN {
+		case "", "proxy":
+			rules = append(rules, configObject{{"network", "udp"}, {"protocol", "stun"}, {"outbound", "egress"}})
+			addresses = append(addresses, tunIPv6Address)
+		case "reject":
+			rules = append(rules, configObject{{"network", "udp"}, {"protocol", "stun"}, {"action", "reject"}})
+			addresses = append(addresses, tunIPv6Address)
+		case "direct":
+			// Keep legacy routing, including the existing process and domain rules.
+		default:
+			return nil, failure(409, "client_policy.stun must be one of proxy, reject, direct")
+		}
+	}
+	tun := configObject{{"type", "tun"}, {"tag", "tun-in"}, {"address", addresses}, {"auto_route", true}, {"stack", "mixed"}}
 	if mode == "domain" {
 		tun = append(tun, configField{"route_address", []string{fakeIPRange, "172.19.0.0/30"}})
 	} else {
@@ -293,7 +316,7 @@ func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy
 	dnsRules := make([]configObject, 0, 4)
 	matchers := make([]configField, 0, 5)
 	var exactDomains []string
-	if exactSupported {
+	if capabilities.exactDomains {
 		exactDomains = policy.DomainExact
 	}
 	for _, domains := range []struct {
@@ -317,7 +340,6 @@ func buildClientConfig(h host, user boundUser, d credential, policy clientPolicy
 		{"servers", []configObject{{{"type", "fakeip"}, {"tag", "fakeip"}, {"inet4_range", fakeIPRange}}, directDNS}},
 		{"rules", dnsRules}, {"final", "direct-dns"},
 	}
-	rules := []configObject{{{"action", "sniff"}}, {{"protocol", "dns"}, {"action", "hijack-dns"}}}
 	matchers = append(matchers, configField{"ip_cidr", []string{fakeIPRange}})
 	if mode == "app" && len(policy.ProcessName) != 0 {
 		matchers = append(matchers, configField{"process_name", policy.ProcessName})

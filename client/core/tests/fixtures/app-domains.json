@@ -8,7 +8,8 @@
       "type": "tun",
       "tag": "tun-in",
       "address": [
-        "172.19.0.1/30"
+        "172.19.0.1/30",
+        "fdcc:50b5:6f77::1/126"
       ],
       "auto_route": true,
       "stack": "mixed",
@@ -50,6 +51,11 @@
       {
         "protocol": "dns",
         "action": "hijack-dns"
+      },
+      {
+        "network": "udp",
+        "protocol": "stun",
+        "outbound": "egress"
       },
       {
         "domain_suffix": [

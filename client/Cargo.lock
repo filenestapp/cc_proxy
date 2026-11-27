@@ -530,6 +530,7 @@ name = "ccproxy-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crabtables",
  "dirs 5.0.1",
  "gethostname",
  "libc",
@@ -778,6 +779,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "crabtables"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16d9ba64224e438835ccb9398053738f4ba4b178f5f7c470af9486056d79696a"
+dependencies = [
+ "libc",
+ "netlink-sys",
 ]
 
 [[package]]
@@ -2580,6 +2591,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "netlink-sys"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c99d38e00b420df49e940fe0826e667c3dad82ac68eb4c2bbf754c1c14a83a10"
+dependencies = [
+ "bytes",
+ "libc",
+ "log",
 ]
 
 [[package]]

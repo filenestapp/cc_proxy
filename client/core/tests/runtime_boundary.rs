@@ -1,7 +1,7 @@
 //! CC-01: what crosses the privilege boundary. The supervisor must accept exactly what the control plane's
 //! gen.py produces for mode=app (fixtures from tests/fixtures/regen.py) and refuse anything else.
 
-use ccproxy_core::runtime::{accept, extract, read_client_config, render};
+use ccproxy_core::runtime::{accept, extract, read_client_config, render, StunPolicy};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,9 +17,17 @@ const FIXTURES: &[&str] = &["app-domains", "app-processes", "app-local-dns", "ap
 fn every_gen_py_client_config_round_trips() {
     for name in FIXTURES {
         let v = fixture(name);
-        let spec = extract(&v).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let (spec, _) = accept(&serde_json::to_vec(&v).unwrap(), Path::new("/protected/cache.db"))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(render(&spec, None), v, "{name}");
     }
+}
+
+#[test]
+fn stun_reject_does_not_enable_quic_blocking() {
+    let spec = extract(&fixture("app-local-dns")).unwrap();
+    assert_eq!(spec.stun, Some(StunPolicy::Reject));
+    assert!(!spec.block_quic);
 }
 
 #[test]
@@ -72,6 +80,7 @@ fn unexpected_fields_and_values_are_refused() {
     rejected(|v| v["outbounds"].as_array_mut().unwrap().push(json!({"type": "socks", "tag": "x", "server": "evil", "server_port": 1})));
     rejected(|v| v["inbounds"].as_array_mut().unwrap().push(json!({"type": "mixed", "listen": "0.0.0.0", "listen_port": 1080})));
     rejected(|v| v["inbounds"][0]["address"] = json!(["10.0.0.1/8"]));
+    rejected(|v| v["inbounds"][0]["auto_redirect_output_mark"] = json!("0xa1f0001"));
     rejected(|v| v["route"]["rules"].as_array_mut().unwrap().push(json!({"ip_cidr": ["0.0.0.0/0"], "outbound": "egress"})));
     rejected(|v| v["route"]["final"] = json!("egress"));
     rejected(|v| v["outbounds"][0]["tls"]["insecure"] = json!(true));
@@ -83,7 +92,7 @@ fn unexpected_fields_and_values_are_refused() {
     rejected(|v| v["dns"]["servers"][1] = json!({"type": "udp", "tag": "direct-dns", "server": "dns.example.com"}));
     rejected(|v| v["dns"]["servers"][1] = json!({"type": "https", "tag": "direct-dns", "server": "1.1.1.1"}));
     let msg = rejected(|v| {
-        for path in ["/dns/rules/0/domain_suffix", "/dns/rules/1/domain_suffix", "/route/rules/2/domain_suffix"] {
+        for path in ["/dns/rules/0/domain_suffix", "/dns/rules/1/domain_suffix", "/route/rules/3/domain_suffix"] {
             *v.pointer_mut(path).unwrap() = json!(["../../etc/resolver"]);
         }
     });
@@ -94,6 +103,20 @@ fn unexpected_fields_and_values_are_refused() {
                 rule["process_name"] = json!(["bad\u{0}name"]);
             }
         }
+    });
+}
+
+#[test]
+fn stun_rule_must_stay_in_order_and_cover_all_udp_stun() {
+    rejected(|v| v["route"]["rules"].as_array_mut().unwrap().swap(2, 3));
+    rejected(|v| {
+        v["route"]["rules"].as_array_mut().unwrap().remove(2);
+    });
+    rejected(|v| v["route"]["rules"][2]["port"] = json!(3478));
+    rejected(|v| v["route"]["rules"][2]["protocol"] = json!("dtls"));
+    rejected(|v| v["route"]["rules"][2]["outbound"] = json!("direct"));
+    rejected(|v| {
+        v["inbounds"][0]["address"].as_array_mut().unwrap().pop();
     });
 }
 

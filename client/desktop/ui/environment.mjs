@@ -8,6 +8,12 @@ const errors = {
   invalid_response: "environment_invalid_response",
 };
 
+const stunVerdicts = {
+  exit: "environment_stun_exit",
+  leak: "environment_stun_leak",
+  no_answer: "environment_stun_no_answer",
+};
+
 const findings = {
   exits: "environment_route_comparison",
   ipv6: "IPv6",
@@ -95,17 +101,25 @@ function networkRows(probes, t) {
     const mode = probe.method === "system" ? t("environment_system_dns")
       : probe.method === "google-ecs" ? t("environment_ecs")
         : probe.method === "stun" ? "STUN" : "";
+    const verdict = probe.method === "stun" && Object.hasOwn(stunVerdicts, probe.verdict)
+      ? t(stunVerdicts[probe.verdict]) : "";
     return {
       label: join([probe.server, mode]),
-      value: probe.ip ?? (probe.fake ? t("environment_fake_ip") : probe.ecs ?? probeFailure(probe, t)),
+      value: probe.ip ?? (verdict || (probe.fake ? t("environment_fake_ip") : probe.ecs ?? probeFailure(probe, t))),
       code: Boolean(probe.ip),
       note: join([
         probe.family ? "IPv" + probe.family : "",
+        probe.ip ? verdict : "",
+        verdict && !probe.ip && probe.error ? probeFailure(probe, t) : "",
         probe.ip && probe.ecs ? t("environment_ecs") + " " + probe.ecs : "",
         milliseconds(probe.ms),
       ]),
     };
   });
+}
+
+function hasStunLeak(report) {
+  return list(report?.udp).some((probe) => probe.method === "stun" && probe.verdict === "leak");
 }
 
 function compare(exits) {
@@ -222,7 +236,7 @@ function renderReport(report, t) {
   if (suggested.length) nodes.push(details(t("environment_findings"), rowList(suggested), { count: suggested.length, open: true }));
   nodes.push(details(t("environment_exits"), rowList(exits), { count: exits.length, open: !suggested.length }));
   nodes.push(details(t("environment_dns"), rowList(networkRows(list(report.dns), t))));
-  nodes.push(details(t("environment_udp"), rowList(networkRows(list(report.udp), t))));
+  nodes.push(details(t("environment_udp"), rowList(networkRows(list(report.udp), t)), { open: hasStunLeak(report) }));
   if (reputation.length) nodes.push(details(t("environment_quality"), rowList(reputation)));
   if (comparison.length) nodes.push(details(t("environment_resolutions"), rowList(comparison)));
   nodes.push(details(t("environment_local"), localDetails(report.local, t)));
@@ -247,10 +261,12 @@ export function createEnvironmentPage({ invoke, translate, onNavigate }) {
     retry.disabled = checking;
     output.setAttribute("aria-busy", String(checking));
     const partial = report?.incomplete || report?.server_error;
-    status.dataset.tone = error ? "error" : partial ? "warning" : "";
+    const leak = hasStunLeak(report);
+    status.dataset.tone = error ? "error" : (leak || partial) ? "warning" : "";
     let key;
     if (checking) key = "environment_running";
     else if (error) key = error;
+    else if (leak) key = "environment_stun_leak_warning";
     else if (report?.incomplete) key = "environment_incomplete";
     else if (report) key = partial ? "environment_partial" : "environment_complete";
     status.textContent = key ? translate(key) : "";

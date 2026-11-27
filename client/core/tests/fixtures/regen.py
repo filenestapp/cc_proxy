@@ -19,8 +19,9 @@ CASES = {
     "app-domains": {"domain_suffix": ["example.com", "echo.example.org"], "direct_dns": "1.1.1.1"},
     "app-processes": {"domain_suffix": ["example.com"], "process_name": ["Example"],
                       "process_path": ["/Applications/X.app/Contents/MacOS/X"], "block_quic": False, "direct_dns": "dhcp"},
-    "app-local-dns": {"domain_suffix": ["example.com"], "direct_dns": "local"},
-    "app-ipv6-dns": {"domain_suffix": ["example.com"], "direct_dns": "2606:4700:4700::1111"},
+    "app-local-dns": {"domain_suffix": ["example.com"], "direct_dns": "local", "stun": "reject",
+                      "block_quic": False},
+    "app-ipv6-dns": {"domain_suffix": ["example.com"], "direct_dns": "2606:4700:4700::1111", "stun": "direct"},
 }
 for name, policy in CASES.items():
     inv = {"server": SERVER, "client_policy": policy, "egress_ips": [{"ip": "203.0.113.3"}], "users": [USER]}

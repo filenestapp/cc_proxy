@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -100,18 +101,26 @@ func (p *clientPolicy) applyDomainGroups() error {
 	return nil
 }
 
-// An older settings client can replace the flat policy without losing groups.
+// Older settings clients can replace the flat policy while retaining grouped routes and STUN settings.
 // Check the count and wire size in the same write transaction that saves the policy.
 func validateRoutingPolicyChange(ctx context.Context, db database, value fields) error {
-	groups, supplied := value["domain_groups"]
-	if !supplied {
-		if err := db.QueryRow(ctx, "SELECT COALESCE((SELECT value->'domain_groups' FROM settings WHERE key='client_policy'), 'null'::jsonb)").Scan(&groups); err != nil {
-			return err
+	var saved fields
+	if err := db.QueryRow(ctx, "SELECT COALESCE((SELECT value FROM settings WHERE key='client_policy'), '{}'::jsonb)").Scan(&saved); err != nil {
+		return err
+	}
+	if stun, supplied := value["stun"]; supplied && len(value) == 1 {
+		maps.Copy(value, saved)
+		value["stun"] = stun
+	} else {
+		// Older policy writers omit fields they do not support.
+		for _, field := range []string{"domain_groups", "stun"} {
+			if _, supplied := value[field]; !supplied && len(saved[field]) != 0 && string(saved[field]) != "null" {
+				value[field] = saved[field]
+			}
 		}
-		if len(groups) == 0 || string(groups) == "null" {
-			return nil
-		}
-		value["domain_groups"] = groups
+	}
+	if _, grouped := value["domain_groups"]; !grouped {
+		return nil
 	}
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -141,11 +150,14 @@ func validateRoutingPolicyChange(ctx context.Context, db database, value fields)
 	}
 	user := boundUser{Port: 65535}
 	device := credential{UUID: strings.Repeat("a", 36)}
-	if _, err := renderClientConfig(entry, user, device, policy, "app", true); err != nil {
+	// The default STUN policy gives the longest app-mode config. Reserve space for it
+	// even when an administrator has selected direct.
+	policy.STUN = "proxy"
+	if _, err := renderClientConfig(entry, user, device, policy, "app", clientConfigCapabilities{exactDomains: true, stun: true}); err != nil {
 		return err
 	}
 	if hasDomains {
-		_, err := renderClientConfig(entry, user, device, policy, "domain", true)
+		_, err := renderClientConfig(entry, user, device, policy, "domain", clientConfigCapabilities{exactDomains: true})
 		return err
 	}
 	return nil

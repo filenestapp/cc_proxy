@@ -8,7 +8,8 @@
       "type": "tun",
       "tag": "tun-in",
       "address": [
-        "172.19.0.1/30"
+        "172.19.0.1/30",
+        "fdcc:50b5:6f77::1/126"
       ],
       "auto_route": true,
       "stack": "mixed",
@@ -52,19 +53,8 @@
         "action": "hijack-dns"
       },
       {
-        "domain_suffix": [
-          "example.com"
-        ],
         "network": "udp",
-        "port": 443,
-        "action": "reject"
-      },
-      {
-        "ip_cidr": [
-          "198.18.0.0/15"
-        ],
-        "network": "udp",
-        "port": 443,
+        "protocol": "stun",
         "action": "reject"
       },
       {

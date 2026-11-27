@@ -568,7 +568,10 @@ func (a *api) deviceConfig(r *apiRequest) (response, error) {
 	var cfg renderedConfig
 	err := a.store.snapshot(r.Context(), func(tx pgx.Tx) error {
 		var err error
-		cfg, err = clientConfig(r.Context(), tx, r.Device, mode, query.Get("exact_domains") == "1")
+		cfg, err = clientConfig(r.Context(), tx, r.Device, mode, clientConfigCapabilities{
+			exactDomains: query.Get("exact_domains") == "1",
+			stun:         query.Get("stun") == "1",
+		})
 		return err
 	})
 	return configResponse(r, cfg), err

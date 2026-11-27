@@ -9,6 +9,7 @@
 #   visitor  official frpc as the XTCP visitor (QUIC, no fallback) on 127.0.0.1:20443, and a sing-box client built
 #            from aifree's own client config (/v1/config?mode=proxy) on 127.0.0.1:2080
 #   echo     answers with the caller's IPv4 (and /big with 20 MB); also target.test (a client rule domain)
+#   stun     lab STUN responder on an off-link address, including a second port for frpc's NAT discovery
 #   cp-http  the same control plane over plain HTTP, for the aifree client (its TLS trusts public roots only)
 #   desktop  the real aifree client (client/cli, Linux TUN, app mode), split as the desktop app is: the user runs
 #            `aifree headless` (visitor from /v1/xtcp-visitor, frpc 0.72.0 as that user), root only `aifree tunnel`
@@ -19,7 +20,8 @@
 # Agent updates (issue #67) cover rollout targeting, pause, tampered releases, a signed upgrade without restarting
 # sing-box or frpc, and rollback when the candidate cannot start. Desktop visitor checks (issue #61) cover connection,
 # traffic, token rotation, busy ports, failed hole punching, process exit and revocation. Uninstall removes both.
-# Needs Docker (systemd and /dev/net/tun) and internet access (GitHub, STUN). Test releases use a temporary key.
+# Needs Docker (systemd and /dev/net/tun) and internet access for the pinned binaries and TLS handshake target.
+# Test releases use a temporary key.
 #   controlplane/test/xtcp/run-e2e.sh            KEEP=1 leaves the containers running
 set -euo pipefail
 
@@ -29,12 +31,13 @@ OUT="$HERE/out"
 NET=ccx-e2e
 SUBNET=172.31.90.0/24
 IP_CP=172.31.90.5 IP_CP_HTTP=172.31.90.6 IP_DESKTOP=172.31.90.50 IP_FRPS=172.31.90.10 IP_EXIT=172.31.90.20 IP_VISITOR=172.31.90.30 IP_ECHO=172.31.90.40
+IP_STUN=172.31.90.60 STUN_ADDRESS=192.0.2.60
 FRP_VERSION=0.72.0
 SINGBOX_VERSION=1.14.4
 case "$(uname -m)" in arm64|aarch64) ARCH=arm64 ;; *) ARCH=amd64 ;; esac
 rnd() { openssl rand -hex 24; }
 ADMIN_TOKEN="admin-$(rnd)" FRPS_TOKEN="frps-$(rnd)" XTCP_KEY="xtcp-$(rnd)" PG_PASSWORD="pg-$(rnd)"
-CONTAINERS="ccx-pg ccx-cp ccx-cp-http ccx-frps ccx-exit ccx-visitor ccx-echo ccx-desktop"
+CONTAINERS="ccx-pg ccx-cp ccx-cp-http ccx-frps ccx-exit ccx-visitor ccx-echo ccx-desktop ccx-stun"
 
 cleanup() {
   docker exec ccx-exit journalctl -u ccproxy-exit-agent --no-pager > "$OUT/exit-agent.journal" 2>/dev/null || true
@@ -42,7 +45,7 @@ cleanup() {
   docker cp ccx-visitor:/tmp/visitor-blocked.log "$OUT/" >/dev/null 2>&1 || true
   docker cp ccx-desktop:/tmp/up.log "$OUT/desktop-up.log" >/dev/null 2>&1 || true
   if [[ "${KEEP:-0}" != 1 ]]; then
-    docker rm -f $CONTAINERS >/dev/null 2>&1 || true
+    docker rm -fv $CONTAINERS >/dev/null 2>&1 || true
     docker network rm $NET >/dev/null 2>&1 || true
     rm -rf "$OUT/tls" "$OUT/frps.toml" "$OUT/visitor.toml" "$OUT/client.json" "$OUT/release.key" \
       "$OUT/bob-visitor.toml" "$OUT/bob-client.json" "$OUT/direct-client.json"   # test credentials
@@ -59,7 +62,7 @@ waitfor() { # waitfor SECONDS DESCRIPTION COMMAND
   done
 }
 
-docker rm -f $CONTAINERS >/dev/null 2>&1 || true
+docker rm -fv $CONTAINERS >/dev/null 2>&1 || true
 docker network rm $NET >/dev/null 2>&1 || true
 rm -rf "$OUT" && mkdir -p "$OUT/tls" "$OUT/frp" "$OUT/dist"
 chmod 700 "$OUT"
@@ -99,7 +102,7 @@ CMD ["/sbin/init"]
 EOF
 docker build -q -t ccx-tools - >/dev/null <<'EOF'
 FROM debian:12-slim
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates python3 procps >/dev/null \
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates python3 procps iproute2 >/dev/null \
  && rm -rf /var/lib/apt/lists/*
 EOF
 # The aifree client for Linux (static musl build). frpc and sing-box are mounted next to it, where the desktop bundle
@@ -147,8 +150,11 @@ echo "== test CA: certificates for cp and frps"
   chmod 644 ./*.pem ./*.key
 )
 
-echo "== start pg, cp, frps, echo"
+echo "== start pg, cp, frps, echo, and STUN"
 docker network create --subnet $SUBNET $NET >/dev/null
+docker run -d --name ccx-stun --network $NET --ip "$IP_STUN" --cap-add NET_ADMIN -e "STUN_ALTERNATE=$STUN_ADDRESS" \
+  -v "$REPO/egress/test/echo.py:/app/echo.py:ro" python:3.12-alpine \
+  sh -c 'ip addr add "$STUN_ALTERNATE/32" dev eth0 && exec python -u /app/echo.py' >/dev/null
 docker run -d --name ccx-pg --network $NET -e POSTGRES_PASSWORD="$PG_PASSWORD" -e POSTGRES_DB=cp postgres:16 >/dev/null
 waitfor 60 "postgres" "docker exec ccx-pg pg_isready -q -U postgres 2>/dev/null"
 DB="postgresql://postgres:$PG_PASSWORD@ccx-pg:5432/cp?sslmode=disable"
@@ -179,15 +185,19 @@ http.server.ThreadingHTTPServer(("0.0.0.0", 8080), H).serve_forever()
 EOF
 docker run -d --name ccx-echo --network $NET --ip $IP_ECHO --network-alias target.test -v "$OUT/echo.py:/echo.py:ro" ccx-tools python3 /echo.py >/dev/null
 docker run -d --name ccx-exit --hostname macmini-sg-208 --network $NET --ip $IP_EXIT --privileged --cgroupns=host \
+  --add-host "stun.easyvoip.com:$STUN_ADDRESS" \
   -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock ccx-systemd >/dev/null
+docker exec ccx-exit ip route replace "$STUN_ADDRESS/32" via "$IP_STUN"
 
 api() { # api METHOD PATH [JSON]  (admin token via a curl config on stdin, inside the exit container's network)
   printf 'header = "Authorization: Bearer %s"\n' "$ADMIN_TOKEN" |
     docker exec -i ccx-visitor-api curl -q -sS --config - --cacert /tls/ca.pem -X "$1" -H 'Content-Type: application/json' \
       ${3:+-d "$3"} "https://cp:8443$2"
 }
-docker run -d --name ccx-visitor --network $NET --ip $IP_VISITOR -v "$OUT/tls:/tls:ro" -v "$FRP_DIR/frpc:/usr/local/bin/frpc:ro" \
+docker run -d --name ccx-visitor --network $NET --ip $IP_VISITOR --cap-add NET_ADMIN --add-host "stun.easyvoip.com:$STUN_ADDRESS" \
+  -v "$OUT/tls:/tls:ro" -v "$FRP_DIR/frpc:/usr/local/bin/frpc:ro" \
   -v "$SB_BIN:/usr/local/bin/sing-box:ro" ccx-tools sleep infinity >/dev/null
+docker exec ccx-visitor ip route replace "$STUN_ADDRESS/32" via "$IP_STUN"
 CONTAINERS="$CONTAINERS ccx-visitor-api"
 docker run -d --name ccx-visitor-api --network $NET -v "$OUT/tls:/tls:ro" ccx-tools sleep infinity >/dev/null
 waitfor 60 "control plane health" "api GET /healthz 2>/dev/null | grep -q ok"
