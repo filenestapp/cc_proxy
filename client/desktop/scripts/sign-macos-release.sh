@@ -30,8 +30,14 @@ done
 work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/aifree-macos-signing.XXXXXX")
 keychain="$work/release.keychain-db"
 mount="$work/installer"
+previous_keychains=()
+while IFS= read -r entry; do
+  previous_keychains+=("$entry")
+done < <(security list-keychains -d user | sed -E 's/^[[:space:]]*"//; s/"$//')
+
 cleanup() {
   hdiutil detach -quiet "$mount" >/dev/null 2>&1 || true
+  security list-keychains -d user -s ${previous_keychains[@]+"${previous_keychains[@]}"} >/dev/null 2>&1 || true
   security delete-keychain "$keychain" >/dev/null 2>&1 || true
   rm -rf "$work"
 }
@@ -44,6 +50,7 @@ printf '%s\n' "$MACOS_NOTARY_PRIVATE_KEY" > "$work/notary.p8"
 security create-keychain -p "$keychain_password" "$keychain"
 security set-keychain-settings -lut 1800 "$keychain"
 security unlock-keychain -p "$keychain_password" "$keychain"
+security list-keychains -d user -s "$keychain" ${previous_keychains[@]+"${previous_keychains[@]}"}
 security import "$work/release.p12" -k "$keychain" -P "$MACOS_SIGNING_CERTIFICATES_PASSWORD" \
   -T /usr/bin/codesign -T /usr/bin/pkgbuild -T /usr/bin/productsign
 security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
@@ -53,7 +60,7 @@ curl -fsSL --retry 3 --max-time 30 -o "$work/developer-id-g2.cer" \
   https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
 printf '%s  %s\n' f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a \
   "$work/developer-id-g2.cer" | shasum -a 256 -c -
-security add-certificates -k "$keychain" "$work/developer-id-g2.cer"
+security import "$work/developer-id-g2.cer" -k "$keychain" -t cert
 
 identity() {
   security find-identity -v -p "$1" "$keychain" |
@@ -63,6 +70,7 @@ identity() {
 application_identity=$(identity codesigning 'Developer ID Application')
 installer_identity=$(identity basic 'Developer ID Installer')
 test -n "$application_identity" && test -n "$installer_identity"
+printf 'Found the application and installer signing identities for Apple team %s.\n' "$MACOS_TEAM_ID"
 
 for executable in aifree sing-box frpc; do
   codesign --force --keychain "$keychain" --sign "$application_identity" --options runtime --timestamp \
