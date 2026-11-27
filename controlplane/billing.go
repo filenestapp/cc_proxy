@@ -623,11 +623,16 @@ func (s *store) provisionSubscription(ctx context.Context, tx pgx.Tx, subscripti
 			return err
 		}
 	}
+	shared := plan == "residential_ip"
+	mode := "exclusive"
+	if shared {
+		mode = "shared"
+	}
 	var user string
 	err = tx.QueryRow(ctx, "SELECT user_name FROM customer_proxy WHERE customer_id=$1", customerID).Scan(&user)
 	if errors.Is(err, pgx.ErrNoRows) {
 		user = "c" + strconv.FormatInt(customerID, 10)
-		_, err = tx.Exec(ctx, "INSERT INTO users(name,password_hash,mode,max_devices,created_at) VALUES($1,$2,'exclusive',$3,$4)", user, hashPassword(randomToken(32)), maxDevices, s.now())
+		_, err = tx.Exec(ctx, "INSERT INTO users(name,password_hash,mode,max_devices,created_at) VALUES($1,$2,$3,$4,$5)", user, hashPassword(randomToken(32)), mode, maxDevices, s.now())
 		if err != nil {
 			return err
 		}
@@ -643,7 +648,13 @@ func (s *store) provisionSubscription(ctx context.Context, tx pgx.Tx, subscripti
 		return err
 	}
 	if u.IP == nil {
-		ip, h, port, assignErr := s.chooseBinding(ctx, tx, u, assignment{})
+		if shared && u.Mode != mode {
+			if _, err := tx.Exec(ctx, "UPDATE users SET mode=$2 WHERE name=$1", user, mode); err != nil {
+				return err
+			}
+			u.Mode = mode
+		}
+		ip, h, port, assignErr := s.chooseBinding(ctx, tx, u, assignment{reuseSharedIP: shared})
 		if assignErr != nil {
 			if statusOf(assignErr) != http.StatusConflict {
 				return assignErr

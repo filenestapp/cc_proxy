@@ -191,6 +191,7 @@ func rowsChanged(tag pgconn.CommandTag, err error, label string) error {
 }
 
 type settings struct {
+	SharedIPUserLimit int             `db:"shared_ip_user_limit" json:"shared_ip_user_limit"`
 	ClientPolicy      json.RawMessage `db:"client_policy" json:"client_policy"`
 	Cooldown          int64           `db:"cooldown_seconds" json:"cooldown_seconds"`
 	Monitor           json.RawMessage `json:"monitor"`
@@ -200,10 +201,13 @@ type settings struct {
 	RoutingPresets    json.RawMessage `db:"-" json:"routing_presets,omitempty"`
 }
 
+const sharedIPUserLimitSQL = `COALESCE((SELECT value::integer FROM settings WHERE key = 'shared_ip_user_limit'), 10)`
+
 func loadSettings(ctx context.Context, db database) (settings, error) {
 	return rowOf[settings](ctx, db, `SELECT
 		COALESCE((SELECT value FROM settings WHERE key = 'client_policy'), '{}') AS client_policy,
 		COALESCE((SELECT value::bigint FROM settings WHERE key = 'cooldown_seconds'), $1) AS cooldown_seconds,
+		`+sharedIPUserLimitSQL+` AS shared_ip_user_limit,
 		COALESCE((SELECT value FROM settings WHERE key = 'monitor'), '{"egress_targets":[],"entries":[]}') AS monitor,
 		COALESCE((SELECT value FROM settings WHERE key = 'alerts'), '{}') AS alerts,
 		`+subscriptionGraceSQL+` AS subscription_grace_seconds,
@@ -212,12 +216,19 @@ func loadSettings(ctx context.Context, db database) (settings, error) {
 
 func settingsPatch(body fields) (map[string]any, error) {
 	values := make(map[string]any)
-	for _, key := range []string{"client_policy", "cooldown_seconds", "monitor", "alerts", "subscription_grace_seconds", "mailbox_quota"} {
+	for _, key := range []string{"client_policy", "cooldown_seconds", "shared_ip_user_limit", "monitor", "alerts", "subscription_grace_seconds", "mailbox_quota"} {
 		raw := body[key]
 		if len(raw) == 0 || string(raw) == "null" {
 			continue
 		}
 		switch key {
+		case "shared_ip_user_limit":
+			var limit int32
+			if err := json.Unmarshal(raw, &limit); err != nil || limit < 1 {
+				return nil, failure(400, "shared_ip_user_limit must be a positive integer")
+			}
+			values[key] = limit
+			continue
 		case "mailbox_quota":
 			var quota integer
 			if err := json.Unmarshal(raw, &quota); err != nil || quota < 0 || quota > 1 {
